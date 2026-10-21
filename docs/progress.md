@@ -5,7 +5,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | Prompt | Title | Status | Commit | Notes |
 |---|---|---|---|---|
 | P00 | Repository bootstrap and toolchain | done | a4e5b1d | `just check` and `just static` green; all toolchains pinned; hooks verified |
-| P01 | Continuous integration | blocked | 3cb1d71 | PR #1 opened; all six jobs failed to start — GitHub Actions billing, not the workflows. See P01-6 |
+| P01 | Continuous integration | done | c47245f | PR [#1](https://github.com/N3BCKN/bagehot/pull/1), run [39670041216](https://github.com/N3BCKN/bagehot/actions/runs/39670041216) green: 5 jobs pass, `differential (quick)` skipped as designed |
 | P02 | Protocol specification (human gate) | todo | | |
 | P03 | Invariants (human gate) | todo | | |
 | P04 | ADRs and threat model skeleton | todo | | |
@@ -100,6 +100,23 @@ local loop rather than its own copies:
   was caught; the same token under `contracts/lib/` was allowlisted, as intended.
 - `just check`, `just static` — green.
 
+**CI gate closed.** Repository `N3BCKN/bagehot`, made public after a clean pre-publication audit.
+PR [#1](https://github.com/N3BCKN/bagehot/pull/1), run
+[39670041216](https://github.com/N3BCKN/bagehot/actions/runs/39670041216):
+
+| job | result |
+|---|---|
+| `detect optional trees` | success — reported `symbolic=false differential=false src=false` |
+| `contracts` | success — `forge fmt --check`, `forge build --sizes`, `forge test`; halmos steps skipped |
+| `static analysis` | success — slither plus the `check_triage.py` gate; aderyn skipped on empty `src/` |
+| `python` | success — `uv sync --locked`, ruff, pytest |
+| `secret scan` | success — diff-scoped gitleaks on the `pull_request` event, plus the working tree |
+| `differential (quick)` | skipped — `differential/` arrives at P23 |
+
+Two real defects were caught by running it rather than by reading it: a fabricated action SHA
+(found locally by re-resolving every pin against the API) and the `~/.local/bin` bug in P01-7,
+which only a clean machine could show.
+
 **Next.** P02, protocol specification (human gate).
 
 ### 2026-10-21 · P00 · Repository bootstrap and toolchain
@@ -154,7 +171,9 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
 | P01-3 | The nightly `report` job cannot find processed data on a scheduled run — artefacts do not cross workflow runs without an explicit id. It needs `workflow_dispatch` with `data_run_id`. Revisit at P29/P32 once a data workflow actually produces the `processed-data` artefact; a scheduled run may then want to locate the newest one via the API. | Claude | at P32 |
 | P01-4 | `scripts/check_triage.py` gates slither only. aderyn findings are uploaded as an artefact but not yet gated; aderyn can emit JSON, so the script can be extended when `contracts/src/` has contracts. The triage table's `tool` column already distinguishes them. | Claude | at P10 |
 | P01-5 | The `contracts` and `differential-quick` jobs share one Foundry build cache key, derived from `foundry.toml` + `foundry.lock` + `remappings.txt`. Since `foundry.toml` carries `solc_version`, caches are never shared across solc versions, but confirm this still holds if the profile layout changes. | Claude | no |
-| P01-6 | **Blocks P01.** PR [#1](https://github.com/N3BCKN/bagehot/pull/1), run [39668831000](https://github.com/N3BCKN/bagehot/actions/runs/39668831000): every job failed at startup with *"The job was not started because recent account payments have failed or your spending limit needs to be increased."* No step executed, so this says nothing about the workflows. `detect`, `python` and `secret scan` show `failure`; `contracts`, `static analysis` and `differential (quick)` show `skipped` because they need `detect`. The repository is **private**, so Actions bills against the account quota. Two ways out: fix billing / raise the spending limit, or make the repository public — Actions is free and unlimited for public repositories, and this project is testnet-only, holds no secrets and is headed for publication at P44 anyway. The decision is the human's. | human | yes |
+| P01-6 | Resolved. Run [39668831000](https://github.com/N3BCKN/bagehot/actions/runs/39668831000) had every job fail at startup — *"recent account payments have failed or your spending limit needs to be increased"* — because the repository was private and Actions billed against the account quota. The human made the repository **public**, after an audit that found no leaks in the full history, no credential file ever committed, and nothing in the tree but source, docs and config. Actions is free and unlimited for public repositories. | human | no |
+| P01-7 | Found by CI, not locally: the `secret scan` job installed gitleaks into `~/.local/bin/`, which does not exist there because that job runs no `setup-uv` step. Fixed in `c47245f` — both binary installs now `mkdir -p` the directory, install to an explicit filename and append it to `$GITHUB_PATH`. A reminder that a job without `setup-uv` starts from a barer environment than the others. | Claude | no |
+| P01-8 | The repository is public, so all seven commits expose the author email `ka.koszewski@gmail.com` permanently. Four of them are also authored `H3BCKN`. Neither can be changed without a force push, which the permission rules forbid. If this matters, GitHub's `noreply` address plus `git config user.email` fixes it for future commits. | human | no |
 
 ## Human actions required
 
@@ -168,6 +187,7 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
 | 4 | ~~Confirm the `LICENSE` copyright holder~~ | Done: `Copyright (c) 2026 N3BCKN`. Optional follow-up, outside this repo: `git config --global user.name N3BCKN`, so other projects stop committing as `H3BCKN`. |
 | 5 | Decide whether `docs/redoubt-blueprint-v0.2.pdf` should be renamed | `CLAUDE.md` refers to it as `docs/blueprint-v0.2.pdf`, and the PDF itself uses the working name "Redoubt". Left untouched: renaming a source of truth is not Claude's call. |
 | 6 | ~~Create the GitHub repository and connect it~~ | Done: `git@github.com:N3BCKN/bagehot`, `main` tracking `origin/main`. |
-| 7 | **P01 gate, blocking.** Resolve the GitHub Actions billing block, then re-run PR #1 | See P01-6. Either fix billing / raise the spending limit, or make the repository public (Actions is then free and unlimited). Until then no job can start, so P01 cannot be closed. |
-| 8 | **P01 gate.** Record the run URL in the P01 row above and flip its status to `done` | The last unmet P01 acceptance criterion. Everything else is verified locally. |
+| 7 | ~~Resolve the Actions billing block~~ | Done: repository made public, Actions now free and unlimited. See P01-6. |
+| 8 | ~~Record the run URL and close P01~~ | Done: run [39670041216](https://github.com/N3BCKN/bagehot/actions/runs/39670041216) is green. |
+| 10 | Merge PR [#1](https://github.com/N3BCKN/bagehot/pull/1) | Claude has not merged it — merging to `main` is yours to approve. The branch is `ci/p01-verify`. |
 | 9 | ~~`gh auth login`~~ | Done: logged in as `N3BCKN`, scopes `repo`, `read:org`, `gist`, `admin:public_key`. Claude can now read run status and logs for this private repository. |
