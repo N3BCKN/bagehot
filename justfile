@@ -13,8 +13,14 @@ fmt:
     cd contracts && forge fmt
     uv run ruff format .
 
-fmt-check:
+# fmt-check is unchanged in behaviour; the two halves exist so CI can run the Solidity check in
+# the contracts job and the Python check in the python job without duplicating the commands.
+fmt-check: fmt-check-sol fmt-check-py
+
+fmt-check-sol:
     cd contracts && forge fmt --check
+
+fmt-check-py:
     uv run ruff format --check .
     uv run ruff check .
 
@@ -44,9 +50,13 @@ halmos:
 # --foundry-compile-all: without it crytic-compile builds only src/, which produces no build-info
 # while src/ is still empty. It also brings script/ into scope; test/, lib/ and src/mocks/ are
 # dropped from the report by slither.config.json. aderyn needs at least one contract in src/.
+# --fail-none: the exit code is not the gate — scripts/check_triage.py is, and it is stricter,
+# failing on a finding of ANY severity that has no row in docs/static-analysis-triage.md.
 static:
     mkdir -p reports/static
-    cd contracts && slither . --config-file slither.config.json --foundry-compile-all
+    cd contracts && slither . --config-file slither.config.json --foundry-compile-all \
+      --fail-none --json ../reports/static/slither.json
+    python3 scripts/check_triage.py reports/static/slither.json docs/static-analysis-triage.md
     @if [ -n "$(find contracts/src -name '*.sol' -print -quit)" ]; then \
         cd contracts && aderyn . --path-excludes src/mocks --output ../reports/static/aderyn.md; \
       else \
@@ -64,8 +74,10 @@ gas:
 gas-update:
     cd contracts && forge snapshot
 
+# `fork` is excluded here as well as `slow` and `network`: fork tests need a local anvil fork of
+# Base and BASE_ARCHIVE_RPC, neither of which the quick loop or CI has. Same filter as CI.
 py-test:
-    uv run pytest -q -m "not slow and not network"
+    uv run pytest -q -m "not slow and not network and not fork"
 
 diff-quick:
     @compgen -G "differential/*.py" >/dev/null \

@@ -1,0 +1,296 @@
+# Fast checks on every pull request and on pushes to main.
+#
+# Rules this file must keep obeying (P01):
+#   - every third-party action pinned by full commit SHA, with the version in a comment
+#   - top-level `permissions: contents: read`, never `pull_request_target`, no secrets
+#   - every tool pinned to the version in docs/dependencies.md, so a green CI run and a green
+#     local `just check` mean the same thing
+#   - every GitHub expression reaches a shell through `env:`, never by interpolation into the
+#     script body, so a branch or PR title cannot inject commands
+name: pr
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Must match docs/dependencies.md. Medusa and Halmos especially: a different version there
+  # and here means the two disagree about what passed.
+  FOUNDRY_VERSION: v1.8.1
+  UV_VERSION: "0.11.26"
+  JUST_VERSION: "1.59.0"
+  SLITHER_VERSION: "0.11.6"
+  HALMOS_VERSION: "0.3.3"
+  ADERYN_VERSION: "0.6.8"
+  ADERYN_SHA256: ffd6ca658962e211a3ac821c646f69c8e14bf1b1001cbfe091bcd4535a691e46
+  GITLEAKS_VERSION: "8.30.1"
+  GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+
+jobs:
+  # Several trees arrive in later prompts. Probing once here keeps the `if:` conditions on the
+  # real jobs honest — a job that is skipped says so, instead of passing vacuously.
+  detect:
+    name: detect optional trees
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      symbolic: ${{ steps.scan.outputs.symbolic }}
+      differential: ${{ steps.scan.outputs.differential }}
+      src: ${{ steps.scan.outputs.src }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: scan
+        shell: bash
+        run: |
+          has() {
+            if [ -n "$(find "$1" -name "$2" -print -quit 2>/dev/null)" ]; then
+              echo true
+            else
+              echo false
+            fi
+          }
+          {
+            echo "symbolic=$(has contracts/test/symbolic '*.sol')"
+            echo "differential=$(has differential '*.py')"
+            echo "src=$(has contracts/src '*.sol')"
+          } >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+  contracts:
+    name: contracts
+    needs: detect
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+          cache: false
+
+      # foundry.toml carries solc_version and foundry.lock the exact library revisions, so a
+      # change to either gives a fresh cache. Caches are never shared across solc versions.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            contracts/out
+            contracts/cache
+            ~/.svm
+          key: >-
+            foundry-build-${{ runner.os }}-${{ env.FOUNDRY_VERSION }}-${{
+            hashFiles('contracts/foundry.toml', 'contracts/foundry.lock',
+            'contracts/remappings.txt') }}
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: install just
+        run: uv tool install "rust-just==${JUST_VERSION}"
+
+      # `just fmt-check` also runs ruff, which belongs to the python job; fmt-check-sol is the
+      # Solidity half of the same recipe, so local and CI check the same thing.
+      - name: forge fmt --check
+        run: just fmt-check-sol
+
+      - name: forge build --sizes
+        run: just build
+
+      - name: forge test
+        run: just test
+
+      - name: install halmos
+        if: needs.detect.outputs.symbolic == 'true'
+        run: uv tool install "halmos==${HALMOS_VERSION}"
+
+      - name: halmos
+        if: needs.detect.outputs.symbolic == 'true'
+        run: just halmos
+
+  static:
+    name: static analysis
+    needs: detect
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+          cache: false
+
+      # slither runs `forge clean` first, so only the solc downloads are worth keeping.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.svm
+          key: svm-${{ runner.os }}-${{ hashFiles('contracts/foundry.toml') }}
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: install just and slither
+        run: |
+          uv tool install "rust-just==${JUST_VERSION}"
+          uv tool install "slither-analyzer==${SLITHER_VERSION}"
+
+      - name: install aderyn
+        if: needs.detect.outputs.src == 'true'
+        run: |
+          set -euo pipefail
+          url="https://github.com/Cyfrin/aderyn/releases/download/aderyn-v${ADERYN_VERSION}"
+          url="${url}/aderyn-x86_64-unknown-linux-gnu.tar.xz"
+          tmp="$(mktemp -d)"
+          curl -fsSL -o "${tmp}/aderyn.tar.xz" "$url"
+          echo "${ADERYN_SHA256}  ${tmp}/aderyn.tar.xz" | sha256sum --check --strict -
+          tar -xJf "${tmp}/aderyn.tar.xz" -C "${tmp}"
+          install -m 0755 "$(find "${tmp}" -name aderyn -type f -print -quit)" "${HOME}/.local/bin/"
+          aderyn --version
+
+      # `just static` runs slither, then scripts/check_triage.py, which fails on any finding of
+      # any severity that has no row in docs/static-analysis-triage.md.
+      - name: slither + aderyn + triage gate
+        run: just static
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: static-analysis-reports
+          path: reports/static/
+          if-no-files-found: warn
+          retention-days: 14
+
+  python:
+    name: python
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: uv sync --locked
+        run: uv sync --locked
+
+      - name: install just
+        run: uv tool install "rust-just==${JUST_VERSION}"
+
+      - name: ruff format --check and ruff check
+        run: just fmt-check-py
+
+      - name: pytest
+        run: just py-test
+
+  differential-quick:
+    name: differential (quick)
+    needs: detect
+    if: needs.detect.outputs.differential == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      # anvil comes from the same toolchain: the differential harness drives a local chain.
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+          cache: false
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            contracts/out
+            contracts/cache
+            ~/.svm
+          key: >-
+            foundry-build-${{ runner.os }}-${{ env.FOUNDRY_VERSION }}-${{
+            hashFiles('contracts/foundry.toml', 'contracts/foundry.lock',
+            'contracts/remappings.txt') }}
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: uv sync --locked
+        run: uv sync --locked
+
+      - name: install just
+        run: uv tool install "rust-just==${JUST_VERSION}"
+
+      - name: differential (quick profile)
+        run: just diff-quick
+
+  secrets:
+    name: secret scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      # Full history: the diff range below needs both endpoints present.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The gitleaks binary rather than gitleaks-action: the action wants a GITLEAKS_LICENSE for
+      # organisation repositories and write permissions to comment on PRs. This needs neither.
+      - name: install gitleaks
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          url="${url}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tmp="$(mktemp -d)"
+          curl -fsSL -o "${tmp}/gitleaks.tar.gz" "$url"
+          echo "${GITLEAKS_SHA256}  ${tmp}/gitleaks.tar.gz" | sha256sum --check --strict -
+          tar -xzf "${tmp}/gitleaks.tar.gz" -C "${tmp}" gitleaks
+          install -m 0755 "${tmp}/gitleaks" "${HOME}/.local/bin/"
+          gitleaks version
+
+      - name: scan the diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_SHA:-}" ] && [ -n "${HEAD_SHA:-}" ]; then
+            echo "scanning ${BASE_SHA}..${HEAD_SHA}"
+            gitleaks git . --redact --no-banner --config .gitleaks.toml \
+              --log-opts="--no-merges ${BASE_SHA}..${HEAD_SHA}"
+          else
+            echo "not a pull request: scanning the full history"
+            gitleaks git . --redact --no-banner --config .gitleaks.toml
+          fi
+
+      # Catches a secret in a file that is present but not yet committed in this range.
+      # Submodules are deliberately not checked out in this job: .gitleaks.toml allowlists
+      # contracts/lib/ anyway, and not fetching it keeps the scan to code we author.
+      - name: scan the working tree
+        run: gitleaks dir . --redact --no-banner --config .gitleaks.toml

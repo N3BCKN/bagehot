@@ -5,7 +5,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | Prompt | Title | Status | Commit | Notes |
 |---|---|---|---|---|
 | P00 | Repository bootstrap and toolchain | done | a4e5b1d | `just check` and `just static` green; all toolchains pinned; hooks verified |
-| P01 | Continuous integration | todo | | |
+| P01 | Continuous integration | blocked | | Deliverables complete and verified locally; blocked only on the human gate — no git remote exists, so no PR run yet |
 | P02 | Protocol specification (human gate) | todo | | |
 | P03 | Invariants (human gate) | todo | | |
 | P04 | ADRs and threat model skeleton | todo | | |
@@ -55,6 +55,53 @@ Claude updates this file at the end of every session. Status: todo · in progres
 
 <!-- newest first: date · prompt · what changed · decisions · next -->
 
+### 2026-10-21 · P01 · Continuous integration
+
+**Changed.** `.github/workflows/pr.yml` (jobs: `detect`, `contracts`, `static`, `python`,
+`differential-quick`, `secrets`) and `.github/workflows/nightly.yml` (cron 03:17 UTC plus manual
+dispatch; jobs: `detect`, `invariants`, `medusa`, `halmos`, `differential-long`, `report`).
+New `scripts/check_triage.py` and `.gitleaks.toml`. README carries both badges.
+
+**justfile changes** — all P00 recipe names kept; two added so CI runs the same commands as the
+local loop rather than its own copies:
+- `fmt-check` split into `fmt-check-sol` and `fmt-check-py`. `fmt-check` itself is unchanged in
+  behaviour and still runs both; the halves let the contracts job check Solidity and the python
+  job check Python without duplicating the commands.
+- `static` now runs slither with `--fail-none --json reports/static/slither.json` and then
+  `scripts/check_triage.py`. This is **stricter**, not looser: slither's own exit code fails on
+  severity, while the triage gate fails on a finding of *any* severity that has no row in
+  `docs/static-analysis-triage.md`.
+- `py-test` now filters `not slow and not network and not fork`, matching the filter P01
+  specifies for CI. Fork tests need a Base archive RPC that neither the quick loop nor CI has.
+
+**Decisions.**
+- Secret scanning runs the pinned **gitleaks binary**, not `gitleaks-action`: the action wants a
+  `GITLEAKS_LICENSE` secret for organisation repositories and write permission to comment on
+  PRs. The PR workflow carries no secrets and stays `contents: read`.
+- Jobs call `just` recipes rather than re-spelling the commands, so CI and `just check` cannot
+  drift. Each job installs `rust-just==1.59.0`.
+- `ubuntu-24.04` rather than `ubuntu-latest`, so a runner image change is a deliberate edit.
+- Every GitHub expression reaches a shell through an `env:` block, never interpolated into the
+  script body — a branch name or PR title cannot inject commands.
+- Nightly `report` can only use data from an artefact: `data/processed/` is git-ignored. Run the
+  workflow manually with `data_run_id` set to a run that uploaded a `processed-data` artefact.
+  With no artefact it writes a notice and exits 0 rather than inventing numbers.
+
+**Verified locally.**
+- `actionlint 1.7.12` — **0 issues** on both workflows.
+- All six pinned action SHAs re-resolved against the GitHub API and confirmed to match their
+  commented tags. (One SHA was wrong in my first draft and was caught by exactly this check.)
+- Every job has `timeout-minutes`; `permissions: contents: read` at the top of both files; no
+  `pull_request_target`; no secrets in `pr.yml`; concurrency cancels superseded PR runs.
+- `scripts/check_triage.py` exercised on four paths: clean (exit 0), two untriaged findings
+  (exit 1, printing paste-ready rows), a malformed decision value (exit 2), slither output
+  missing (exit 2).
+- `gitleaks 8.30.1` over history and working tree: clean. A planted `ghp_…` token in `config/`
+  was caught; the same token under `contracts/lib/` was allowlisted, as intended.
+- `just check`, `just static` — green.
+
+**Next.** P02, protocol specification (human gate).
+
 ### 2026-10-21 · P00 · Repository bootstrap and toolchain
 
 **Changed.** Full directory layout from the repository map, with `.gitkeep` in every empty
@@ -102,6 +149,11 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
 | P00-3 | `deployments/`, `data/raw/` and `data/processed/` were not created — the `mkdir` was declined. `data/raw/` and `data/processed/` are git-ignored and the fetch scripts can create them at P06, but `deployments/` needs to exist (and hold a `.gitkeep`) before P18. | human | at P18 |
 | P00-4 | `ruff` excludes `.claude/` so that `just fmt` does not rewrite the three protected hooks, which it would otherwise reformat. | Claude | no |
 | P00-5 | No gas snapshot yet; `just gas` guards itself until `contracts/.gas-snapshot` exists. Baseline due at P37. | Claude | no |
+| P01-1 | `.gitleaks.toml` carries two allowlist entries, both narrow and both justified in the file: Anvil's published account-0 key (matched as an exact literal, so any other secret in the justfile still trips), and the `contracts/lib/` submodule tree (180 `generic-api-key` false positives in OpenZeppelin's own JS tests; that path is protected by its commit pin, not by the scanner). Re-check both if the scan ever goes quiet unexpectedly. | Claude | no |
+| P01-2 | The badge URLs assume the repository will be `github.com/H3BCKN/bagehot`. They render broken until the remote exists. Fix the README if the slug differs. | human | no |
+| P01-3 | The nightly `report` job cannot find processed data on a scheduled run — artefacts do not cross workflow runs without an explicit id. It needs `workflow_dispatch` with `data_run_id`. Revisit at P29/P32 once a data workflow actually produces the `processed-data` artefact; a scheduled run may then want to locate the newest one via the API. | Claude | at P32 |
+| P01-4 | `scripts/check_triage.py` gates slither only. aderyn findings are uploaded as an artefact but not yet gated; aderyn can emit JSON, so the script can be extended when `contracts/src/` has contracts. The triage table's `tool` column already distinguishes them. | Claude | at P10 |
+| P01-5 | The `contracts` and `differential-quick` jobs share one Foundry build cache key, derived from `foundry.toml` + `foundry.lock` + `remappings.txt`. Since `foundry.toml` carries `solc_version`, caches are never shared across solc versions, but confirm this still holds if the profile layout changes. | Claude | no |
 
 ## Human actions required
 
@@ -114,3 +166,6 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
 | 3 | Copy `env.example` to `.env` and fill it in | Claude never reads or creates `.env`. Needed from P06 (`BASE_ARCHIVE_RPC`) onwards; `just fork`, `just smoke` and `just deploy-sepolia-dry` already fail with a clear message without it. |
 | 4 | Confirm the `LICENSE` copyright holder | Currently `Copyright (c) 2026 H3BCKN`, taken from the git identity on this machine. |
 | 5 | Decide whether `docs/redoubt-blueprint-v0.2.pdf` should be renamed | `CLAUDE.md` refers to it as `docs/blueprint-v0.2.pdf`, and the PDF itself uses the working name "Redoubt". Left untouched: renaming a source of truth is not Claude's call. |
+| 6 | **P01 gate.** Create the GitHub repository, `git remote add origin …`, push a branch and open a PR | There is no remote at all, so no CI run can exist yet. This is the stated human gate for P01. |
+| 7 | **P01 gate.** Record the PR run URL in the P01 row of the table above, and flip its status to `done` | The last unmet P01 acceptance criterion. Everything else is verified locally. |
+| 8 | If the repository is created under a GitHub **organisation**, check the first `secrets` job | The job runs the gitleaks binary, which needs no licence, so it should be unaffected — but confirm rather than assume. |

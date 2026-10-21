@@ -1,0 +1,34 @@
+# gitleaks configuration. Used by the `secrets` job in .github/workflows/pr.yml.
+#
+# The default rule set is extended, never replaced, and no rule is disabled. The one allowlist
+# entry below matches a single exact literal, so any other secret in the same file still trips
+# the scan. Adding a path here instead of a value would be a way to hide a real leak later.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = """
+Vendored dependency sources under contracts/lib/. These are git submodules pinned to exact
+release commits (forge-std v1.17.0, OpenZeppelin v5.7.0 — see docs/dependencies.md); we do not
+author them, and a secret of ours cannot end up there. Scanning them produced 180
+generic-api-key false positives on hex literals in OpenZeppelin's own JavaScript tests. What
+protects this path is the commit pin, not the secret scanner. slither.config.json filters the
+same path for the same reason.
+"""
+paths = [
+  '''^contracts/lib/''',
+]
+
+[[allowlists]]
+description = """
+Anvil's deterministic account #0 private key. It is published in the Foundry book, identical on
+every machine, funded only on a local anvil chain, and used by the justfile solely for
+`deploy-local` against 127.0.0.1. Matching the exact value rather than the file means a real
+secret added to the justfile is still caught. See guard_bash.py, which independently refuses
+--private-key against anything that is not a local node.
+"""
+regexTarget = "secret"
+regexes = [
+  '''^0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80$''',
+]

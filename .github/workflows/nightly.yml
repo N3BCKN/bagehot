@@ -1,0 +1,283 @@
+# Thorough checks, off the critical path. Everything here is allowed to take a long time and is
+# expected to find what the PR workflow cannot: long fuzzing campaigns, deep invariant runs, the
+# long differential profile.
+#
+# Same rules as pr.yml: actions pinned by SHA, read-only by default, tool versions matched to
+# docs/dependencies.md. Medusa and Halmos in particular must match the local versions, or a
+# nightly failure cannot be reproduced on the human's machine.
+name: nightly
+
+on:
+  schedule:
+    # 03:17 UTC — an odd minute, to stay off the top-of-hour scheduling surge.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      data_run_id:
+        description: >-
+          Run id of a workflow run holding a `processed-data` artefact, for the report job.
+          Leave empty and the report job skips with a notice.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+env:
+  FOUNDRY_VERSION: v1.8.1
+  UV_VERSION: "0.11.26"
+  JUST_VERSION: "1.59.0"
+  HALMOS_VERSION: "0.3.3"
+  MEDUSA_VERSION: "1.5.1"
+  MEDUSA_SHA256: ddfe1517ae9028ef9fc331b00f5a6a9d5406f3fcd11a715d60c6b6fb3e4546d3
+  # Wall-clock ceiling for the medusa campaign, in seconds. The job timeout sits above it so a
+  # campaign that overruns is killed by `timeout` with a readable message, not by the runner.
+  MEDUSA_TIMEOUT_SECONDS: "1800"
+
+jobs:
+  detect:
+    name: detect optional trees
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      invariant: ${{ steps.scan.outputs.invariant }}
+      symbolic: ${{ steps.scan.outputs.symbolic }}
+      differential: ${{ steps.scan.outputs.differential }}
+      medusa: ${{ steps.scan.outputs.medusa }}
+      report: ${{ steps.scan.outputs.report }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: scan
+        shell: bash
+        run: |
+          has() {
+            if [ -n "$(find "$1" -name "$2" -print -quit 2>/dev/null)" ]; then
+              echo true
+            else
+              echo false
+            fi
+          }
+          exists() {
+            if [ -f "$1" ]; then echo true; else echo false; fi
+          }
+          {
+            echo "invariant=$(has contracts/test/invariant '*.t.sol')"
+            echo "symbolic=$(has contracts/test/symbolic '*.sol')"
+            echo "differential=$(has differential '*.py')"
+            echo "medusa=$(exists contracts/medusa.json)"
+            echo "report=$(exists experiments/report.py)"
+          } >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+  invariants:
+    name: invariants (nightly profile)
+    needs: detect
+    if: needs.detect.outputs.invariant == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+          cache: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.svm
+          key: svm-${{ runner.os }}-${{ hashFiles('contracts/foundry.toml') }}
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: install just
+        run: uv tool install "rust-just==${JUST_VERSION}"
+      - name: forge test (nightly invariant profile)
+        run: just test-nightly
+
+  medusa:
+    name: medusa campaign
+    needs: detect
+    if: needs.detect.outputs.medusa == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+          cache: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.svm
+          key: svm-${{ runner.os }}-${{ hashFiles('contracts/foundry.toml') }}
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: install just
+        run: uv tool install "rust-just==${JUST_VERSION}"
+
+      # Same pinned release the justfile expects at .tools/medusa, so the local and nightly
+      # campaigns are the same binary.
+      - name: install medusa
+        run: |
+          set -euo pipefail
+          url="https://github.com/crytic/medusa/releases/download/v${MEDUSA_VERSION}"
+          url="${url}/medusa-linux-x64.tar.gz"
+          tmp="$(mktemp -d)"
+          curl -fsSL -o "${tmp}/medusa.tar.gz" "$url"
+          echo "${MEDUSA_SHA256}  ${tmp}/medusa.tar.gz" | sha256sum --check --strict -
+          mkdir -p .tools
+          tar -xzf "${tmp}/medusa.tar.gz" -C .tools medusa
+          chmod +x .tools/medusa
+          .tools/medusa --version
+
+      - name: medusa (time limited)
+        run: timeout -k 60 "${MEDUSA_TIMEOUT_SECONDS}" just medusa
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: medusa-corpus
+          path: contracts/medusa-corpus/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  halmos:
+    name: halmos
+    needs: detect
+    if: needs.detect.outputs.symbolic == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+          cache: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.svm
+          key: svm-${{ runner.os }}-${{ hashFiles('contracts/foundry.toml') }}
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: install just and halmos
+        run: |
+          uv tool install "rust-just==${JUST_VERSION}"
+          uv tool install "halmos==${HALMOS_VERSION}"
+      - name: halmos
+        run: just halmos
+
+  differential-long:
+    name: differential (long)
+    needs: detect
+    if: needs.detect.outputs.differential == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+          cache: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.svm
+          key: svm-${{ runner.os }}-${{ hashFiles('contracts/foundry.toml') }}
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: uv sync --locked
+        run: uv sync --locked
+      - name: install just
+        run: uv tool install "rust-just==${JUST_VERSION}"
+      - name: differential (nightly profile)
+        run: just diff-long
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: hypothesis-examples
+          path: .hypothesis/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  report:
+    name: rebuild report figures
+    needs: detect
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    # Only to read the artefact named by data_run_id. Nothing here writes.
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # data/processed/ is git-ignored, so the figures can only be rebuilt from an artefact.
+      # No artefact, no report: the job says so rather than inventing numbers.
+      - name: fetch processed data
+        id: fetch
+        if: github.event_name == 'workflow_dispatch' && inputs.data_run_id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: processed-data
+          path: data/processed
+          run-id: ${{ inputs.data_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: report, or say why not
+        env:
+          HAS_REPORT: ${{ needs.detect.outputs.report }}
+          DATA_RUN_ID: ${{ inputs.data_run_id }}
+        run: |
+          set -euo pipefail
+          if [ "${HAS_REPORT}" != "true" ]; then
+            echo "::notice::experiments/report.py does not exist yet (arrives at P32) — skipping"
+            exit 0
+          fi
+          if [ -z "$(find data/processed -type f -print -quit 2>/dev/null)" ]; then
+            echo "::notice::no processed data (data_run_id=${DATA_RUN_ID:-unset}) — skipping the report"
+            echo "Re-run this workflow with the run id of a run that uploaded a 'processed-data'" \
+                 "artefact. Report numbers come only from experiments/; none are invented here." \
+                 >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          uv sync --locked
+          uv tool install "rust-just==${JUST_VERSION}"
+          just report
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: report-figures
+          path: reports/
+          if-no-files-found: ignore
+          retention-days: 14

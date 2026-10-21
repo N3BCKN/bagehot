@@ -1,5 +1,8 @@
 # Bagehot
 
+[![pr](https://github.com/H3BCKN/bagehot/actions/workflows/pr.yml/badge.svg)](https://github.com/H3BCKN/bagehot/actions/workflows/pr.yml)
+[![nightly](https://github.com/H3BCKN/bagehot/actions/workflows/nightly.yml/badge.svg)](https://github.com/H3BCKN/bagehot/actions/workflows/nightly.yml)
+
 A testnet-only, research-grade CDP protocol: a USD-pegged stablecoin, WETH as the only collateral,
 a fixed interest rate, and two interchangeable liquidation strategies — a stability pool
 (deployment A) and a Dutch auction (deployment B).
