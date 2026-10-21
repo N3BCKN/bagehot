@@ -5,7 +5,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | Prompt | Title | Status | Commit | Notes |
 |---|---|---|---|---|
 | P00 | Repository bootstrap and toolchain | done | a4e5b1d | `just check` and `just static` green; all toolchains pinned; hooks verified |
-| P01 | Continuous integration | blocked | 3cb1d71 | Remote connected: https://github.com/N3BCKN/bagehot (private). Deliverables complete and verified locally; still awaiting a PR run URL |
+| P01 | Continuous integration | blocked | 3cb1d71 | PR #1 opened; all six jobs failed to start — GitHub Actions billing, not the workflows. See P01-6 |
 | P02 | Protocol specification (human gate) | todo | | |
 | P03 | Invariants (human gate) | todo | | |
 | P04 | ADRs and threat model skeleton | todo | | |
@@ -154,6 +154,7 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
 | P01-3 | The nightly `report` job cannot find processed data on a scheduled run — artefacts do not cross workflow runs without an explicit id. It needs `workflow_dispatch` with `data_run_id`. Revisit at P29/P32 once a data workflow actually produces the `processed-data` artefact; a scheduled run may then want to locate the newest one via the API. | Claude | at P32 |
 | P01-4 | `scripts/check_triage.py` gates slither only. aderyn findings are uploaded as an artefact but not yet gated; aderyn can emit JSON, so the script can be extended when `contracts/src/` has contracts. The triage table's `tool` column already distinguishes them. | Claude | at P10 |
 | P01-5 | The `contracts` and `differential-quick` jobs share one Foundry build cache key, derived from `foundry.toml` + `foundry.lock` + `remappings.txt`. Since `foundry.toml` carries `solc_version`, caches are never shared across solc versions, but confirm this still holds if the profile layout changes. | Claude | no |
+| P01-6 | **Blocks P01.** PR [#1](https://github.com/N3BCKN/bagehot/pull/1), run [39668831000](https://github.com/N3BCKN/bagehot/actions/runs/39668831000): every job failed at startup with *"The job was not started because recent account payments have failed or your spending limit needs to be increased."* No step executed, so this says nothing about the workflows. `detect`, `python` and `secret scan` show `failure`; `contracts`, `static analysis` and `differential (quick)` show `skipped` because they need `detect`. The repository is **private**, so Actions bills against the account quota. Two ways out: fix billing / raise the spending limit, or make the repository public — Actions is free and unlimited for public repositories, and this project is testnet-only, holds no secrets and is headed for publication at P44 anyway. The decision is the human's. | human | yes |
 
 ## Human actions required
 
@@ -167,6 +168,6 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
 | 4 | ~~Confirm the `LICENSE` copyright holder~~ | Done: `Copyright (c) 2026 N3BCKN`. Optional follow-up, outside this repo: `git config --global user.name N3BCKN`, so other projects stop committing as `H3BCKN`. |
 | 5 | Decide whether `docs/redoubt-blueprint-v0.2.pdf` should be renamed | `CLAUDE.md` refers to it as `docs/blueprint-v0.2.pdf`, and the PDF itself uses the working name "Redoubt". Left untouched: renaming a source of truth is not Claude's call. |
 | 6 | ~~Create the GitHub repository and connect it~~ | Done: `git@github.com:N3BCKN/bagehot`, `main` tracking `origin/main`. |
-| 7 | **P01 gate.** Open a PR from a branch and confirm all six `pr.yml` jobs are green | `pr.yml` triggers on `pull_request` and on pushes to `main`. A PR is what exercises the diff-scoped gitleaks scan and the concurrency group, so the gate needs a real PR, not just the push to `main`. |
+| 7 | **P01 gate, blocking.** Resolve the GitHub Actions billing block, then re-run PR #1 | See P01-6. Either fix billing / raise the spending limit, or make the repository public (Actions is then free and unlimited). Until then no job can start, so P01 cannot be closed. |
 | 8 | **P01 gate.** Record the run URL in the P01 row above and flip its status to `done` | The last unmet P01 acceptance criterion. Everything else is verified locally. |
 | 9 | ~~`gh auth login`~~ | Done: logged in as `N3BCKN`, scopes `repo`, `read:org`, `gist`, `admin:public_key`. Claude can now read run status and logs for this private repository. |
