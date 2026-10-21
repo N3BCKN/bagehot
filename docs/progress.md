@@ -5,7 +5,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | Prompt | Title | Status | Commit | Notes |
 |---|---|---|---|---|
 | P00 | Repository bootstrap and toolchain | done | a4e5b1d | `just check` and `just static` green; all toolchains pinned; hooks verified |
-| P01 | Continuous integration | blocked | | Deliverables complete and verified locally; blocked only on the human gate — no git remote exists, so no PR run yet |
+| P01 | Continuous integration | blocked | 3cb1d71 | Remote connected: https://github.com/N3BCKN/bagehot (private). Deliverables complete and verified locally; still awaiting a PR run URL |
 | P02 | Protocol specification (human gate) | todo | | |
 | P03 | Invariants (human gate) | todo | | |
 | P04 | ADRs and threat model skeleton | todo | | |
@@ -150,7 +150,7 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
 | P00-4 | `ruff` excludes `.claude/` so that `just fmt` does not rewrite the three protected hooks, which it would otherwise reformat. | Claude | no |
 | P00-5 | No gas snapshot yet; `just gas` guards itself until `contracts/.gas-snapshot` exists. Baseline due at P37. | Claude | no |
 | P01-1 | `.gitleaks.toml` carries two allowlist entries, both narrow and both justified in the file: Anvil's published account-0 key (matched as an exact literal, so any other secret in the justfile still trips), and the `contracts/lib/` submodule tree (180 `generic-api-key` false positives in OpenZeppelin's own JS tests; that path is protected by its commit pin, not by the scanner). Re-check both if the scan ever goes quiet unexpectedly. | Claude | no |
-| P01-2 | The badge URLs assume the repository will be `github.com/H3BCKN/bagehot`. They render broken until the remote exists. Fix the README if the slug differs. | human | no |
+| P01-2 | The git `user.name` on this machine is `H3BCKN` but the GitHub account is `N3BCKN`. The README badges are now correct; `LICENSE` still says `Copyright (c) 2026 H3BCKN`, taken from the git identity. If the `H` is a typo in `git config user.name`, both the licence and the commit authorship need it corrected. | human | no |
 | P01-3 | The nightly `report` job cannot find processed data on a scheduled run — artefacts do not cross workflow runs without an explicit id. It needs `workflow_dispatch` with `data_run_id`. Revisit at P29/P32 once a data workflow actually produces the `processed-data` artefact; a scheduled run may then want to locate the newest one via the API. | Claude | at P32 |
 | P01-4 | `scripts/check_triage.py` gates slither only. aderyn findings are uploaded as an artefact but not yet gated; aderyn can emit JSON, so the script can be extended when `contracts/src/` has contracts. The triage table's `tool` column already distinguishes them. | Claude | at P10 |
 | P01-5 | The `contracts` and `differential-quick` jobs share one Foundry build cache key, derived from `foundry.toml` + `foundry.lock` + `remappings.txt`. Since `foundry.toml` carries `solc_version`, caches are never shared across solc versions, but confirm this still holds if the profile layout changes. | Claude | no |
@@ -164,8 +164,9 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
 | 1 | `chmod +x .claude/hooks/*.py` | The three hooks are mode 644. They work as configured (invoked as `python3 <path>`), so nothing is broken, but P00 asks that they be executable. `.claude/hooks/**` is protected from edits, so this one is yours. |
 | 2 | `mkdir -p deployments data/raw data/processed && touch deployments/.gitkeep` | See open issue P00-3. Both `mkdir`s were declined during the session. |
 | 3 | Copy `env.example` to `.env` and fill it in | Claude never reads or creates `.env`. Needed from P06 (`BASE_ARCHIVE_RPC`) onwards; `just fork`, `just smoke` and `just deploy-sepolia-dry` already fail with a clear message without it. |
-| 4 | Confirm the `LICENSE` copyright holder | Currently `Copyright (c) 2026 H3BCKN`, taken from the git identity on this machine. |
+| 4 | Confirm the `LICENSE` copyright holder | Currently `Copyright (c) 2026 H3BCKN`, from `git config user.name`. The GitHub account is `N3BCKN`, so one of the two is a typo — see P01-2. |
 | 5 | Decide whether `docs/redoubt-blueprint-v0.2.pdf` should be renamed | `CLAUDE.md` refers to it as `docs/blueprint-v0.2.pdf`, and the PDF itself uses the working name "Redoubt". Left untouched: renaming a source of truth is not Claude's call. |
-| 6 | **P01 gate.** Create the GitHub repository, `git remote add origin …`, push a branch and open a PR | There is no remote at all, so no CI run can exist yet. This is the stated human gate for P01. |
-| 7 | **P01 gate.** Record the PR run URL in the P01 row of the table above, and flip its status to `done` | The last unmet P01 acceptance criterion. Everything else is verified locally. |
-| 8 | If the repository is created under a GitHub **organisation**, check the first `secrets` job | The job runs the gitleaks binary, which needs no licence, so it should be unaffected — but confirm rather than assume. |
+| 6 | ~~Create the GitHub repository and connect it~~ | Done: `git@github.com:N3BCKN/bagehot`, `main` tracking `origin/main`. |
+| 7 | **P01 gate.** Open a PR from a branch and confirm all six `pr.yml` jobs are green | `pr.yml` triggers on `pull_request` and on pushes to `main`. A PR is what exercises the diff-scoped gitleaks scan and the concurrency group, so the gate needs a real PR, not just the push to `main`. |
+| 8 | **P01 gate.** Record the run URL in the P01 row above and flip its status to `done` | The last unmet P01 acceptance criterion. Everything else is verified locally. |
+| 9 | `gh auth login` (optional) | The repository is private, so Claude cannot read run status or logs unauthenticated. With `gh` logged in, Claude can check runs and diagnose a red job directly instead of asking for pasted output. |
