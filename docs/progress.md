@@ -6,7 +6,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 |---|---|---|---|---|
 | P00 | Repository bootstrap and toolchain | done | a4e5b1d | `just check` and `just static` green; all toolchains pinned; hooks verified |
 | P01 | Continuous integration | done | c47245f | PR [#1](https://github.com/N3BCKN/bagehot/pull/1), run [39670041216](https://github.com/N3BCKN/bagehot/actions/runs/39670041216) green: 5 jobs pass, `differential (quick)` skipped as designed |
-| P02 | Protocol specification (human gate) | in progress | | Plan approved; decisions: redistribute, redemption fee stays in positions, B penalty in tab → reserve |
+| P02 | Protocol specification (human gate) | in progress | a38feab + gate edits | Plan approved; decisions: redistribute, redemption fee stays in positions, B penalty in tab → reserve, redemptions gated at `CRITICAL_TCR` (D-27). Awaiting the human: protect `docs/spec.md` and `spec/vectors/**`, then mark done |
 | P03 | Invariants (human gate) | todo | | |
 | P04 | ADRs and threat model skeleton | todo | | |
 | P05 | Preregistration draft | todo | | |
@@ -54,6 +54,81 @@ Claude updates this file at the end of every session. Status: todo · in progres
 ## Session log
 
 <!-- newest first: date · prompt · what changed · decisions · next -->
+
+### 2026-10-22 · P02 gate · Overrides applied
+
+The human approved the specification with nine confirmations and one override. What changed in
+`docs/spec.md`, `spec/vectors/` and `docs/threat-model.md`:
+
+- **Override (gate question 9) — redemptions are no longer allowed at any TCR.** `redeem` reverts
+  `TCRBelowCritical()` while `systemColl · price < CRITICAL_TCR · systemDebt`, on exactly the
+  quantities and threshold the shutdown trigger uses; between `CRITICAL_TCR` and `MCR` redemptions
+  stay allowed. `ShutdownModule` gains the view `belowCritical(price)` and `RedemptionModule.wire`
+  gains the shutdown module. New deviation D-27, new error, new vector `redemption.json#tcr_guard`,
+  and a proposed P03 invariant in Appendix B. `redeem` does **not** call `check()` — the revert
+  would roll the shutdown back.
+- **Parameter values are configuration** (§3 preamble): the spec freezes the parameter set, units,
+  ranges, meanings and formulas; a value may move inside its range after P07 without
+  `/spec-change`, as long as §3.3 still holds and §3.2 is recomputed.
+- **`TIP` renamed `RESET_TIP`** and the two incentives separated in words: the auction starter
+  takes the whole gas reserve of the liquidated position (§6.8.2), the resetter is paid a fixed
+  `RESET_TIP` from the DeficitLedger reserve, capped by its balance and only on a reset that
+  actually met `TAIL`/`CUSP` (§6.8.5).
+- **Pool interest ordering confirmed** (gate question 8): `deposit`, `withdraw` and `claimGains`
+  already call `vaultManager.accrue()` before reading or writing any snapshot. §5.3.1 now says so
+  explicitly, with the new vector
+  `product_sum.json#deposit_after_idle_gets_no_back_interest` (30 idle days: alice, the only
+  depositor, gets 120.546… stable of interest, bob, who deposits afterwards, gets 0).
+- **Known limitations** (§1.4) and `docs/threat-model.md` now carry the cost of pure pro-rata
+  settlement (an unrepaid position forfeits its surplus collateral), full liquidation only, and
+  depositor flight. The threat register has its first row, T-01 (redemption run below par).
+- **§12.1 added**: the kit's thirteen "Corrections to the blueprint" checked one by one. Items 1–4,
+  11–13 were already reflected; item 5 (zero differential tolerance) is noted in Appendix B;
+  items 6–10 are data/experiment work and are carried forward below.
+
+Vectors: 56 in 12 files (two new). The reference implementation reproduces the other ten files
+byte-for-byte, so nothing else moved except the `RESET_TIP` key.
+
+**Audit of the gate changes.** `spec-auditor`, spec-only mode, scoped to the changed sections.
+Round one: 1 blocker, 3 major, 9 minor. The blocker and the majors were all in the new redemption
+gate, and all three were the same kind of mistake — claiming the gate and the shutdown trigger are
+"one number" when they were not:
+- **B1** `belowCritical` left out `check()`'s `live` guard, so in an empty system with residual
+  deficit dust every redemption would have been blocked for ever. `live` is now in the view, which
+  §5.8 spells out as pseudocode.
+- **M2** `check()` covers the deficit before measuring, `redeem` does not, so the gate is strictly
+  tighter. Rather than make a redemption burn the reserve as a side effect, the spec now states
+  the one-way relation: whatever would trigger a shutdown is already blocked, not the converse.
+- **M3** In B, a buyer's `onAuctionPurchase` callback sees a lagged `systemColl`/`systemDebt`;
+  `check()` is guarded against exactly that and the new gate was not. `redeem` now carries the
+  same `AuctionCallbackActive` guard, which is why `RedemptionModule.wire` also takes the house.
+Nine minor fixes: a stale `TIP` in an `auction.json` note, an Appendix B cross-reference, the
+`index` vs `currentIndex()` equivalence, the overflow caveat on the view's `price` argument, §5.5's
+use of the display `tcr()`, §3.1's `CRITICAL_TCR` meaning, the D/E rider on the configuration
+paragraph, §12.1's provenance line, the §1.3/§1.4 duplication, and the pool "accrual comes first"
+paragraph moved to a §5.3 preamble. The auditor recomputed both new vectors field by field from
+the spec formulas and matched every value.
+
+**Gate follow-ups (human, after the first report).** ADR-021's index entry in `docs/adr/README.md`
+now records the new `RedemptionModule → ShutdownModule / DutchAuctionHouse` wiring edge and the
+absence of a reverse dependency; the P03 invariant carries the placeholder id `I15`; the
+zero-tolerance methodology note moved out of spec Appendix B into Carry-forward above.
+
+**Round two** (same agent, scoped to the fixes): **0 blockers, 1 major, 8 minors**, every
+round-one finding confirmed resolved. The major was that the `I15` draft had become unimplementable
+as an *iff*: the new `AuctionCallbackActive` guard sits inside the measurement window the invariant
+names, so a `redeem` called from a buyer callback could satisfy the right-hand side and still
+revert. The premise now starts after that check. The eight minors were precision fixes: two summary
+sentences that still quoted the gate without `live`, the dropped `usable` conjunct in §5.8's "in
+full", a missing cross-contract constraint (§3.3 constraint 7: the `auctionHouse` argument of
+`ShutdownModule.wire` and `RedemptionModule.wire` must be the house in B and `address(0)` in A —
+unverifiable on-chain, so the deployment script asserts it), the §4.6 "both" covering three
+addresses, §5.10's view list, §12.1's "items 6–10", Appendix A's §5.3.1 reference, and the ADR-021
+no-cycle argument, which ruled out the wrong edges. The auditor independently enumerated the wire
+graph and the run-time call graph around the RedemptionModule and confirmed the claim holds: one
+inbound address edge (`VaultManager.wire`), no inbound call edge, no hook.
+
+**Next.** The human protects `docs/spec.md` and `spec/vectors/**`; then P03.
 
 ### 2026-10-21/22 · P02 · Protocol specification
 
@@ -188,6 +263,21 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
 
 **Next.** P01, continuous integration.
 
+## Carry-forward
+
+Items from the kit's "Corrections to the blueprint" that no specification text can satisfy: they
+constrain data collection and calibration. Each is checked at its target prompt (spec §12.1).
+
+| # | Correction | Target |
+|---|---|---|
+| 5 | Differential test tolerance is zero: the model and the contracts do identical integer arithmetic, so a mismatch is a bug, never a rounding difference. Moved here from spec Appendix B at the gate — it is test methodology, not protocol semantics | P22 (model), P23 (differential harness) |
+| 6 | Liquidation latency is right-censored; calibrate with survival analysis (Kaplan–Meier) rather than averaging observed latencies | P08 (extraction), P27 (calibration) |
+| 7 | Price source: Coinbase ETH-USD is primary; Binance ETHUSDT is USDT-quoted and must be labelled as such, never mixed in silently | P06 |
+| 8 | Base has native USDC and bridged USDbC; liquidity measurement uses native USDC and the report says which | P25 |
+| 9 | Chainlink proxies change aggregators in phases; history extraction must walk the phases, not a single aggregator | P07 |
+| 10 | Base transaction cost = L2 execution + L1 data fee, read from the GasPriceOracle predeploy | P09 (measurement), P24 (cost model) |
+| 11 | Shared test vectors in `spec/vectors/*.json` feed both Foundry and pytest | Done at P02; consumed at P10 (Foundry) and P22 (pytest) |
+
 ## Open issues
 
 <!-- id · description · owner · blocking? -->
@@ -207,7 +297,8 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
 | P01-6 | Resolved. Run [39668831000](https://github.com/N3BCKN/bagehot/actions/runs/39668831000) had every job fail at startup — *"recent account payments have failed or your spending limit needs to be increased"* — because the repository was private and Actions billed against the account quota. The human made the repository **public**, after an audit that found no leaks in the full history, no credential file ever committed, and nothing in the tree but source, docs and config. Actions is free and unlimited for public repositories. | human | no |
 | P01-7 | Found by CI, not locally: the `secret scan` job installed gitleaks into `~/.local/bin/`, which does not exist there because that job runs no `setup-uv` step. Fixed in `c47245f` — both binary installs now `mkdir -p` the directory, install to an explicit filename and append it to `$GITHUB_PATH`. A reminder that a job without `setup-uv` starts from a barer environment than the others. | Claude | no |
 | P02-1 | Sorted-list order is not exactly preserved under redistribution: near-tied NICRs can swap by up to ~7·10⁻¹⁹ relative (≈ 1/min collateral in wei) through stake/reward rounding. I13 in P03 needs a derived tolerance (spec §6.3.3, App. B). | Claude | at P03 |
-| P02-2 | The kit's "Corrections to the blueprint" list referenced by the P02 prompt is not in the repo; spec §12 was built from the blueprint itself. Merge it if the human has it. | human | no |
+| P02-2 | Resolved at the gate: the human supplied the kit's "Corrections to the blueprint" (13 items, from the kit README). Spec §12.1 checks each one; items 6–10 are data/experiment work and are listed under Carry-forward above. | Claude | no |
+| P02-4 | No vector exercises `redeem`'s `AuctionCallbackActive` branch (D-27, §6.7.2): it needs a deployment-B buyer callback that calls `redeem`, which the recorder cannot drive. Add it as a Foundry test at P16/P33 and as a model test at P22. | Claude | at P16/P33 |
 | P02-3 | The vector reference implementation is throwaway (scratchpad). Vectors are validated independently from P10 (Foundry) and P22 (Python model); a vector that disagrees with both implementations is a spec question for `/spec-change`. | Claude | at P10/P22 |
 | P01-8 | The repository is public, so all seven commits expose the author email `ka.koszewski@gmail.com` permanently. Four of them are also authored `H3BCKN`. Neither can be changed without a force push, which the permission rules forbid. If this matters, GitHub's `noreply` address plus `git config user.email` fixes it for future commits. | human | no |
 

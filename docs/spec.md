@@ -1,7 +1,8 @@
 # Bagehot protocol specification
 
-Version 1.0-draft (P02). Status: **awaiting the P02 human gate**. After approval this file and
-`spec/vectors/**` are protected; changes go through `/spec-change`.
+Version 1.0-draft (P02). Status: **approved at the P02 human gate** (2026-10-22), with the gate's
+one override (D-27, the critical-TCR gate on redemptions) and its confirmations applied. Awaiting
+protection of this file and `spec/vectors/**`; from then on changes go through `/spec-change`.
 
 The specification wins over the code: if the Solidity contracts or the Python model disagree with
 this document, they are wrong until a change is approved. Every rule here is written so that two
@@ -41,7 +42,7 @@ with identical parameters except the strategy-specific ones (§3).
 
 - Any collateral other than WETH; any oracle other than one Chainlink price feed plus the L2
   sequencer-uptime feed.
-- Partial liquidation / close factor (blueprint §4.5 — deferred, see §12 D-14).
+- Partial liquidation / close factor (blueprint §4.5 — deferred, see §12 D-14 and §1.4).
 - User-set or variable interest rates, borrowing fees, recovery mode, governance, admin roles,
   parameter setters, pausing, proxies, upgradeability. The only privileged action is the one-shot
   `wire(...)` (§9).
@@ -49,6 +50,23 @@ with identical parameters except the strategy-specific ones (§3).
 - Stepwise auction curves; auction parameters per position.
 - Peg dynamics: no secondary-market model of the stablecoin.
 - Mainnet deployment of any kind.
+
+### 1.4 Known limitations
+
+Costs accepted at the P02 gate. They are properties of the design, not defects; the threat model
+(§4 of `docs/threat-model.md`) carries them forward.
+
+- **Settlement is pure pro-rata** (ADR-10 of the blueprint; restated as a Bagehot ADR at P04). At settlement every claimant receives the same amount
+  of collateral per stablecoin, whatever their own position was worth. A borrower who does not
+  repay inside `REPAYMENT_WINDOW` forfeits the surplus collateral of their position to the claim
+  pool: with a usable price their position may be worth far more per unit of debt than the pool
+  average, and the difference is transferred to the other holders. Settling at the trigger price
+  would avoid this but needs a usable price at settlement and a per-position loop; the comparison
+  between A and B does not depend on which rule is chosen.
+- **Full liquidation only** (§1.3, D-14). A position below MCR is liquidated whole, even when a
+  partial liquidation would restore it, so borrowers pay the penalty on the whole debt.
+- **No intervention against depositor flight.** Nothing stops stability-pool depositors from
+  withdrawing as losses approach; the deployment measures the effect instead of preventing it.
 
 ---
 
@@ -188,6 +206,27 @@ Every parameter is an immutable constructor argument. **Every starting value bel
 preregistration; values marked E are engineering limits, C are mathematical constants, D are derived
 from an H value by the stated formula.
 
+**Values are configuration; formulas, ranges and semantics are frozen.** What this specification
+freezes is the set of parameters, each one's unit, valid range, meaning and the formula in which it
+is used — and, for D parameters, the formula that derives them. The *starting values* in the table
+below are configuration: after P07 a value may be changed to any other value inside its range (in a
+deployment config or a scenario config) **without** a `/spec-change`, as long as every constraint in
+§3.3 still holds. Three riders:
+
+- **D values are never chosen, only re-derived.** A change to `ANNUAL_RATE`, `BASE_RATE_HALF_LIFE`
+  or `AUCTION_HALF_LIFE` requires `RATE_PER_SECOND`, `BASE_RATE_DECAY` or `CUT` to be recomputed
+  with the Kind-D formula in that parameter's row of §3.1 — not picked freely inside the range.
+  §3.2 and `math.json#derived_constants` record the check for the *starting* values; they do not
+  move with a configuration change, because every vector carries its own `params`.
+- **E values are engineering limits, not experimental configuration.** `MAX_HINT_STEPS`,
+  `ORACLE_GAS` and `ORACLE_POST_FAILURE_GAS` may be retuned for a deployment, but they are not
+  swept and a change to them is a deployment decision to record, not a result.
+- Changing a range, a unit, a formula, a parameter's meaning, or adding or removing a parameter is
+  a specification change and needs `/spec-change`.
+
+The values frozen for the experiments are the ones in `docs/preregistration.md`; this table records
+where each one started.
+
 ### 3.1 Table
 
 | Parameter | Contract | Unit | Valid range | Start | Kind | Meaning |
@@ -217,9 +256,9 @@ from an H value by the stated formula.
 | `CUT` | DutchAuctionHouse | RAY | `(0, RAY)` | `998_845_421_738_030_152_760_841_918` | D | `round_half_even(0.5^(1/AUCTION_HALF_LIFE) · RAY)`; per-second decay |
 | `TAIL` | DutchAuctionHouse | s | `> 0` | `7_200` | H | Age after which an auction needs a reset |
 | `CUSP` | DutchAuctionHouse | WAD | `(0, WAD)` | `0.40e18` | H | Price/top ratio below which an auction needs a reset |
-| `TIP` | DutchAuctionHouse | stable wei | `≥ 0` | `5e18` | H | Paid to the resetter from the reserve, if the reserve can afford it |
+| `RESET_TIP` | DutchAuctionHouse | stable wei | `≥ 0` | `5e18` | H | Fixed tip paid to the caller of `reset`, from the DeficitLedger reserve, capped by that reserve's balance. Never paid from a position's gas reserve |
 | `ORACLE_FAILURE_DURATION` | ShutdownModule | s | `> STALENESS` | `172_800` | H | Continuous observed oracle failure that triggers shutdown |
-| `CRITICAL_TCR` | ShutdownModule | WAD | `[WAD, MCR]` | `1.05e18` | H | TCR below which shutdown triggers |
+| `CRITICAL_TCR` | ShutdownModule | WAD | `[WAD, MCR]` | `1.05e18` | H | TCR below which shutdown triggers (§6.11.1) and `redeem` reverts `TCRBelowCritical` (§6.7.2) |
 | `DEFICIT_LIMIT_BPS` | ShutdownModule | bps | `[1, 10_000]` | `500` | H | Uncovered deficit as a share of supply that triggers shutdown |
 | `REPAYMENT_WINDOW` | ShutdownModule | s | `> 0` | `604_800` | H | Window between trigger and settlement |
 
@@ -249,9 +288,14 @@ The deployment script (P18) asserts, and the constructor of each contract checks
 4. `ORACLE_POST_FAILURE_GAS ≥ ceil(ORACLE_GAS / 63)`; `FEED_DECIMALS ≤ 18`.
 5. `CRITICAL_TCR ≤ MCR`; `ORACLE_FAILURE_DURATION > STALENESS`.
 6. Every range in §3.1, as far as §3.4 assigns it to a constructor or `wire`.
+7. The `auctionHouse` argument of `ShutdownModule.wire` and of `RedemptionModule.wire` is the
+   DutchAuctionHouse in B and `address(0)` in A, and both equal the `auctionHouse` passed to
+   `DeficitLedger.wire`. Nothing on-chain can check this (none of the three contracts knows the
+   others' arguments), and a B deployment that passed `address(0)` would silently disable the
+   `AuctionCallbackActive` guards of §6.7.2 and §6.11.1.
 
-Constraints 1, 2, 5 and the `≤ MCR` half of `CRITICAL_TCR` involve parameters of different
-contracts and are enforced **only by the deployment script** (it asserts them before broadcasting).
+Constraints 1, 2, 5, 7 and the `≤ MCR` half of `CRITICAL_TCR` involve parameters or addresses of
+different contracts and are enforced **only by the deployment script** (it asserts them before broadcasting).
 Constraint 3 is enforced by `VaultManager.wire`. Constraint 4 by the OracleAdapter constructor.
 
 ### 3.4 Constructor and `wire` signatures
@@ -268,8 +312,8 @@ the table says otherwise. `wire` first checks `msg.sender == deployer` (`NotDepl
 | | `wire(address sorted, address strategy, address stabilityPool, address redemptionModule, address deficitLedger, address shutdownModule)` — 2: `stabilityPool ∈ {address(0), strategy}`, and `stabilityPool == address(0) ⇒ POOL_SHARE_BPS == 0` |
 | SortedPositions | `constructor(uint256 MAX_HINT_STEPS)` — 0: `1 ≤ x ≤ 1_000` · `wire(address vaultManager)` |
 | StabilityPool | `constructor(address weth, address token, uint256 LIQUIDATION_PENALTY, uint256 MIN_DEPOSIT)` — 2: `≤ 0.5e18`; 3: `≥ 1e18` · `wire(address vaultManager, address deficitLedger)` |
-| DutchAuctionHouse | `constructor(address weth, address token, address oracle, uint256 LIQUIDATION_PENALTY, uint256 MIN_DEBT, uint256 BUFFER, uint256 CUT, uint256 TAIL, uint256 CUSP, uint256 TIP)` — 3: `≤ 0.5e18`; 4: `≥ 1e18`; 5: `WAD ≤ x ≤ 2·WAD`; 6: `0 < x < RAY`; 7: `> 0`; 8: `0 < x < WAD`; 9: any · `wire(address vaultManager, address deficitLedger, address shutdownModule)` |
-| RedemptionModule | `constructor(address token, address oracle, uint256 REDEMPTION_FEE_FLOOR, uint256 BETA, uint256 BASE_RATE_DECAY)` — 2: `≤ WAD`; 3: `1 ≤ x ≤ 100`; 4: `0 < x < RAY` · `wire(address vaultManager)` |
+| DutchAuctionHouse | `constructor(address weth, address token, address oracle, uint256 LIQUIDATION_PENALTY, uint256 MIN_DEBT, uint256 BUFFER, uint256 CUT, uint256 TAIL, uint256 CUSP, uint256 RESET_TIP)` — 3: `≤ 0.5e18`; 4: `≥ 1e18`; 5: `WAD ≤ x ≤ 2·WAD`; 6: `0 < x < RAY`; 7: `> 0`; 8: `0 < x < WAD`; 9: any · `wire(address vaultManager, address deficitLedger, address shutdownModule)` |
+| RedemptionModule | `constructor(address token, address oracle, uint256 REDEMPTION_FEE_FLOOR, uint256 BETA, uint256 BASE_RATE_DECAY)` — 2: `≤ WAD`; 3: `1 ≤ x ≤ 100`; 4: `0 < x < RAY` · `wire(address vaultManager, address shutdownModule, address auctionHouse)` — 2: may be `address(0)` (deployment A) |
 | DeficitLedger | `constructor(address weth, address token)` · `wire(address vaultManager, address strategy, address auctionHouse, address stabilityPool, address shutdownModule)` — 2: `auctionHouse ∈ {address(0), strategy}`; 3: `stabilityPool ∈ {address(0), strategy}` and exactly one of `auctionHouse`, `stabilityPool` is non-zero |
 | OracleAdapter | `constructor(address priceFeed, address sequencerFeed, uint256 STALENESS, uint256 GRACE_PERIOD, uint256 MIN_PRICE, uint256 MAX_PRICE, uint256 ORACLE_GAS, uint256 ORACLE_POST_FAILURE_GAS)` — 2: `> 0`; 3: any; 4: `≥ 2e18`; 5: `MIN_PRICE < x ≤ 1e30`; 6: `50_000 ≤ x ≤ 1_000_000`; 7: `≥ ceil(ORACLE_GAS / 63)`. After the argument checks it reads `priceFeed.decimals()`; a failing call or a value `> 18` reverts `InvalidFeedDecimals()`. No `wire` |
 | ShutdownModule | `constructor(address weth, address token, address oracle, uint256 ORACLE_FAILURE_DURATION, uint256 CRITICAL_TCR, uint256 DEFICIT_LIMIT_BPS, uint256 REPAYMENT_WINDOW)` — 3: `> 0`; 4: `≥ WAD`; 5: `1 ≤ x ≤ 10_000`; 6: `> 0` · `wire(address vaultManager, address deficitLedger, address auctionHouse)` — 2: may be `address(0)` (deployment A) |
@@ -351,7 +395,7 @@ configured entirely by its constructor and has no `wire`).
 | `totalLot` | `Σ_active lot` (exact) before settlement; 0 after |
 | `settled` | `bool` |
 | `inPurchase` | transient `bool`; true only while a buyer callback runs (§6.8.4) |
-| immutables | `WETH`, `token`, `oracle`, `LIQUIDATION_PENALTY`, `MIN_DEBT`, `BUFFER`, `CUT`, `TAIL`, `CUSP`, `TIP` |
+| immutables | `WETH`, `token`, `oracle`, `LIQUIDATION_PENALTY`, `MIN_DEBT`, `BUFFER`, `CUT`, `TAIL`, `CUSP`, `RESET_TIP` |
 | wired | `vaultManager`, `deficitLedger`, `shutdownModule` |
 
 Invariant of every active auction: `tab ≥ debtRemaining`, `tab ≥ MIN_DEBT`, `lot > 0`.
@@ -363,7 +407,7 @@ Invariant of every active auction: `tab ≥ debtRemaining`, `tab ≥ MIN_DEBT`, 
 | `baseRate` | WAD, `≤ WAD`; starts at 0 |
 | `lastFeeOperationTime` | starts at the construction timestamp |
 | immutables | `token`, `oracle`, `REDEMPTION_FEE_FLOOR`, `BETA`, `BASE_RATE_DECAY` |
-| wired | `vaultManager` |
+| wired | `vaultManager`; `shutdownModule` and `auctionHouse` (B; `address(0)` in A) — the latter two only for the critical-TCR gate, §6.7.2 |
 
 ### 4.7 DeficitLedger
 
@@ -622,6 +666,14 @@ All mutating functions: caller VaultManager only (`Unauthorized`). Algorithms in
 
 ### 5.3 StabilityPool (A)
 
+**Accrual comes first.** `deposit`, `withdraw` and `claimGains` each call `vaultManager.accrue()`
+before they read `deposits[msg.sender]`, `P`, `S` or `G`, and before they write any snapshot. The
+accrual mints the pool's share of the interest owed since the last accrual and routes it through
+`onInterest` (§6.6.5), which moves `G` **before** the caller is snapshotted. A depositor arriving
+after a long idle period therefore starts from the post-interest `G` and receives none of the
+interest earned while they were out of the pool; a departing depositor is paid the interest up to
+the moment they leave. Vector: `product_sum.json#deposit_after_idle_gets_no_back_interest`.
+
 #### 5.3.1 `deposit(uint256 amount)`
 
 Caller: anyone, for themselves. Mode: any. Oracle: not used.
@@ -747,7 +799,10 @@ record; they are views and decide nothing.
 ### 5.5 RedemptionModule
 
 `redeem(uint256 amount, uint256 maxIterations, uint256 maxFeeRate, uint256 upperHint, uint256 lowerHint)`
-— caller anyone (redeems own stablecoin); mode normal; oracle required. Algorithm §6.7.2. Views:
+— caller anyone (redeems own stablecoin); mode normal; oracle required; reverts
+`TCRBelowCritical()` while `ShutdownModule.belowCritical(price)` is true — the TCR branch of the
+shutdown trigger, `live and systemDebt > 0 and systemColl · price < CRITICAL_TCR · systemDebt`
+(§5.8, §6.7.2). Algorithm §6.7.2. Views:
 `decayedBaseRate()`, `redemptionFeeRate(amount) = min(REDEMPTION_FEE_FLOOR +
 min(decayedBaseRate() + increment(amount, token.totalSupply()), WAD), WAD)` — uses the current
 supply without accruing, so it can differ from the rate a `redeem` in the same block charges by the
@@ -763,7 +818,7 @@ interest minted at that `redeem`'s accrual.
 | `onAuctionPayment(burned, toReserve)` | DutchAuctionHouse | `auctionDebt −= burned; reserve += toReserve` (house burned / moved the tokens); `emit AuctionDebtChanged(−burned, auctionDebt)`; if `toReserve > 0`: `emit ReserveIncreased(toReserve, AUCTION_PENALTY)` |
 | `onAuctionShortfall(d)` | DutchAuctionHouse | `auctionDebt −= d; deficit += d`; `emit AuctionDebtChanged(−d, auctionDebt)`; `emit DeficitRecorded(d, 0, SOURCE_AUCTION)` |
 | `recordDeficit(d, coll)` | VaultManager | `deficit += d; recoveredColl += coll` (VM transferred `coll` WETH first); `emit DeficitRecorded(d, coll, SOURCE_NO_STAKES)` |
-| `payTip(to, amount)` | DutchAuctionHouse | `reserve −= amount`; transfer `amount` stablecoin to `to`; `emit ReserveDecreased(amount, TIP)`. Caller guarantees `amount ≤ reserve` |
+| `payTip(to, amount)` | DutchAuctionHouse | `reserve −= amount`; transfer `amount` stablecoin to `to`; `emit ReserveDecreased(amount, RESET_TIP)`. Caller guarantees `amount ≤ reserve` |
 | `cover() returns (uint256 c)` | anyone, mode any before settlement | §6.9.2 |
 | `onSettlement() returns (uint256 coll)` | ShutdownModule | §6.11.3 |
 
@@ -789,6 +844,32 @@ other state-changing function.
 | `check() returns (bool triggeredNow)` | anyone | §6.11.1 — never reverts when no condition holds |
 | `settle()` | anyone | §6.11.3 |
 | `claim(uint256 amount) returns (uint256 collOut)` | anyone, own stablecoin | §6.11.4 |
+| `belowCritical(uint256 price) view returns (bool)` | anyone | the TCR condition of §6.11.1, in full: `live and systemDebt > 0 and systemColl · price < CRITICAL_TCR · systemDebt` |
+
+`belowCritical` is the TCR branch of `check()` (§6.11.1) as a view, minus its `usable` conjunct,
+which the caller establishes by fetching the price before it calls. Nothing else of `check()` is in
+it. Spelled out:
+
+```
+function belowCritical(price) view returns (bool):
+    live = vaultManager.activeCount() > 0 or (auctionHouse != address(0) and auctionHouse.activeAuctions() > 0)
+    C = vaultManager.systemColl(); D = vaultManager.systemDebt()
+    return live and D > 0 and C * price < CRITICAL_TCR * D
+```
+
+- `live` is the same expression as in `check()`, for the same reason: with no active position and
+  no active auction, `totalNormDebt` and `pendingColl` are truncation dust and the ratio is
+  meaningless. Without it a residual deficit in an empty system would block every redemption for
+  ever. A redemption in that state is not blocked by the gate; the loop finds nothing and the call
+  reverts `NothingRedeemed`.
+- `VaultManager.systemDebt()` uses `currentIndex()` (§5.1.12), while §6.11.1 writes `index`. The
+  two are equal at every call site of this view, because both `check()` and `redeem` call
+  `accrue()` first and `rpow(x, 0) = RAY`. An implementation must not "optimise" the view to read
+  the stored `index`.
+- It fetches no price and writes nothing: the caller supplies the price, exactly as for `tcr(id)`
+  and `icr(id, price)`. It is meaningless before `wire` (it would call `address(0)`), and a price
+  above `MAX_PRICE` can overflow the left-hand product and revert `Panic(0x11)` — the overflow
+  freedom of §2.2 holds for oracle prices, which are bounded by `MAX_PRICE`.
 
 ### 5.9 StableToken
 
@@ -816,7 +897,7 @@ is consistent:
 | `VaultManager.* → VaultManager.accrue → StabilityPool.onInterest / DeficitLedger.onInterest` | |
 | `VaultManager.liquidate → strategy.onLiquidation` | A: pool locked normally (not lock-free); B: house locked |
 | `DutchAuctionHouse.buy → who.onAuctionPurchase(...)` | arbitrary external call (§6.8.4); the house lock is held, so the callback cannot re-enter the house, and therefore cannot complete a liquidation in deployment B |
-| `RedemptionModule.redeem → OracleAdapter.fetchPrice, VaultManager.accrue, VaultManager.redeemCollateral` | |
+| `RedemptionModule.redeem → OracleAdapter.fetchPrice, VaultManager.accrue, VaultManager.redeemCollateral` (state-changing), plus the views named in §6.7.2: `VaultManager.shutdown`, `token.balanceOf/totalSupply`, `DutchAuctionHouse.inPurchase` (B), `ShutdownModule.belowCritical` | the views change nothing and cannot re-enter; `belowCritical` reads `VaultManager.systemColl/systemDebt`, which read the ledger and (in B) the house |
 | `VaultManager.* → SortedPositions.insert/remove/reinsert/find → VaultManager.sortKey` | `sortKey` is a `view`, so it is callable while the VaultManager lock is held |
 | `VaultManager.liquidate → DeficitLedger.recordDeficit` | A, no-stakes path |
 | `DutchAuctionHouse.onLiquidation/buy/reset → DeficitLedger.addAuctionDebt/onAuctionPayment/onAuctionShortfall/payTip`; `reset → OracleAdapter.fetchPrice` | ledger hooks are restricted to the house and make only token transfers to non-core recipients (`payTip` to the resetter) |
@@ -1262,6 +1343,8 @@ function redeem(amount, maxIterations, maxFeeRate, upperHint, lowerHint):
     require(maxIterations > 0, ZeroIterations)
     fetch price (required)
     vaultManager.accrue()
+    require(auctionHouse == address(0) or not auctionHouse.inPurchase(), AuctionCallbackActive)
+    require(not shutdownModule.belowCritical(price), TCRBelowCritical)
     require(token.balanceOf(msg.sender) >= amount, InsufficientBalance)
     S0 = token.totalSupply()
     decayed = decayedBaseRate()
@@ -1275,6 +1358,42 @@ function redeem(amount, maxIterations, maxFeeRate, upperHint, lowerHint):
     lastFeeOperationTime = block.timestamp
     emit Redeemed(msg.sender, amount, redeemed, collSent, feeRate, iterations, baseRate)
 ```
+
+**The critical-TCR gate.** A redemption exchanges stablecoin for collateral of equal value at the
+oracle price (less the fee, which stays in the position). While `systemColl · price ≥ systemDebt`
+that raises the TCR; once collateral is worth less than debt it lowers it, and redemptions become a
+run — the first redeemer gets a full dollar of collateral per token and the last ones get the
+remainder. The gate is the TCR branch of `check()` evaluated as a view (`belowCritical`, §5.8): the
+same threshold, the same `live` guard and the same `systemColl` and `systemDebt`. The rules:
+
+- The comparison is the exact cross-multiplication `systemColl · price < CRITICAL_TCR · systemDebt`
+  (§2.2), evaluated **after** `accrue()`, so `systemDebt` carries the interest of the current block.
+  It is a comparison, not a division: no rounding row applies.
+- It is evaluated once, before the loop, at the price the redemption itself uses. It is not
+  re-evaluated per position; a redemption that starts above the threshold runs to completion.
+- Between `CRITICAL_TCR` and `MCR` redemptions stay allowed. Individual positions below `MCR` are
+  still skipped by the loop (§6.7.3).
+- **The gate is never looser than the shutdown trigger, and may be tighter.** `check()` calls
+  `deficitLedger.cover()` before it measures (§6.11.1); `redeem` does not, because
+  `RedemptionModule` holds no ledger reference and a redemption should not burn the reserve as a
+  side effect. `cover()` only lowers `deficit`, hence only lowers `systemDebt` and raises the
+  ratio, so: if `check()` in the same state would trigger on TCR, the gate certainly blocks; the
+  converse does not hold — with `deficit > 0` and `reserve > 0` the gate can block while `check()`
+  would not trigger. That asymmetry is deliberate and conservative. Anyone may call
+  `DeficitLedger.cover()` (§9) before redeeming to measure the covered ratio.
+- `redeem` never calls `ShutdownModule.check()`: `check()` would be rolled back by the revert that
+  follows it, losing both the trigger and the oracle failure clock. A system below `CRITICAL_TCR`
+  is shut down when somebody calls `check()`; until then the gate only stops the run.
+- **Not during an auction callback.** In B, `systemColl` and `systemDebt` lag inside a buyer's
+  `onAuctionPurchase` (§6.8.4): the sold slice is already gone while the debt is not yet repaid, so
+  the ratio is understated. `redeem` therefore carries the same guard as `check()`,
+  `require(auctionHouse == address(0) or not auctionHouse.inPurchase(), AuctionCallbackActive)`,
+  immediately before the gate. Without it a buyer could make a redemption inside its own callback
+  revert `TCRBelowCritical` on a ratio that does not exist. In A `auctionHouse` is `address(0)` and
+  the check is free.
+- The gate is in `RedemptionModule`, not in `VaultManager.redeemCollateral`, so that the whole
+  redemption decision (price, fee, gate) sits in one contract. Vector:
+  `redemption.json#tcr_guard`.
 
 The fee is charged at the rate implied by the requested amount; the stored base rate reflects what
 was actually redeemed. If less is redeemed than requested, the redeemer paid a slightly higher rate
@@ -1358,7 +1477,12 @@ function onLiquidation(positionId, owner, debt, coll, price):    // onlyVault; c
     return (debt, 0)
 ```
 
-The caller of `liquidate` receives the gas reserve, exactly as in A.
+**Gas reserve and tips are different money.** The caller of `liquidate` — the account that starts
+the auction — receives the whole gas reserve of the liquidated position, exactly as in A; the
+position's gas reserve is spent at that moment and funds nothing else. A later `reset` of the same
+auction is paid a separate, fixed `RESET_TIP` out of the DeficitLedger reserve (§6.8.5), never out
+of any gas reserve. An auction with no reserve left in the ledger can still be reset; the tip is
+then 0 (§6.8.5).
 
 #### 6.8.3 Price and reset condition
 
@@ -1444,13 +1568,17 @@ a = auctions[aid]; require(a.active, AuctionNotActive)
 require(needsReset(a), AuctionNoResetNeeded)
 fetch price (required)
 a.top = mulDivUp(price, BUFFER, WAD); a.tic = block.timestamp
-tip = min(TIP, deficitLedger.reserve())
+tip = min(RESET_TIP, deficitLedger.reserve())
 if tip > 0: deficitLedger.payTip(msg.sender, tip)
 emit AuctionReset(aid, a.top, a.tic, tip, msg.sender)
 ```
 
-Resets are rate-limited by `TAIL` and `CUSP`, so the reserve can lose at most one `TIP` per auction
-per reset interval. Vectors: `auction.json`.
+The tip is paid only on a `reset` that actually happened, which the `require(needsReset(a), …)`
+above guarantees: an auction that does not satisfy `TAIL` or `CUSP` reverts and pays nothing. The
+amount is the fixed `RESET_TIP`, capped by the DeficitLedger reserve balance at that moment
+(`min`), and it is the only payment the resetter receives — the position's gas reserve went to
+whoever started the auction (§6.8.2). Resets are rate-limited by `TAIL` and `CUSP`, so the reserve
+can lose at most one `RESET_TIP` per auction per reset interval. Vectors: `auction.json`.
 
 ### 6.9 Deficit ledger
 
@@ -1553,7 +1681,11 @@ with `systemColl = VaultManager.totalCollateral + pendingColl + DeficitLedger.re
 `systemDebt = mulDivUp(totalNormDebt, index, RAY) + auctionDebt + deficit`. The TCR trigger is only
 evaluated while something is live (`activeCount > 0` or an active auction): with no position and no
 auction, `totalNormDebt` and `pendingColl` are pure truncation dust and TCR is meaningless; a
-residual deficit in an empty system is a matter for the DEFICIT trigger. `AuctionCallbackActive()`
+residual deficit in an empty system is a matter for the DEFICIT trigger. This whole TCR branch — `live`, `systemDebt > 0` and the comparison — is exposed as the view
+`belowCritical(price)` (§5.8) and used by the redemption gate (§6.7.2), so the threshold and the
+quantities are the same on both sides. They are measured at different moments: `check()` measures
+after its own `cover()`, the gate before any cover, so the gate blocks wherever `check()` would
+trigger and sometimes a little earlier (§6.7.2). `AuctionCallbackActive()`
 prevents a buyer from triggering a shutdown from inside its own callback, when the ledger lags the
 house (§6.8.4). `check` must not revert
 when no condition holds: a revert would undo the oracle failure clock. Reasons are evaluated in the
@@ -1648,7 +1780,7 @@ with equal balances receive equal amounts whatever the order. Vectors: `shutdown
 | `liquidate` (A: pool offset; B: auction start) | **required** | without a price nobody knows the position is at risk; also sets the auction `top` |
 | `DutchAuctionHouse.reset` | **required** | new `top` |
 | `DutchAuctionHouse.buy` | not used | the curve is price-independent once started |
-| `RedemptionModule.redeem` | **required** | redemption at a bad price transfers value |
+| `RedemptionModule.redeem` | **required** | redemption at a bad price transfers value; the same price feeds the critical-TCR gate (§6.7.2) |
 | `StabilityPool.deposit / withdraw / claimGains` | not used | no price dependence |
 | `DeficitLedger.cover`, `accrue` | not used | |
 | `ShutdownModule.check` | fetched, not required | unusability is itself a trigger; TCR is only evaluated with a usable price |
@@ -1869,7 +2001,7 @@ Enumerations (numeric values are part of the ABI):
 | | `HouseSettled` | `uint256 lot, uint256 activeAuctions` |
 | RedemptionModule | `Redeemed` | `address indexed redeemer, uint256 requested, uint256 redeemed, uint256 collSent, uint256 feeRate, uint256 iterations, uint256 baseRate` |
 | DeficitLedger | `ReserveIncreased` | `uint256 amount, uint8 source (1 INTEREST, 2 AUCTION_PENALTY, 3 POOL_DUST)` |
-| | `ReserveDecreased` | `uint256 amount, uint8 reason (1 TIP)` |
+| | `ReserveDecreased` | `uint256 amount, uint8 reason (1 RESET_TIP)` |
 | | `AuctionDebtChanged` | `int256 delta, uint256 auctionDebt` |
 | | `DeficitRecorded` | `uint256 amount, uint256 coll, uint8 source (1 AUCTION, 2 NO_STAKES)` |
 | | `DeficitCovered` | `uint256 amount, uint256 reserve, uint256 deficit` |
@@ -1912,7 +2044,7 @@ function that can raise the error from this spec's own checks.
 | `RepayExceedsMaximum()` | `amount > debt − MIN_DEBT` | `repay` |
 | `CollateralTooLarge()` | resulting stored collateral would exceed `2^128 − 1` | `openPosition`, `addCollateral` |
 | `InvalidFeedDecimals()` | `priceFeed.decimals()` fails or exceeds 18 | OracleAdapter constructor |
-| `AuctionCallbackActive()` | `check` called while the house is inside a buyer callback | `ShutdownModule.check` |
+| `AuctionCallbackActive()` | `check` or `redeem` called while the house is inside a buyer callback | `ShutdownModule.check`, `redeem` |
 | `InsufficientBalance()` | caller's stablecoin balance below the amount to burn or move | `repay`, `close`, `deposit`, `redeem`, `buy`, `claim` |
 | `NotLiquidatable()` | ICR ≥ MCR | `liquidate` |
 | `SupplyCapExceeded()` | total supply would exceed `2^128 − 1` | `StableToken.mint` |
@@ -1923,6 +2055,7 @@ function that can raise the error from this spec's own checks.
 | `ZeroIterations()` | `maxIterations == 0` | `redeem` |
 | `FeeExceedsMaximum()` | `feeRate > maxFeeRate` | `redeem` |
 | `NothingRedeemed()` | loop redeemed nothing | `redeem` |
+| `TCRBelowCritical()` | `ShutdownModule.belowCritical(price)` is true at the start of a redemption (§5.8) | `redeem` |
 | `AuctionNotActive()` | unknown or finished auction | `buy`, `reset` |
 | `AuctionNeedsReset()` | `needsReset` true | `buy` |
 | `AuctionNoResetNeeded()` | `needsReset` false | `reset` |
@@ -1939,9 +2072,9 @@ function that can raise the error from this spec's own checks.
 
 ## 12. Deviations from the blueprint
 
-The kit's "Corrections to the blueprint" list referenced by the P02 prompt is not in the repository;
-this list is built from the blueprint itself and supersedes it where they differ. Decisions D-1 to
-D-3 were taken by the human at the P02 gate.
+This list is built from the blueprint and supersedes it where the two differ. Decisions D-1 to D-3
+and D-27 were taken by the human at the P02 gate; §12.1 checks the list against the kit's
+"Corrections to the blueprint".
 
 | ID | Blueprint | This spec | Reason |
 |---|---|---|---|
@@ -1971,6 +2104,32 @@ D-3 were taken by the human at the P02 gate.
 | D-24 | §8.6: stake snapshot rule (Liquity v1) | Snapshots reset to 0 when no active position remains; `computeStake` returns `coll` when either snapshot is 0 | Truncation dust would otherwise freeze all future stakes at 0 (spec-audit finding B1) |
 | D-25 | — | `CollateralTooLarge` cap on stored collateral; `AuctionCallbackActive` guard on `check`; TCR trigger only while something is live and counting `recoveredColl` | Overflow-free comparisons; no shutdown forced from inside a buyer callback or by dust in an empty system |
 | D-26 | — | Exact constructor and `wire` signatures with ordered argument checks (§3.4) | Deterministic `InvalidParameter` indices |
+| D-27 | §8.4, blueprint has no TCR condition on redemption (Liquity v1 blocks below 110%) | `redeem` reverts `TCRBelowCritical()` while `belowCritical(price)` is true (§5.8: `live and systemDebt > 0 and systemColl · price < CRITICAL_TCR · systemDebt`); allowed between `CRITICAL_TCR` and `MCR` | Human decision at the P02 gate: below par a redemption lowers the TCR and becomes a run on the remaining collateral. Same threshold and same quantities as the shutdown trigger (§6.11.1) |
+
+### 12.1 Against the kit's "Corrections to the blueprint"
+
+The thirteen items below are the "Corrections to the blueprint" section of the prompt kit's
+`README.md`, supplied by the human at the P02 gate (the kit itself is not in this repository). They
+are reproduced in the numbering of that section so each can be checked one by one. Items 5–11 are
+carried in `docs/progress.md` under "Carry-forward" with their target prompts: 5 is test
+methodology, 6–10 constrain data collection and calibration, and 11 is tracked to the prompts that
+consume the vectors.
+
+| # | Correction | Where it is reflected |
+|---|---|---|
+| 1 | No "virtual shares" in the stability pool; use a minimum deposit, scale/epoch handling and error-correction carries | D-8; `MIN_DEPOSIT` (§3.1), §6.6.2–§6.6.3, carries R14/R15, dust sweep §5.3.2 |
+| 2 | Gas reserve in WETH, `openPosition` not payable | D-5; §4.2, §5.1.1 |
+| 3 | One-shot `wire(...)` per contract, callable once by the immutable deployer | D-20, ADR-021; §3.4, §9 |
+| 4 | OracleAdapter: after a failed feed call, revert if `gasleft()` is below a threshold (63/64 griefing) | D-9; `ORACLE_POST_FAILURE_GAS` (§3.1), §6.10.3, `InsufficientGasForOracle` |
+| 5 | Differential test tolerance is zero | Carried in `docs/progress.md` (target P22/P23). The spec's part is already done: every rounding direction (§8) and the order of operations are fixed, which is what makes zero tolerance reachable |
+| 6 | Liquidation latency is right-censored; calibrate with survival analysis (Kaplan–Meier) | Out of scope for the spec — P08/P27, carried in `docs/progress.md` |
+| 7 | Price source: Coinbase ETH-USD primary; Binance ETHUSDT is USDT-quoted | Out of scope — P06, carried in `docs/progress.md` |
+| 8 | Base has native USDC and bridged USDbC; measure liquidity on native USDC and say so | Out of scope — P25, carried in `docs/progress.md` |
+| 9 | Chainlink proxies change aggregators in phases; follow phases when extracting history | Out of scope — P07, carried in `docs/progress.md`. The spec's oracle rules are phase-independent (they read the proxy) |
+| 10 | Base transaction cost = L2 execution + L1 data fee (GasPriceOracle predeploy) | Out of scope — P09/P24, carried in `docs/progress.md` |
+| 11 | Shared test vectors in `spec/vectors/*.json` feed both Foundry and pytest | Done at P02: `spec/vectors/` + its README; Appendix A |
+| 12 | Liquidation penalty is capped and the surplus returns to the position owner | A: the pool seizes at most `debt × (1 + penalty)` and the surplus is pushed to the owner (§6.6.4, R11, D-13). B: the tab is capped at `debt × (1 + penalty)` and the leftover lot goes to the owner (D-3, §6.8.4) |
+| 13 | The auction purchase callback (flash-style buy) is supported; reentrancy is first-class in the auction house | §6.8.4 (callback, `inPurchase` flag, target restrictions), §5.10, `AuctionCallbackActive` on `check` |
 
 ---
 
@@ -1989,8 +2148,8 @@ drive one algorithm from an explicit state.
 | `sorted_list.json` | order with ties, hint validation, walks, `StaleHint`, `excludeId` (head, hint, only node) |
 | `redistribution.json` | redistribution and snapshot stakes; stakes after the last liquidation (D-24); error carry |
 | `liquidation_pool.json` | A: with / without surplus, underwater, partial absorption, empty pool, no-stakes deficit |
-| `product_sum.json` | deposits, offsets, interest, scale change, epoch change, gains across scales and epochs, dust sweep |
-| `redemption.json` | skip / full / partial, `MIN_DEBT` stop, stale-hint cancel, base-rate decay and fee, single-node partial |
+| `product_sum.json` | deposits, offsets, interest, scale change, epoch change, gains across scales and epochs, dust sweep; a deposit after a long idle period receives none of the idle interest (§5.3) |
+| `redemption.json` | skip / full / partial, `MIN_DEBT` stop, stale-hint cancel, base-rate decay and fee, single-node partial, the critical-TCR gate (blocked below `CRITICAL_TCR`, allowed between `CRITICAL_TCR` and `MCR`) |
 | `auction.json` | price curve with the cusp crossing at t = 793/794; partial, dust rule, `NoPartialPurchase`, paid tab; reset tip and shortfall |
 | `deficit.json` | shortfall then cover from interest |
 | `shutdown.json` | pro-rata claims, order independence |
@@ -2004,6 +2163,23 @@ drive one algorithm from an explicit state.
 3. **I1** equalities are exact in the absence of donations; decide whether handlers donate.
 4. Pool per-depositor attribution is bounded by `T / DECIMAL_PRECISION` per offset, total exact
    (§6.6.7).
-5. Blueprint §16.2 states I2 as "supply = debts + auction debt + pool liabilities − covered deficit";
-   this spec's identity (§10.2) supersedes it. Blueprint §16.5 compares model and chain with a
-   rounding tolerance; the python-model skill requires zero tolerance, which P03 adopts.
+5. **Proposed invariant — placeholder id `I15`, "no successful redemption while
+   `TCR < CRITICAL_TCR`" (P02 gate, decision D-27).** P03 keeps this id unless it clashes with its
+   own numbering. Let `p` be the price a `redeem` call fetched and `(live, C, D)` the
+   three quantities of `belowCritical` (§5.8) measured in that call **immediately after the
+   `AuctionCallbackActive` check passes and before `redeemCollateral` is called** (that check sits
+   between `accrue()` and the gate, §6.7.2, and a call that fails it never reaches the gate). Then
+   the call reverts `TCRBelowCritical()` if and only if `live and D > 0 and C · p < CRITICAL_TCR ·
+   D`; in particular a `redeem` that does not revert leaves the system with
+   `C · p ≥ CRITICAL_TCR · D` as measured at that moment, and a call with `D == 0` or `not live` is
+   never rejected for this reason (if it passes the remaining checks it reverts `NothingRedeemed`,
+   having found nothing to redeem).
+   Note for the test: this is an exact statement about the **gate**, not about `ShutdownModule`.
+   The gate measures before any `cover()`, `check()` after its own, so "the gate blocked" does not
+   imply "`check()` would have triggered"; only the converse holds (§6.7.2).
+6. Blueprint §16.2 states I2 as "supply = debts + auction debt + pool liabilities − covered
+   deficit"; this spec's identity (§10.2) supersedes it.
+
+Methodology that is **not** a P03 input lives in `docs/progress.md` under "Carry-forward": the
+zero differential-test tolerance (P22/P23) and the five data and calibration corrections
+(§12.1 items 6–10).

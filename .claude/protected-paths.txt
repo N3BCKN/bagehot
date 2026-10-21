@@ -4,8 +4,8 @@
 # .claude/protected-paths.txt, .env*, data/raw/**, deployments/**
 #
 # Add after the P02 human gate:
-# docs/spec.md
-# spec/vectors/**
+docs/spec.md
+spec/vectors/**
 # Add after the P03 human gate:
 # docs/invariants.md
 # Add after the P30 human gate:

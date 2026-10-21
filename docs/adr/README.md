@@ -48,7 +48,25 @@ alternative, it is a note.
 | ADR | Title | Status | Prompt |
 |---|---|---|---|
 | 0018 | Solidity version | not yet written | P04 |
+| 0021 | One-shot `wire(...)` by the immutable deployer | not yet written | P04 |
 
 ADR-018 records the choice of `solc_version = "0.8.28"` with `evm_version = "cancun"`, already
-pinned in `contracts/foundry.toml` at P00. The remaining ADR numbers are assigned as decisions
-arise; the number is not a sequence position in the plan.
+pinned in `contracts/foundry.toml` at P00.
+
+ADR-021 records the one-shot `wire(...)`: circular references between the core contracts make
+address prediction impractical, so each contract takes its peers once, from its immutable
+deployer, and never again (spec §3.4, §9). When it is written at P04 it must also record the two
+edges added at the P02 gate: **`RedemptionModule.wire` takes the `ShutdownModule` and (in B) the
+`DutchAuctionHouse`**, which the original architecture did not have. Both are read-only edges used
+by the critical-TCR gate (spec §6.7.2): `ShutdownModule.belowCritical(price)` and
+`DutchAuctionHouse.inPurchase()`, two views. Neither new edge has a reverse: `ShutdownModule.wire`
+and `DutchAuctionHouse.wire` do not take the RedemptionModule, and neither contract calls it. The
+one contract that does hold the RedemptionModule's address, the VaultManager, stores it only for
+the `Unauthorized` check on `redeemCollateral` and never calls it, and nothing else in §5 defines
+a hook on the RedemptionModule — so no call cycle passes through it at run time. (The *address* graph was already cyclic and is why `wire` exists
+at all — `VaultManager.wire` takes the RedemptionModule, which in turn takes the VaultManager.
+Every address is known before any `wire` runs, so wiring order does not change: deploy all
+contracts, then `wire` each one.)
+
+The remaining ADR numbers are assigned as decisions arise; the number is not a sequence position
+in the plan.

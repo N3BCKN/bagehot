@@ -27,7 +27,7 @@
           "CUT": "998845421738030152760841918",
           "TAIL": "7200",
           "CUSP": "400000000000000000",
-          "TIP": "5000000000000000000",
+          "RESET_TIP": "5000000000000000000",
           "STALENESS": "3600",
           "GRACE_PERIOD": "3600",
           "MIN_PRICE": "10000000000000000000",
@@ -307,7 +307,7 @@
           "CUT": "998845421738030152760841918",
           "TAIL": "7200",
           "CUSP": "400000000000000000",
-          "TIP": "5000000000000000000",
+          "RESET_TIP": "5000000000000000000",
           "STALENESS": "3600",
           "GRACE_PERIOD": "3600",
           "MIN_PRICE": "10000000000000000000",
@@ -619,7 +619,7 @@
           "CUT": "998845421738030152760841918",
           "TAIL": "7200",
           "CUSP": "400000000000000000",
-          "TIP": "5000000000000000000",
+          "RESET_TIP": "5000000000000000000",
           "STALENESS": "3600",
           "GRACE_PERIOD": "3600",
           "MIN_PRICE": "10000000000000000000",
@@ -882,7 +882,7 @@
           "CUT": "998845421738030152760841918",
           "TAIL": "7200",
           "CUSP": "400000000000000000",
-          "TIP": "5000000000000000000",
+          "RESET_TIP": "5000000000000000000",
           "STALENESS": "3600",
           "GRACE_PERIOD": "3600",
           "MIN_PRICE": "10000000000000000000",
@@ -1202,7 +1202,7 @@
           "CUT": "998845421738030152760841918",
           "TAIL": "7200",
           "CUSP": "400000000000000000",
-          "TIP": "5000000000000000000",
+          "RESET_TIP": "5000000000000000000",
           "STALENESS": "3600",
           "GRACE_PERIOD": "3600",
           "MIN_PRICE": "10000000000000000000",
@@ -1315,6 +1315,203 @@
         "weth": {
           "alice": "-4590000000000000000",
           "vm": "4590000000000000000"
+        },
+        "pool": {
+          "totalDeposits": "0",
+          "P": "1000000000000000000000000000000000000",
+          "currentScale": "0",
+          "currentEpoch": "0",
+          "S": {},
+          "G": {},
+          "lastCollError": "0",
+          "lastInterestError": "0",
+          "collGainsBalance": "0",
+          "interestGainsBalance": "0",
+          "deposits": {},
+          "depositorCount": {}
+        }
+      }
+    },
+    {
+      "name": "tcr_guard",
+      "level": "system",
+      "note": "system coll 60 WETH against 95,000 debt. At 1600 the TCR is 1.0105 < CRITICAL_TCR, so the redemption reverts TCRBelowCritical even though carol (ICR 320%) would be redeemable; at 1700 the TCR is 1.0737, between CRITICAL_TCR and MCR, and the same redemption goes through on carol (alice, ICR 94.4%, is skipped below MCR) (spec 6.7.2)",
+      "inputs": {
+        "variant": "A",
+        "t0": "1000000",
+        "params": {
+          "MCR": "1100000000000000000",
+          "MIN_DEBT": "2000000000000000000000",
+          "GAS_RESERVE": "37500000000000000",
+          "RATE_PER_SECOND": "1547125957863212449",
+          "POOL_SHARE_BPS": "7500",
+          "MAX_HINT_STEPS": "30",
+          "LIQUIDATION_PENALTY": "50000000000000000",
+          "MIN_DEPOSIT": "1000000000000000000",
+          "REDEMPTION_FEE_FLOOR": "5000000000000000",
+          "BETA": "2",
+          "BASE_RATE_DECAY": "999983955055097432543272791",
+          "BUFFER": "1200000000000000000",
+          "CUT": "998845421738030152760841918",
+          "TAIL": "7200",
+          "CUSP": "400000000000000000",
+          "RESET_TIP": "5000000000000000000",
+          "STALENESS": "3600",
+          "GRACE_PERIOD": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "ORACLE_GAS": "100000",
+          "ORACLE_POST_FAILURE_GAS": "1588",
+          "FEED_DECIMALS": "8",
+          "ORACLE_FAILURE_DURATION": "172800",
+          "CRITICAL_TCR": "1050000000000000000",
+          "DEFICIT_LIMIT_BPS": "500",
+          "REPAYMENT_WINDOW": "604800"
+        },
+        "actors": [
+          "alice",
+          "carol"
+        ],
+        "actorWeth": "1000000000000000000000000000000",
+        "notes": "weth deltas in expected are relative to actorWeth"
+      },
+      "steps": [
+        {
+          "op": "open",
+          "phase": "setup",
+          "t": "1000000",
+          "caller": "alice",
+          "coll": "50000000000000000000",
+          "debt": "90000000000000000000000",
+          "price": "2000000000000000000000",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "result": {
+            "id": "1"
+          }
+        },
+        {
+          "op": "open",
+          "phase": "setup",
+          "t": "1000000",
+          "caller": "carol",
+          "coll": "10000000000000000000",
+          "debt": "5000000000000000000000",
+          "price": "2000000000000000000000",
+          "upperHint": "0",
+          "lowerHint": "1",
+          "result": {
+            "id": "2"
+          }
+        },
+        {
+          "op": "redeem",
+          "phase": "act",
+          "t": "1000000",
+          "caller": "alice",
+          "amount": "1000000000000000000000",
+          "maxIterations": "10",
+          "maxFeeRate": "1000000000000000000",
+          "price": "1600000000000000000000",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "revert": "TCRBelowCritical"
+        },
+        {
+          "op": "redeem",
+          "phase": "act",
+          "t": "1000000",
+          "caller": "alice",
+          "amount": "1000000000000000000000",
+          "maxIterations": "10",
+          "maxFeeRate": "1000000000000000000",
+          "price": "1700000000000000000000",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "result": {
+            "S0": "95000000000000000000000",
+            "decayedBaseRate": "0",
+            "baseRateForFee": "5263157894736843",
+            "feeRate": "10263157894736843",
+            "redeemed": "1000000000000000000000",
+            "collSent": "582198142414860680",
+            "iterations": "2",
+            "baseRateAfter": "5263157894736843",
+            "trace": [
+              "visit 1: ICR < MCR -> skip",
+              "visit 2: partial redemption d=1000000000000000000000 collToRedeemer=582198142414860680"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "vault": {
+          "index": "1000000000000000000000000000",
+          "lastAccrual": "1000000",
+          "totalNormDebt": "94000000000000000000000",
+          "totalCollateral": "59417801857585139320",
+          "totalStakes": "59417801857585139320",
+          "totalStakesSnapshot": "0",
+          "totalCollateralSnapshot": "0",
+          "LColl": "0",
+          "LDebt": "0",
+          "lastErrorColl": "0",
+          "lastErrorDebt": "0",
+          "pendingColl": "0",
+          "pendingNormDebt": "0",
+          "activeCount": "2",
+          "sortedOrder": [
+            "2",
+            "1"
+          ]
+        },
+        "positions": {
+          "1": {
+            "owner": "alice",
+            "status": "Active",
+            "coll": "50000000000000000000",
+            "normDebt": "90000000000000000000000",
+            "stake": "50000000000000000000",
+            "snapLColl": "0",
+            "snapLDebt": "0",
+            "effColl": "50000000000000000000",
+            "effNorm": "90000000000000000000000",
+            "debt": "90000000000000000000000"
+          },
+          "2": {
+            "owner": "carol",
+            "status": "Active",
+            "coll": "9417801857585139320",
+            "normDebt": "4000000000000000000000",
+            "stake": "9417801857585139320",
+            "snapLColl": "0",
+            "snapLDebt": "0",
+            "effColl": "9417801857585139320",
+            "effNorm": "4000000000000000000000",
+            "debt": "4000000000000000000000"
+          }
+        },
+        "ledger": {
+          "reserve": "0",
+          "auctionDebt": "0",
+          "deficit": "0",
+          "recoveredColl": "0"
+        },
+        "redemption": {
+          "baseRate": "5263157894736843",
+          "lastFeeOperationTime": "1000000"
+        },
+        "token": {
+          "totalSupply": "94000000000000000000000",
+          "balances": {
+            "alice": "89000000000000000000000",
+            "carol": "5000000000000000000000"
+          }
+        },
+        "weth": {
+          "alice": "-49455301857585139320",
+          "carol": "-10037500000000000000",
+          "vm": "59492801857585139320"
         },
         "pool": {
           "totalDeposits": "0",

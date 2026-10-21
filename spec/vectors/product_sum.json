@@ -2,7 +2,7 @@
   "file": "product_sum.json",
   "spec": "docs/spec.md \u00a76.6, \u00a75.3",
   "version": 2,
-  "description": "Stability pool product-sum (pool driven by a test vault)",
+  "description": "Stability pool product-sum (unit vectors driven by a test vault, plus one system vector for interest timing)",
   "vectors": [
     {
       "name": "sequence",
@@ -522,6 +522,225 @@
         "reserve": "1",
         "depositorCount": {
           "0": "0"
+        }
+      }
+    },
+    {
+      "name": "deposit_after_idle_gets_no_back_interest",
+      "level": "system",
+      "note": "alice is the only depositor for 30 idle days; bob then deposits. deposit() calls VaultManager.accrue() before it touches any snapshot (spec 5.3.1), so the pool share of the idle interest is credited to alice (all of it but the 1292 wei left in lastInterestError) and bob's interest gain is 0",
+      "inputs": {
+        "variant": "A",
+        "t0": "1000000",
+        "params": {
+          "MCR": "1100000000000000000",
+          "MIN_DEBT": "2000000000000000000000",
+          "GAS_RESERVE": "37500000000000000",
+          "RATE_PER_SECOND": "1547125957863212449",
+          "POOL_SHARE_BPS": "7500",
+          "MAX_HINT_STEPS": "30",
+          "LIQUIDATION_PENALTY": "50000000000000000",
+          "MIN_DEPOSIT": "1000000000000000000",
+          "REDEMPTION_FEE_FLOOR": "5000000000000000",
+          "BETA": "2",
+          "BASE_RATE_DECAY": "999983955055097432543272791",
+          "BUFFER": "1200000000000000000",
+          "CUT": "998845421738030152760841918",
+          "TAIL": "7200",
+          "CUSP": "400000000000000000",
+          "RESET_TIP": "5000000000000000000",
+          "STALENESS": "3600",
+          "GRACE_PERIOD": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "ORACLE_GAS": "100000",
+          "ORACLE_POST_FAILURE_GAS": "1588",
+          "FEED_DECIMALS": "8",
+          "ORACLE_FAILURE_DURATION": "172800",
+          "CRITICAL_TCR": "1050000000000000000",
+          "DEFICIT_LIMIT_BPS": "500",
+          "REPAYMENT_WINDOW": "604800"
+        },
+        "actors": [
+          "alice",
+          "bob"
+        ],
+        "actorWeth": "1000000000000000000000000000000",
+        "notes": "weth deltas in expected are relative to actorWeth"
+      },
+      "steps": [
+        {
+          "op": "open",
+          "phase": "setup",
+          "t": "1000000",
+          "caller": "alice",
+          "coll": "100000000000000000000",
+          "debt": "20000000000000000000000",
+          "price": "2000000000000000000000",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "result": {
+            "id": "1"
+          }
+        },
+        {
+          "op": "open",
+          "phase": "setup",
+          "t": "1000000",
+          "caller": "bob",
+          "coll": "100000000000000000000",
+          "debt": "20000000000000000000000",
+          "price": "2000000000000000000000",
+          "upperHint": "1",
+          "lowerHint": "0",
+          "result": {
+            "id": "2"
+          }
+        },
+        {
+          "op": "deposit",
+          "phase": "setup",
+          "t": "1000000",
+          "caller": "alice",
+          "amount": "10000000000000000000000",
+          "result": {
+            "collGainPaid": "0",
+            "interestGainPaid": "0",
+            "compoundedBefore": "0",
+            "deposit": "10000000000000000000000"
+          }
+        },
+        {
+          "op": "warp",
+          "phase": "act",
+          "t": "1000000",
+          "dt": "2592000"
+        },
+        {
+          "op": "deposit",
+          "phase": "act",
+          "t": "3592000",
+          "caller": "bob",
+          "amount": "10000000000000000000000",
+          "result": {
+            "collGainPaid": "0",
+            "interestGainPaid": "0",
+            "compoundedBefore": "0",
+            "deposit": "10000000000000000000000"
+          }
+        }
+      ],
+      "expected": {
+        "vault": {
+          "index": "1004018201891974921043056951",
+          "lastAccrual": "3592000",
+          "totalNormDebt": "40000000000000000000000",
+          "totalCollateral": "200000000000000000000",
+          "totalStakes": "200000000000000000000",
+          "totalStakesSnapshot": "0",
+          "totalCollateralSnapshot": "0",
+          "LColl": "0",
+          "LDebt": "0",
+          "lastErrorColl": "0",
+          "lastErrorDebt": "0",
+          "pendingColl": "0",
+          "pendingNormDebt": "0",
+          "activeCount": "2",
+          "sortedOrder": [
+            "1",
+            "2"
+          ]
+        },
+        "positions": {
+          "1": {
+            "owner": "alice",
+            "status": "Active",
+            "coll": "100000000000000000000",
+            "normDebt": "20000000000000000000000",
+            "stake": "100000000000000000000",
+            "snapLColl": "0",
+            "snapLDebt": "0",
+            "effColl": "100000000000000000000",
+            "effNorm": "20000000000000000000000",
+            "debt": "20080364037839498420862"
+          },
+          "2": {
+            "owner": "bob",
+            "status": "Active",
+            "coll": "100000000000000000000",
+            "normDebt": "20000000000000000000000",
+            "stake": "100000000000000000000",
+            "snapLColl": "0",
+            "snapLDebt": "0",
+            "effColl": "100000000000000000000",
+            "effNorm": "20000000000000000000000",
+            "debt": "20080364037839498420862"
+          }
+        },
+        "ledger": {
+          "reserve": "40182018919749210431",
+          "auctionDebt": "0",
+          "deficit": "0",
+          "recoveredColl": "0"
+        },
+        "redemption": {
+          "baseRate": "0",
+          "lastFeeOperationTime": "1000000"
+        },
+        "token": {
+          "totalSupply": "40160728075678996841723",
+          "balances": {
+            "alice": "10000000000000000000000",
+            "bob": "10000000000000000000000",
+            "ledger": "40182018919749210431",
+            "pool": "20120546056759247631292"
+          }
+        },
+        "weth": {
+          "alice": "-100037500000000000000",
+          "bob": "-100037500000000000000",
+          "vm": "200075000000000000000"
+        },
+        "pool": {
+          "totalDeposits": "20000000000000000000000",
+          "P": "1000000000000000000000000000000000000",
+          "currentScale": "0",
+          "currentEpoch": "0",
+          "S": {},
+          "G": {
+            "0:0": "12054605675924763000000000000000000000000000000000000"
+          },
+          "lastCollError": "0",
+          "lastInterestError": "1292000000000000000000",
+          "collGainsBalance": "0",
+          "interestGainsBalance": "120546056759247631292",
+          "deposits": {
+            "alice": {
+              "initial": "10000000000000000000000",
+              "snapP": "1000000000000000000000000000000000000",
+              "snapS": "0",
+              "snapG": "0",
+              "snapEpoch": "0",
+              "snapScale": "0",
+              "compounded": "10000000000000000000000",
+              "collGain": "0",
+              "interestGain": "120546056759247630000"
+            },
+            "bob": {
+              "initial": "10000000000000000000000",
+              "snapP": "1000000000000000000000000000000000000",
+              "snapS": "0",
+              "snapG": "12054605675924763000000000000000000000000000000000000",
+              "snapEpoch": "0",
+              "snapScale": "0",
+              "compounded": "10000000000000000000000",
+              "collGain": "0",
+              "interestGain": "0"
+            }
+          },
+          "depositorCount": {
+            "0": "2"
+          }
         }
       }
     }
