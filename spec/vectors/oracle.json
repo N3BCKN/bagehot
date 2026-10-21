@@ -1,0 +1,579 @@
+{
+  "file": "oracle.json",
+  "spec": "docs/spec.md \u00a76.10.1",
+  "version": 2,
+  "description": "Oracle usability decision (the decide() function)",
+  "vectors": [
+    {
+      "name": "1_sequencer_call_failed",
+      "level": "unit",
+      "note": "decision table row (spec 6.10.1); null feed = failed call; price \"0\" = no price (fetchPrice would return lastGoodPrice); the last row shows lazy evaluation: the failing price feed is never reached",
+      "inputs": {
+        "params": {
+          "GRACE_PERIOD": "3600",
+          "STALENESS": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "FEED_DECIMALS": "8"
+        },
+        "now": "10000000",
+        "sequencer": null,
+        "priceFeed": {
+          "answer": "200000000000",
+          "updatedAt": "9999940"
+        }
+      },
+      "steps": [],
+      "expected": {
+        "usable": false,
+        "price": "0",
+        "reason": "SEQUENCER_CALL_FAILED"
+      }
+    },
+    {
+      "name": "2_sequencer_down",
+      "level": "unit",
+      "note": "decision table row (spec 6.10.1); null feed = failed call; price \"0\" = no price (fetchPrice would return lastGoodPrice); the last row shows lazy evaluation: the failing price feed is never reached",
+      "inputs": {
+        "params": {
+          "GRACE_PERIOD": "3600",
+          "STALENESS": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "FEED_DECIMALS": "8"
+        },
+        "now": "10000000",
+        "sequencer": {
+          "answer": "1",
+          "startedAt": "9900000"
+        },
+        "priceFeed": {
+          "answer": "200000000000",
+          "updatedAt": "9999940"
+        }
+      },
+      "steps": [],
+      "expected": {
+        "usable": false,
+        "price": "0",
+        "reason": "SEQUENCER_DOWN"
+      }
+    },
+    {
+      "name": "3_sequencer_startedAt_zero",
+      "level": "unit",
+      "note": "decision table row (spec 6.10.1); null feed = failed call; price \"0\" = no price (fetchPrice would return lastGoodPrice); the last row shows lazy evaluation: the failing price feed is never reached",
+      "inputs": {
+        "params": {
+          "GRACE_PERIOD": "3600",
+          "STALENESS": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "FEED_DECIMALS": "8"
+        },
+        "now": "10000000",
+        "sequencer": {
+          "answer": "0",
+          "startedAt": "0"
+        },
+        "priceFeed": {
+          "answer": "200000000000",
+          "updatedAt": "9999940"
+        }
+      },
+      "steps": [],
+      "expected": {
+        "usable": false,
+        "price": "0",
+        "reason": "SEQUENCER_INVALID"
+      }
+    },
+    {
+      "name": "3_sequencer_startedAt_future",
+      "level": "unit",
+      "note": "decision table row (spec 6.10.1); null feed = failed call; price \"0\" = no price (fetchPrice would return lastGoodPrice); the last row shows lazy evaluation: the failing price feed is never reached",
+      "inputs": {
+        "params": {
+          "GRACE_PERIOD": "3600",
+          "STALENESS": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "FEED_DECIMALS": "8"
+        },
+        "now": "10000000",
+        "sequencer": {
+          "answer": "0",
+          "startedAt": "10000001"
+        },
+        "priceFeed": {
+          "answer": "200000000000",
+          "updatedAt": "9999940"
+        }
+      },
+      "steps": [],
+      "expected": {
+        "usable": false,
+        "price": "0",
+        "reason": "SEQUENCER_INVALID"
+      }
+    },
+    {
+      "name": "4_grace_boundary_equal",
+      "level": "unit",
+      "note": "decision table row (spec 6.10.1); null feed = failed call; price \"0\" = no price (fetchPrice would return lastGoodPrice); the last row shows lazy evaluation: the failing price feed is never reached",
+      "inputs": {
+        "params": {
+          "GRACE_PERIOD": "3600",
+          "STALENESS": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "FEED_DECIMALS": "8"
+        },
+        "now": "10000000",
+        "sequencer": {
+          "answer": "0",
+          "startedAt": "9996400"
+        },
+        "priceFeed": {
+          "answer": "200000000000",
+          "updatedAt": "9999940"
+        }
+      },
+      "steps": [],
+      "expected": {
+        "usable": false,
+        "price": "0",
+        "reason": "GRACE_PERIOD"
+      }
+    },
+    {
+      "name": "4_grace_passed",
+      "level": "unit",
+      "note": "decision table row (spec 6.10.1); null feed = failed call; price \"0\" = no price (fetchPrice would return lastGoodPrice); the last row shows lazy evaluation: the failing price feed is never reached",
+      "inputs": {
+        "params": {
+          "GRACE_PERIOD": "3600",
+          "STALENESS": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "FEED_DECIMALS": "8"
+        },
+        "now": "10000000",
+        "sequencer": {
+          "answer": "0",
+          "startedAt": "9996399"
+        },
+        "priceFeed": {
+          "answer": "200000000000",
+          "updatedAt": "9999940"
+        }
+      },
+      "steps": [],
+      "expected": {
+        "usable": true,
+        "price": "2000000000000000000000",
+        "reason": "OK"
+      }
+    },
+    {
+      "name": "5_price_call_failed",
+      "level": "unit",
+      "note": "decision table row (spec 6.10.1); null feed = failed call; price \"0\" = no price (fetchPrice would return lastGoodPrice); the last row shows lazy evaluation: the failing price feed is never reached",
+      "inputs": {
+        "params": {
+          "GRACE_PERIOD": "3600",
+          "STALENESS": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "FEED_DECIMALS": "8"
+        },
+        "now": "10000000",
+        "sequencer": {
+          "answer": "0",
+          "startedAt": "9900000"
+        },
+        "priceFeed": null
+      },
+      "steps": [],
+      "expected": {
+        "usable": false,
+        "price": "0",
+        "reason": "PRICE_CALL_FAILED"
+      }
+    },
+    {
+      "name": "6_zero",
+      "level": "unit",
+      "note": "decision table row (spec 6.10.1); null feed = failed call; price \"0\" = no price (fetchPrice would return lastGoodPrice); the last row shows lazy evaluation: the failing price feed is never reached",
+      "inputs": {
+        "params": {
+          "GRACE_PERIOD": "3600",
+          "STALENESS": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "FEED_DECIMALS": "8"
+        },
+        "now": "10000000",
+        "sequencer": {
+          "answer": "0",
+          "startedAt": "9900000"
+        },
+        "priceFeed": {
+          "answer": "0",
+          "updatedAt": "9999940"
+        }
+      },
+      "steps": [],
+      "expected": {
+        "usable": false,
+        "price": "0",
+        "reason": "NON_POSITIVE"
+      }
+    },
+    {
+      "name": "6_negative",
+      "level": "unit",
+      "note": "decision table row (spec 6.10.1); null feed = failed call; price \"0\" = no price (fetchPrice would return lastGoodPrice); the last row shows lazy evaluation: the failing price feed is never reached",
+      "inputs": {
+        "params": {
+          "GRACE_PERIOD": "3600",
+          "STALENESS": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "FEED_DECIMALS": "8"
+        },
+        "now": "10000000",
+        "sequencer": {
+          "answer": "0",
+          "startedAt": "9900000"
+        },
+        "priceFeed": {
+          "answer": "-5",
+          "updatedAt": "9999940"
+        }
+      },
+      "steps": [],
+      "expected": {
+        "usable": false,
+        "price": "0",
+        "reason": "NON_POSITIVE"
+      }
+    },
+    {
+      "name": "7_updatedAt_zero",
+      "level": "unit",
+      "note": "decision table row (spec 6.10.1); null feed = failed call; price \"0\" = no price (fetchPrice would return lastGoodPrice); the last row shows lazy evaluation: the failing price feed is never reached",
+      "inputs": {
+        "params": {
+          "GRACE_PERIOD": "3600",
+          "STALENESS": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "FEED_DECIMALS": "8"
+        },
+        "now": "10000000",
+        "sequencer": {
+          "answer": "0",
+          "startedAt": "9900000"
+        },
+        "priceFeed": {
+          "answer": "200000000000",
+          "updatedAt": "0"
+        }
+      },
+      "steps": [],
+      "expected": {
+        "usable": false,
+        "price": "0",
+        "reason": "INVALID_TIMESTAMP"
+      }
+    },
+    {
+      "name": "7_updatedAt_future",
+      "level": "unit",
+      "note": "decision table row (spec 6.10.1); null feed = failed call; price \"0\" = no price (fetchPrice would return lastGoodPrice); the last row shows lazy evaluation: the failing price feed is never reached",
+      "inputs": {
+        "params": {
+          "GRACE_PERIOD": "3600",
+          "STALENESS": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "FEED_DECIMALS": "8"
+        },
+        "now": "10000000",
+        "sequencer": {
+          "answer": "0",
+          "startedAt": "9900000"
+        },
+        "priceFeed": {
+          "answer": "200000000000",
+          "updatedAt": "10000001"
+        }
+      },
+      "steps": [],
+      "expected": {
+        "usable": false,
+        "price": "0",
+        "reason": "INVALID_TIMESTAMP"
+      }
+    },
+    {
+      "name": "8_stale",
+      "level": "unit",
+      "note": "decision table row (spec 6.10.1); null feed = failed call; price \"0\" = no price (fetchPrice would return lastGoodPrice); the last row shows lazy evaluation: the failing price feed is never reached",
+      "inputs": {
+        "params": {
+          "GRACE_PERIOD": "3600",
+          "STALENESS": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "FEED_DECIMALS": "8"
+        },
+        "now": "10000000",
+        "sequencer": {
+          "answer": "0",
+          "startedAt": "9900000"
+        },
+        "priceFeed": {
+          "answer": "200000000000",
+          "updatedAt": "9996399"
+        }
+      },
+      "steps": [],
+      "expected": {
+        "usable": false,
+        "price": "0",
+        "reason": "STALE"
+      }
+    },
+    {
+      "name": "8_staleness_boundary_equal",
+      "level": "unit",
+      "note": "decision table row (spec 6.10.1); null feed = failed call; price \"0\" = no price (fetchPrice would return lastGoodPrice); the last row shows lazy evaluation: the failing price feed is never reached",
+      "inputs": {
+        "params": {
+          "GRACE_PERIOD": "3600",
+          "STALENESS": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "FEED_DECIMALS": "8"
+        },
+        "now": "10000000",
+        "sequencer": {
+          "answer": "0",
+          "startedAt": "9900000"
+        },
+        "priceFeed": {
+          "answer": "200000000000",
+          "updatedAt": "9996400"
+        }
+      },
+      "steps": [],
+      "expected": {
+        "usable": true,
+        "price": "2000000000000000000000",
+        "reason": "OK"
+      }
+    },
+    {
+      "name": "9_above_max",
+      "level": "unit",
+      "note": "decision table row (spec 6.10.1); null feed = failed call; price \"0\" = no price (fetchPrice would return lastGoodPrice); the last row shows lazy evaluation: the failing price feed is never reached",
+      "inputs": {
+        "params": {
+          "GRACE_PERIOD": "3600",
+          "STALENESS": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "FEED_DECIMALS": "8"
+        },
+        "now": "10000000",
+        "sequencer": {
+          "answer": "0",
+          "startedAt": "9900000"
+        },
+        "priceFeed": {
+          "answer": "100000000000001",
+          "updatedAt": "9999940"
+        }
+      },
+      "steps": [],
+      "expected": {
+        "usable": false,
+        "price": "0",
+        "reason": "OUT_OF_BOUNDS"
+      }
+    },
+    {
+      "name": "9_at_max",
+      "level": "unit",
+      "note": "decision table row (spec 6.10.1); null feed = failed call; price \"0\" = no price (fetchPrice would return lastGoodPrice); the last row shows lazy evaluation: the failing price feed is never reached",
+      "inputs": {
+        "params": {
+          "GRACE_PERIOD": "3600",
+          "STALENESS": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "FEED_DECIMALS": "8"
+        },
+        "now": "10000000",
+        "sequencer": {
+          "answer": "0",
+          "startedAt": "9900000"
+        },
+        "priceFeed": {
+          "answer": "100000000000000",
+          "updatedAt": "9999940"
+        }
+      },
+      "steps": [],
+      "expected": {
+        "usable": true,
+        "price": "1000000000000000000000000",
+        "reason": "OK"
+      }
+    },
+    {
+      "name": "9_below_min",
+      "level": "unit",
+      "note": "decision table row (spec 6.10.1); null feed = failed call; price \"0\" = no price (fetchPrice would return lastGoodPrice); the last row shows lazy evaluation: the failing price feed is never reached",
+      "inputs": {
+        "params": {
+          "GRACE_PERIOD": "3600",
+          "STALENESS": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "FEED_DECIMALS": "8"
+        },
+        "now": "10000000",
+        "sequencer": {
+          "answer": "0",
+          "startedAt": "9900000"
+        },
+        "priceFeed": {
+          "answer": "999999999",
+          "updatedAt": "9999940"
+        }
+      },
+      "steps": [],
+      "expected": {
+        "usable": false,
+        "price": "0",
+        "reason": "OUT_OF_BOUNDS"
+      }
+    },
+    {
+      "name": "9_huge_answer_no_overflow",
+      "level": "unit",
+      "note": "decision table row (spec 6.10.1); null feed = failed call; price \"0\" = no price (fetchPrice would return lastGoodPrice); the last row shows lazy evaluation: the failing price feed is never reached",
+      "inputs": {
+        "params": {
+          "GRACE_PERIOD": "3600",
+          "STALENESS": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "FEED_DECIMALS": "8"
+        },
+        "now": "10000000",
+        "sequencer": {
+          "answer": "0",
+          "startedAt": "9900000"
+        },
+        "priceFeed": {
+          "answer": "57896044618658097711785492504343953926634992332820282019728792003956564819967",
+          "updatedAt": "9999940"
+        }
+      },
+      "steps": [],
+      "expected": {
+        "usable": false,
+        "price": "0",
+        "reason": "OUT_OF_BOUNDS"
+      }
+    },
+    {
+      "name": "10_ok",
+      "level": "unit",
+      "note": "decision table row (spec 6.10.1); null feed = failed call; price \"0\" = no price (fetchPrice would return lastGoodPrice); the last row shows lazy evaluation: the failing price feed is never reached",
+      "inputs": {
+        "params": {
+          "GRACE_PERIOD": "3600",
+          "STALENESS": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "FEED_DECIMALS": "8"
+        },
+        "now": "10000000",
+        "sequencer": {
+          "answer": "0",
+          "startedAt": "9900000"
+        },
+        "priceFeed": {
+          "answer": "200000000000",
+          "updatedAt": "9999940"
+        }
+      },
+      "steps": [],
+      "expected": {
+        "usable": true,
+        "price": "2000000000000000000000",
+        "reason": "OK"
+      }
+    },
+    {
+      "name": "10_ok_odd_digits",
+      "level": "unit",
+      "note": "decision table row (spec 6.10.1); null feed = failed call; price \"0\" = no price (fetchPrice would return lastGoodPrice); the last row shows lazy evaluation: the failing price feed is never reached",
+      "inputs": {
+        "params": {
+          "GRACE_PERIOD": "3600",
+          "STALENESS": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "FEED_DECIMALS": "8"
+        },
+        "now": "10000000",
+        "sequencer": {
+          "answer": "0",
+          "startedAt": "9900000"
+        },
+        "priceFeed": {
+          "answer": "123456789012",
+          "updatedAt": "9999940"
+        }
+      },
+      "steps": [],
+      "expected": {
+        "usable": true,
+        "price": "1234567890120000000000",
+        "reason": "OK"
+      }
+    },
+    {
+      "name": "lazy_sequencer_down_price_feed_failing",
+      "level": "unit",
+      "note": "decision table row (spec 6.10.1); null feed = failed call; price \"0\" = no price (fetchPrice would return lastGoodPrice); the last row shows lazy evaluation: the failing price feed is never reached",
+      "inputs": {
+        "params": {
+          "GRACE_PERIOD": "3600",
+          "STALENESS": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "FEED_DECIMALS": "8"
+        },
+        "now": "10000000",
+        "sequencer": {
+          "answer": "1",
+          "startedAt": "9900000"
+        },
+        "priceFeed": null
+      },
+      "steps": [],
+      "expected": {
+        "usable": false,
+        "price": "0",
+        "reason": "SEQUENCER_DOWN"
+      }
+    }
+  ]
+}

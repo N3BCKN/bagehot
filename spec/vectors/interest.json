@@ -1,0 +1,154 @@
+{
+  "file": "interest.json",
+  "spec": "docs/spec.md \u00a76.2, \u00a78 R1\u2013R7",
+  "version": 2,
+  "description": "Interest accrual and debt conversions",
+  "vectors": [
+    {
+      "name": "accrue_pool_share",
+      "level": "unit",
+      "note": "pool has \u2265 MIN_DEPOSIT: interest rounded up, 75% (floor) to the pool, rest to the reserve (spec 6.2)",
+      "inputs": {
+        "variant": "A",
+        "index": "1000000000000000000000000000",
+        "lastAccrual": "1000000",
+        "totalNormDebt": "1000000000000000000000000",
+        "totalDeposits": "10000000000000000000",
+        "RATE_PER_SECOND": "1547125957863212449",
+        "POOL_SHARE_BPS": "7500",
+        "MIN_DEPOSIT": "1000000000000000000"
+      },
+      "steps": [
+        {
+          "op": "accrue",
+          "t": "1003600",
+          "result": {
+            "index": "1000005569668954547626347955",
+            "interest": "5569668954547626348",
+            "toPool": "4177251715910719761",
+            "toReserve": "1392417238636906587"
+          }
+        }
+      ],
+      "expected": {}
+    },
+    {
+      "name": "accrue_pool_below_min_deposit",
+      "level": "unit",
+      "note": "pool holds 0.5e18 < MIN_DEPOSIT: the whole interest goes to the reserve (spec 6.2)",
+      "inputs": {
+        "variant": "A",
+        "index": "1000000000000000000000000000",
+        "lastAccrual": "1000000",
+        "totalNormDebt": "1000000000000000000000000",
+        "totalDeposits": "500000000000000000",
+        "RATE_PER_SECOND": "1547125957863212449",
+        "POOL_SHARE_BPS": "7500",
+        "MIN_DEPOSIT": "1000000000000000000"
+      },
+      "steps": [
+        {
+          "op": "accrue",
+          "t": "1003600",
+          "result": {
+            "index": "1000005569668954547626347955",
+            "interest": "5569668954547626348",
+            "toPool": "0",
+            "toReserve": "5569668954547626348"
+          }
+        }
+      ],
+      "expected": {}
+    },
+    {
+      "name": "accrue_deployment_B",
+      "level": "unit",
+      "note": "deployment B has no pool (POOL_SHARE_BPS = 0): the whole interest goes to the reserve (spec 6.2)",
+      "inputs": {
+        "variant": "B",
+        "index": "1000000000000000000000000000",
+        "lastAccrual": "1000000",
+        "totalNormDebt": "1000000000000000000000000",
+        "totalDeposits": null,
+        "RATE_PER_SECOND": "1547125957863212449",
+        "POOL_SHARE_BPS": "0",
+        "MIN_DEPOSIT": "1000000000000000000"
+      },
+      "steps": [
+        {
+          "op": "accrue",
+          "t": "1003600",
+          "result": {
+            "index": "1000005569668954547626347955",
+            "interest": "5569668954547626348",
+            "toPool": "0",
+            "toReserve": "5569668954547626348"
+          }
+        }
+      ],
+      "expected": {}
+    },
+    {
+      "name": "frequency",
+      "level": "unit",
+      "note": "one yearly accrual vs 365 daily accruals: equal up to rounding, not bit-identical (spec 2.3)",
+      "inputs": {
+        "index": "1000000000000000000000000000",
+        "RATE_PER_SECOND": "1547125957863212449"
+      },
+      "steps": [],
+      "expected": {
+        "indexYearly": "1050000000000000000011578354",
+        "indexDaily": "1050000000000000000011578250",
+        "difference": "104"
+      }
+    },
+    {
+      "name": "conversions",
+      "level": "unit",
+      "note": "R1\u2013R3 at index \u2248 1.05 RAY; repaying 1 wei cancels 0 normalised debt (spec 5.1.5)",
+      "inputs": {
+        "index": "1050000000000000000011578354"
+      },
+      "steps": [
+        {
+          "op": "convert",
+          "amount": "1000000000000000000000",
+          "result": {
+            "normFromBorrow_up": "952380952380952380942",
+            "normFromRepay_down": "952380952380952380941",
+            "debtOf(normFromBorrow)": "1000000000000000000001"
+          }
+        },
+        {
+          "op": "convert",
+          "amount": "7",
+          "result": {
+            "normFromBorrow_up": "7",
+            "normFromRepay_down": "6",
+            "debtOf(normFromBorrow)": "8"
+          }
+        },
+        {
+          "op": "convert",
+          "amount": "1",
+          "result": {
+            "normFromBorrow_up": "1",
+            "normFromRepay_down": "0",
+            "debtOf(normFromBorrow)": "2"
+          }
+        },
+        {
+          "op": "convert",
+          "amount": "1000000000000000000000000000",
+          "result": {
+            "normFromBorrow_up": "952380952380952380941879044",
+            "normFromRepay_down": "952380952380952380941879043",
+            "debtOf(normFromBorrow)": "1000000000000000000000000001"
+          }
+        }
+      ],
+      "expected": {}
+    }
+  ]
+}

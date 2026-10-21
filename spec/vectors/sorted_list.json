@@ -1,0 +1,384 @@
+{
+  "file": "sorted_list.json",
+  "spec": "docs/spec.md \u00a76.3",
+  "version": 2,
+  "description": "Sorted list order, hints, walks, exclusion (keys given directly)",
+  "vectors": [
+    {
+      "name": "order_with_ties",
+      "level": "unit",
+      "note": "descending NICR, equal NICR -> lower id first (spec 6.3.1); NICRs 1,5,6 = 3.0; 2,3 = 2.0; 4 = 1.5. Unit level: keys are given directly (harness returns them from sortKey)",
+      "inputs": {
+        "MAX_HINT_STEPS": "30",
+        "keys": {
+          "1": {
+            "coll": "300",
+            "norm": "100"
+          },
+          "2": {
+            "coll": "200",
+            "norm": "100"
+          },
+          "3": {
+            "coll": "400",
+            "norm": "200"
+          },
+          "4": {
+            "coll": "150",
+            "norm": "100"
+          },
+          "5": {
+            "coll": "600",
+            "norm": "200"
+          },
+          "6": {
+            "coll": "900",
+            "norm": "300"
+          }
+        }
+      },
+      "steps": [
+        {
+          "op": "insert",
+          "id": "1",
+          "keyColl": "300",
+          "keyNorm": "100",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "result": {
+            "prev": "0",
+            "next": "0",
+            "trace": [
+              "empty list"
+            ]
+          }
+        },
+        {
+          "op": "insert",
+          "id": "2",
+          "keyColl": "200",
+          "keyNorm": "100",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "result": {
+            "prev": "1",
+            "next": "0",
+            "trace": [
+              "walkDown from 1: found after 1 step(s)"
+            ]
+          }
+        },
+        {
+          "op": "insert",
+          "id": "3",
+          "keyColl": "400",
+          "keyNorm": "200",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "result": {
+            "prev": "2",
+            "next": "0",
+            "trace": [
+              "walkDown from 1: found after 2 step(s)"
+            ]
+          }
+        },
+        {
+          "op": "insert",
+          "id": "4",
+          "keyColl": "150",
+          "keyNorm": "100",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "result": {
+            "prev": "3",
+            "next": "0",
+            "trace": [
+              "walkDown from 1: found after 3 step(s)"
+            ]
+          }
+        },
+        {
+          "op": "insert",
+          "id": "5",
+          "keyColl": "600",
+          "keyNorm": "200",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "result": {
+            "prev": "1",
+            "next": "2",
+            "trace": [
+              "walkDown from 1: found after 1 step(s)"
+            ]
+          }
+        },
+        {
+          "op": "insert",
+          "id": "6",
+          "keyColl": "900",
+          "keyNorm": "300",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "result": {
+            "prev": "5",
+            "next": "2",
+            "trace": [
+              "walkDown from 1: found after 2 step(s)"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "order": [
+          "1",
+          "5",
+          "6",
+          "2",
+          "3",
+          "4"
+        ],
+        "head": "1",
+        "tail": "4"
+      }
+    },
+    {
+      "name": "find_insert_position",
+      "level": "unit",
+      "note": "hint validation, walks, StaleHint and excludeId semantics on the list above (spec 6.3.2): with excludeId every list quantity (head, size, next, prev, contains) ignores the excluded node; insert = find followed by link; find returns found=false instead of reverting",
+      "inputs": {
+        "list": [
+          "1",
+          "5",
+          "6",
+          "2",
+          "3",
+          "4"
+        ],
+        "keys": {
+          "1": {
+            "coll": "300",
+            "norm": "100"
+          },
+          "2": {
+            "coll": "200",
+            "norm": "100"
+          },
+          "3": {
+            "coll": "400",
+            "norm": "200"
+          },
+          "4": {
+            "coll": "150",
+            "norm": "100"
+          },
+          "5": {
+            "coll": "600",
+            "norm": "200"
+          },
+          "6": {
+            "coll": "900",
+            "norm": "300"
+          }
+        }
+      },
+      "steps": [
+        {
+          "op": "find",
+          "case": "adjacent_valid_hints",
+          "keyColl": "250",
+          "keyNorm": "100",
+          "id": "7",
+          "excludeId": "0",
+          "upperHint": "6",
+          "lowerHint": "2",
+          "MAX_HINT_STEPS": "30",
+          "result": {
+            "found": true,
+            "prev": "6",
+            "next": "2",
+            "trace": [
+              "hints valid and adjacent"
+            ]
+          }
+        },
+        {
+          "op": "find",
+          "case": "upper_valid_walk_down",
+          "keyColl": "160",
+          "keyNorm": "100",
+          "id": "7",
+          "excludeId": "0",
+          "upperHint": "1",
+          "lowerHint": "0",
+          "MAX_HINT_STEPS": "30",
+          "result": {
+            "found": true,
+            "prev": "3",
+            "next": "4",
+            "trace": [
+              "walkDown from 1: found after 5 step(s)"
+            ]
+          }
+        },
+        {
+          "op": "find",
+          "case": "lower_valid_walk_up",
+          "keyColl": "350",
+          "keyNorm": "100",
+          "id": "7",
+          "excludeId": "0",
+          "upperHint": "0",
+          "lowerHint": "4",
+          "MAX_HINT_STEPS": "30",
+          "result": {
+            "found": true,
+            "prev": "0",
+            "next": "1",
+            "trace": [
+              "walkUp from 4: found after 6 step(s)"
+            ]
+          }
+        },
+        {
+          "op": "find",
+          "case": "upper_invalid_discarded",
+          "keyColl": "160",
+          "keyNorm": "100",
+          "id": "7",
+          "excludeId": "0",
+          "upperHint": "4",
+          "lowerHint": "0",
+          "MAX_HINT_STEPS": "30",
+          "result": {
+            "found": true,
+            "prev": "3",
+            "next": "4",
+            "trace": [
+              "upper hint 4 discarded",
+              "walkDown from 1: found after 5 step(s)"
+            ]
+          }
+        },
+        {
+          "op": "find",
+          "case": "both_zero_from_head",
+          "keyColl": "100",
+          "keyNorm": "100",
+          "id": "7",
+          "excludeId": "0",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "MAX_HINT_STEPS": "30",
+          "result": {
+            "found": true,
+            "prev": "4",
+            "next": "0",
+            "trace": [
+              "walkDown from 1: found after 6 step(s)"
+            ]
+          }
+        },
+        {
+          "op": "find",
+          "case": "tie_goes_after_lower_ids",
+          "keyColl": "200",
+          "keyNorm": "100",
+          "id": "7",
+          "excludeId": "0",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "MAX_HINT_STEPS": "30",
+          "result": {
+            "found": true,
+            "prev": "3",
+            "next": "4",
+            "trace": [
+              "walkDown from 1: found after 5 step(s)"
+            ]
+          }
+        },
+        {
+          "op": "find",
+          "case": "stale_hint_exceeds_steps",
+          "keyColl": "100",
+          "keyNorm": "100",
+          "id": "7",
+          "excludeId": "0",
+          "upperHint": "1",
+          "lowerHint": "0",
+          "MAX_HINT_STEPS": "2",
+          "result": {
+            "found": false,
+            "revert": "StaleHint",
+            "trace": [
+              "walkDown from 1: exceeded 2 steps"
+            ]
+          }
+        },
+        {
+          "op": "find",
+          "case": "exclude_head_reinsert",
+          "keyColl": "100",
+          "keyNorm": "100",
+          "id": "1",
+          "excludeId": "1",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "MAX_HINT_STEPS": "30",
+          "result": {
+            "found": true,
+            "prev": "4",
+            "next": "0",
+            "trace": [
+              "walkDown from 5: found after 5 step(s)"
+            ]
+          }
+        },
+        {
+          "op": "find",
+          "case": "exclude_hint_discarded",
+          "keyColl": "310",
+          "keyNorm": "100",
+          "id": "4",
+          "excludeId": "4",
+          "upperHint": "4",
+          "lowerHint": "0",
+          "MAX_HINT_STEPS": "30",
+          "result": {
+            "found": true,
+            "prev": "0",
+            "next": "1",
+            "trace": [
+              "upper hint 4 discarded",
+              "new head"
+            ]
+          }
+        },
+        {
+          "op": "find",
+          "case": "exclude_only_node",
+          "keyColl": "100",
+          "keyNorm": "100",
+          "id": "1",
+          "excludeId": "1",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "MAX_HINT_STEPS": "30",
+          "list": [
+            "1"
+          ],
+          "result": {
+            "found": true,
+            "prev": "0",
+            "next": "0",
+            "trace": [
+              "empty list"
+            ]
+          }
+        }
+      ],
+      "expected": {}
+    }
+  ]
+}

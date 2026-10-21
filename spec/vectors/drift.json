@@ -1,0 +1,1171 @@
+{
+  "file": "drift.json",
+  "spec": "docs/spec.md \u00a710.2",
+  "version": 2,
+  "description": "I2 rounding drift E with its counter bound after every operation (step.drift)",
+  "vectors": [
+    {
+      "name": "sequence_A",
+      "level": "system",
+      "note": "E = n\u00b7I \u2212 (S \u2212 A \u2212 F)\u00b7RAY after every operation stays within [\u2212N\u00b7RAY, X\u00b7I + Y\u00b7RAY] (strict once N \u2265 1 / X+Y \u2265 1); covers open, borrow, partial repay, close, a partial pool offset with redistribution, redemption and a full pool offset (spec 10.2)",
+      "inputs": {
+        "variant": "A",
+        "t0": "1000000",
+        "params": {
+          "MCR": "1100000000000000000",
+          "MIN_DEBT": "2000000000000000000000",
+          "GAS_RESERVE": "37500000000000000",
+          "RATE_PER_SECOND": "1547125957863212449",
+          "POOL_SHARE_BPS": "7500",
+          "MAX_HINT_STEPS": "30",
+          "LIQUIDATION_PENALTY": "50000000000000000",
+          "MIN_DEPOSIT": "1000000000000000000",
+          "REDEMPTION_FEE_FLOOR": "5000000000000000",
+          "BETA": "2",
+          "BASE_RATE_DECAY": "999983955055097432543272791",
+          "BUFFER": "1200000000000000000",
+          "CUT": "998845421738030152760841918",
+          "TAIL": "7200",
+          "CUSP": "400000000000000000",
+          "TIP": "5000000000000000000",
+          "STALENESS": "3600",
+          "GRACE_PERIOD": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "ORACLE_GAS": "100000",
+          "ORACLE_POST_FAILURE_GAS": "1588",
+          "FEED_DECIMALS": "8",
+          "ORACLE_FAILURE_DURATION": "172800",
+          "CRITICAL_TCR": "1050000000000000000",
+          "DEFICIT_LIMIT_BPS": "500",
+          "REPAYMENT_WINDOW": "604800"
+        },
+        "actors": [
+          "alice",
+          "bob",
+          "carol",
+          "frank",
+          "erin",
+          "liq"
+        ],
+        "actorWeth": "1000000000000000000000000000000",
+        "notes": "weth deltas in expected are relative to actorWeth"
+      },
+      "steps": [
+        {
+          "op": "open",
+          "phase": "act",
+          "t": "1000000",
+          "caller": "alice",
+          "coll": "3000000000000000000",
+          "debt": "3333000000000000000333",
+          "price": "2000000000000000000000",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "result": {
+            "id": "1"
+          },
+          "drift": {
+            "N": "0",
+            "X": "1",
+            "Y": "0",
+            "index": "1000000000000000000000000000",
+            "totalNormDebt": "3333000000000000000333",
+            "totalSupply": "3333000000000000000333",
+            "auctionDebt": "0",
+            "deficit": "0",
+            "E": "0",
+            "lowerBound": "0",
+            "upperBound": "1000000000000000000000000000"
+          }
+        },
+        {
+          "op": "warp",
+          "phase": "act",
+          "t": "1000000",
+          "dt": "1000003"
+        },
+        {
+          "op": "open",
+          "phase": "act",
+          "t": "2000003",
+          "caller": "bob",
+          "coll": "6000000000000000000",
+          "debt": "2777000000000000000007",
+          "price": "2000000000000000000000",
+          "upperHint": "0",
+          "lowerHint": "1",
+          "result": {
+            "id": "2"
+          },
+          "drift": {
+            "N": "1",
+            "X": "2",
+            "Y": "0",
+            "index": "1001548328022032124953289596",
+            "totalNormDebt": "6105706940147686387608",
+            "totalSupply": "6115160577297433072810",
+            "auctionDebt": "0",
+            "deficit": "0",
+            "E": "653626496675656169529726368",
+            "lowerBound": "-1000000000000000000000000000",
+            "upperBound": "2003096656044064249906579192"
+          }
+        },
+        {
+          "op": "warp",
+          "phase": "act",
+          "t": "2000003",
+          "dt": "777"
+        },
+        {
+          "op": "repay",
+          "phase": "act",
+          "t": "2000780",
+          "caller": "alice",
+          "id": "1",
+          "amount": "1000000000000000000001",
+          "upperHint": "2",
+          "lowerHint": "0",
+          "drift": {
+            "N": "2",
+            "X": "3",
+            "Y": "0",
+            "index": "1001549532000895349254103139",
+            "totalNormDebt": "5107254074813906733890",
+            "totalSupply": "5115167928439534052545",
+            "auctionDebt": "0",
+            "deficit": "0",
+            "E": "577888141036219544686680710",
+            "lowerBound": "-2000000000000000000000000000",
+            "upperBound": "3004648596002686047762309417"
+          }
+        },
+        {
+          "op": "warp",
+          "phase": "act",
+          "t": "2000780",
+          "dt": "99999"
+        },
+        {
+          "op": "borrow",
+          "phase": "act",
+          "t": "2100779",
+          "caller": "bob",
+          "id": "2",
+          "amount": "123000000000000000005",
+          "price": "2000000000000000000000",
+          "upperHint": "0",
+          "lowerHint": "1",
+          "drift": {
+            "N": "3",
+            "X": "4",
+            "Y": "0",
+            "index": "1001704494766073489782203541",
+            "totalNormDebt": "5230044778701807327621",
+            "totalSupply": "5238959362653434541336",
+            "auctionDebt": "0",
+            "deficit": "0",
+            "E": "1372004339500614433893305961",
+            "lowerBound": "-3000000000000000000000000000",
+            "upperBound": "4006817979064293959128814164"
+          }
+        },
+        {
+          "op": "open",
+          "phase": "act",
+          "t": "2100779",
+          "caller": "frank",
+          "coll": "40000000000000000000",
+          "debt": "16000000000000000000011",
+          "price": "2000000000000000000000",
+          "upperHint": "0",
+          "lowerHint": "2",
+          "result": {
+            "id": "3"
+          },
+          "drift": {
+            "N": "3",
+            "X": "5",
+            "Y": "0",
+            "index": "1001704494766073489782203541",
+            "totalNormDebt": "21202819268184811389445",
+            "totalSupply": "21238959362653434541347",
+            "auctionDebt": "0",
+            "deficit": "0",
+            "E": "2126134506257034846009024745",
+            "lowerBound": "-3000000000000000000000000000",
+            "upperBound": "5008522473830367448911017705"
+          }
+        },
+        {
+          "op": "deposit",
+          "phase": "act",
+          "t": "2100779",
+          "caller": "frank",
+          "amount": "4000000000000000000000",
+          "result": {
+            "collGainPaid": "0",
+            "interestGainPaid": "0",
+            "compoundedBefore": "0",
+            "deposit": "4000000000000000000000"
+          },
+          "drift": {
+            "N": "3",
+            "X": "5",
+            "Y": "0",
+            "index": "1001704494766073489782203541",
+            "totalNormDebt": "21202819268184811389445",
+            "totalSupply": "21238959362653434541347",
+            "auctionDebt": "0",
+            "deficit": "0",
+            "E": "2126134506257034846009024745",
+            "lowerBound": "-3000000000000000000000000000",
+            "upperBound": "5008522473830367448911017705"
+          }
+        },
+        {
+          "op": "open",
+          "phase": "act",
+          "t": "2100779",
+          "caller": "carol",
+          "coll": "2230000000000000000",
+          "debt": "4000000000000000000000",
+          "price": "2000000000000000000000",
+          "upperHint": "1",
+          "lowerHint": "0",
+          "result": {
+            "id": "4"
+          },
+          "drift": {
+            "N": "3",
+            "X": "6",
+            "Y": "0",
+            "index": "1001704494766073489782203541",
+            "totalNormDebt": "25196012890555562404899",
+            "totalSupply": "25238959362653434541347",
+            "auctionDebt": "0",
+            "deficit": "0",
+            "E": "3061258058413992969473547359",
+            "lowerBound": "-3000000000000000000000000000",
+            "upperBound": "6010226968596440938693221246"
+          }
+        },
+        {
+          "op": "warp",
+          "phase": "act",
+          "t": "2100779",
+          "dt": "86400"
+        },
+        {
+          "op": "liquidate",
+          "phase": "act",
+          "t": "2187179",
+          "caller": "liq",
+          "id": "4",
+          "price": "1700000000000000000000",
+          "result": {
+            "debt": "4000534722468453761404",
+            "coll": "2230000000000000000",
+            "debtAbsorbed": "4000000000000000000000",
+            "collRemainder": "298067930258114",
+            "normAbsorbed": "3992659881133916958037",
+            "normRemainder": "533741236834057417",
+            "remainderPath": "REDISTRIBUTED",
+            "pool": {
+              "seized": "2230000000000000000",
+              "surplus": "0",
+              "debtOffset": "4000000000000000000000",
+              "collToPool": "2229701932069741886",
+              "collReturned": "298067930258114"
+            }
+          },
+          "drift": {
+            "N": "4",
+            "X": "7",
+            "Y": "0",
+            "index": "1001838403241099125466007418",
+            "totalNormDebt": "21203353009421645446862",
+            "totalSupply": "21242333322316335095631",
+            "auctionDebt": "0",
+            "deficit": "0",
+            "E": "4042703547772863753616822316",
+            "lowerBound": "-4000000000000000000000000000",
+            "upperBound": "7012868822687693878262051926"
+          }
+        },
+        {
+          "op": "transfer",
+          "phase": "act",
+          "t": "2187179",
+          "caller": "frank",
+          "to": "alice",
+          "amount": "1000000000000000000000",
+          "drift": {
+            "N": "4",
+            "X": "7",
+            "Y": "0",
+            "index": "1001838403241099125466007418",
+            "totalNormDebt": "21203353009421645446862",
+            "totalSupply": "21242333322316335095631",
+            "auctionDebt": "0",
+            "deficit": "0",
+            "E": "4042703547772863753616822316",
+            "lowerBound": "-4000000000000000000000000000",
+            "upperBound": "7012868822687693878262051926"
+          }
+        },
+        {
+          "op": "warp",
+          "phase": "act",
+          "t": "2187179",
+          "dt": "5"
+        },
+        {
+          "op": "close",
+          "phase": "act",
+          "t": "2187184",
+          "caller": "alice",
+          "id": "1",
+          "result": {
+            "debtBurned": "2338871729888048641357"
+          },
+          "drift": {
+            "N": "5",
+            "X": "7",
+            "Y": "1",
+            "index": "1001838410990950145638682588",
+            "totalNormDebt": "18868773196720516892652",
+            "totalSupply": "18903461756751113405422",
+            "auctionDebt": "0",
+            "deficit": "0",
+            "E": "4087000234941676236697543376",
+            "lowerBound": "-5000000000000000000000000000",
+            "upperBound": "8012868876936651019470778116"
+          }
+        },
+        {
+          "op": "open",
+          "phase": "act",
+          "t": "2187184",
+          "caller": "erin",
+          "coll": "30000000000000000000",
+          "debt": "9000000000000000000001",
+          "price": "2000000000000000000000",
+          "upperHint": "0",
+          "lowerHint": "3",
+          "result": {
+            "id": "5"
+          },
+          "drift": {
+            "N": "5",
+            "X": "8",
+            "Y": "1",
+            "index": "1001838410990950145638682588",
+            "totalNormDebt": "27852257859778918261792",
+            "totalSupply": "27903461756751113405423",
+            "auctionDebt": "0",
+            "deficit": "0",
+            "E": "4721881712870983121776077696",
+            "lowerBound": "-5000000000000000000000000000",
+            "upperBound": "9014707287927601165109460704"
+          }
+        },
+        {
+          "op": "warp",
+          "phase": "act",
+          "t": "2187184",
+          "dt": "3600"
+        },
+        {
+          "op": "redeem",
+          "phase": "act",
+          "t": "2190784",
+          "caller": "erin",
+          "amount": "4500000000000000000000",
+          "maxIterations": "5",
+          "maxFeeRate": "1000000000000000000",
+          "price": "2000000000000000000000",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "result": {
+            "S0": "27903617169795784389071",
+            "decayedBaseRate": "0",
+            "baseRateForFee": "80634707188984376",
+            "feeRate": "85634707188984376",
+            "redeemed": "4500000000000000000000",
+            "collSent": "2057321908824785153",
+            "iterations": "2",
+            "baseRateAfter": "80634707188984376",
+            "trace": [
+              "visit 2: full redemption d=2900902391925789221888 collToRedeemer=1326242232504699933 surplusToOwner=4673794265609209221",
+              "visit 3: partial redemption d=1599097608074210778112 collToRedeemer=731079676320085220"
+            ]
+          },
+          "drift": {
+            "N": "6",
+            "X": "9",
+            "Y": "2",
+            "index": "1001843990899245315259193966",
+            "totalNormDebt": "23360540545628194806556",
+            "totalSupply": "23403617169795784389071",
+            "auctionDebt": "0",
+            "deficit": "0",
+            "E": "4950262067990058471852441096",
+            "lowerBound": "-6000000000000000000000000000",
+            "upperBound": "11016595918093207837332745694"
+          }
+        },
+        {
+          "op": "deposit",
+          "phase": "act",
+          "t": "2190784",
+          "caller": "erin",
+          "amount": "3000000000000000000000",
+          "result": {
+            "collGainPaid": "0",
+            "interestGainPaid": "0",
+            "compoundedBefore": "0",
+            "deposit": "3000000000000000000000"
+          },
+          "drift": {
+            "N": "6",
+            "X": "9",
+            "Y": "2",
+            "index": "1001843990899245315259193966",
+            "totalNormDebt": "23360540545628194806556",
+            "totalSupply": "23403617169795784389071",
+            "auctionDebt": "0",
+            "deficit": "0",
+            "E": "4950262067990058471852441096",
+            "lowerBound": "-6000000000000000000000000000",
+            "upperBound": "11016595918093207837332745694"
+          }
+        },
+        {
+          "op": "open",
+          "phase": "act",
+          "t": "2190784",
+          "caller": "carol",
+          "coll": "1200000000000000000",
+          "debt": "2100000000000000000000",
+          "price": "2000000000000000000000",
+          "upperHint": "3",
+          "lowerHint": "0",
+          "result": {
+            "id": "6"
+          },
+          "drift": {
+            "N": "6",
+            "X": "10",
+            "Y": "2",
+            "index": "1001843990899245315259193966",
+            "totalNormDebt": "25456675292231865752334",
+            "totalSupply": "25503617169795784389071",
+            "auctionDebt": "0",
+            "deficit": "0",
+            "E": "5624174323086091137023216644",
+            "lowerBound": "-6000000000000000000000000000",
+            "upperBound": "12018439908992453152591939660"
+          }
+        },
+        {
+          "op": "warp",
+          "phase": "act",
+          "t": "2190784",
+          "dt": "60"
+        },
+        {
+          "op": "liquidate",
+          "phase": "act",
+          "t": "2190844",
+          "caller": "liq",
+          "id": "6",
+          "price": "1850000000000000000000",
+          "result": {
+            "debt": "2100000194937879587773",
+            "coll": "1200000000000000000",
+            "debtAbsorbed": "2100000194937879587773",
+            "collRemainder": "0",
+            "normAbsorbed": "2096134746603670945778",
+            "normRemainder": "0",
+            "remainderPath": "NONE",
+            "pool": {
+              "seized": "1191892002532310037",
+              "surplus": "8107997467689963",
+              "debtOffset": "2100000194937879587773",
+              "collToPool": "1191892002532310037",
+              "collReturned": "0"
+            }
+          },
+          "drift": {
+            "N": "7",
+            "X": "10",
+            "Y": "3",
+            "index": "1001844083897980202711356847",
+            "totalNormDebt": "23360540545628194806556",
+            "totalSupply": "23403619342296501419524",
+            "auctionDebt": "0",
+            "deficit": "0",
+            "E": "5535264188240096205451088932",
+            "lowerBound": "-7000000000000000000000000000",
+            "upperBound": "13018440838979802027113568470"
+          }
+        }
+      ],
+      "expected": {
+        "vault": {
+          "index": "1001844083897980202711356847",
+          "lastAccrual": "2190844",
+          "totalNormDebt": "23360540545628194806556",
+          "totalCollateral": "69269163644439309140",
+          "totalStakes": "69268742281364954258",
+          "totalStakesSnapshot": "69268742281364954258",
+          "totalCollateralSnapshot": "69269163644439309163",
+          "LColl": "6083018984859",
+          "LDebt": "10892678302735865",
+          "lastErrorColl": "23000000000000000000",
+          "lastErrorDebt": "32000000000000000000",
+          "pendingColl": "23",
+          "pendingNormDebt": "32",
+          "activeCount": "2",
+          "sortedOrder": [
+            "5",
+            "3"
+          ]
+        },
+        "positions": {
+          "1": {
+            "owner": "alice",
+            "status": "ClosedByOwner",
+            "coll": "0",
+            "normDebt": "0",
+            "stake": "0",
+            "snapLColl": "6083018984859",
+            "snapLDebt": "10892678302735865"
+          },
+          "2": {
+            "owner": "bob",
+            "status": "ClosedByRedemption",
+            "coll": "0",
+            "normDebt": "0",
+            "stake": "0",
+            "snapLColl": "6083018984859",
+            "snapLDebt": "10892678302735865"
+          },
+          "3": {
+            "owner": "frank",
+            "status": "Active",
+            "coll": "39269163644439309140",
+            "normDebt": "14377055882569793437384",
+            "stake": "39268924770824413196",
+            "snapLColl": "6083018984859",
+            "snapLDebt": "10892678302735865",
+            "effColl": "39269163644439309140",
+            "effNorm": "14377055882569793437384",
+            "debt": "14403568379823201945598"
+          },
+          "4": {
+            "owner": "carol",
+            "status": "ClosedByLiquidation",
+            "coll": "0",
+            "normDebt": "0",
+            "stake": "0",
+            "snapLColl": "0",
+            "snapLDebt": "0"
+          },
+          "5": {
+            "owner": "erin",
+            "status": "Active",
+            "coll": "30000000000000000000",
+            "normDebt": "8983484663058401369140",
+            "stake": "29999817510540541062",
+            "snapLColl": "6083018984859",
+            "snapLDebt": "10892678302735865",
+            "effColl": "30000000000000000000",
+            "effNorm": "8983484663058401369140",
+            "debt": "9000050962473299473900"
+          },
+          "6": {
+            "owner": "carol",
+            "status": "ClosedByLiquidation",
+            "coll": "0",
+            "normDebt": "0",
+            "stake": "0",
+            "snapLColl": "6083018984859",
+            "snapLDebt": "10892678302735865"
+          }
+        },
+        "ledger": {
+          "reserve": "6959021796306768916",
+          "auctionDebt": "0",
+          "deficit": "0",
+          "recoveredColl": "0"
+        },
+        "redemption": {
+          "baseRate": "80634707188984376",
+          "lastFeeOperationTime": "2190784"
+        },
+        "token": {
+          "totalSupply": "23403619342296501419524",
+          "balances": {
+            "alice": "994128270111951358975",
+            "bob": "2900000000000000000012",
+            "carol": "6100000000000000000000",
+            "erin": "1500000000000000000001",
+            "frank": "11000000000000000000011",
+            "ledger": "6959021796306768916",
+            "pool": "902532050388243291609"
+          }
+        },
+        "weth": {
+          "alice": "18249056954577",
+          "bob": "-1326205734390790779",
+          "carol": "-3496892002532310037",
+          "erin": "-27980178091175214847",
+          "frank": "-40037500000000000000",
+          "liq": "75000000000000000",
+          "pool": "3421593934602051923",
+          "strategy": "0",
+          "vm": "69344163644439309163"
+        },
+        "pool": {
+          "totalDeposits": "899999805062120412227",
+          "P": "299999935020706804075666666666666666",
+          "currentScale": "0",
+          "currentEpoch": "1",
+          "S": {
+            "0:0": "557425483017435000000000000000000000000000000000000",
+            "1:0": "397297334177437000000000000000000000000000000000000"
+          },
+          "G": {
+            "0:0": "632617436793853000000000000000000000000000000000000",
+            "1:0": "591859649155000000000000000000000000000000000000"
+          },
+          "lastCollError": "923000000000000000000",
+          "lastInterestError": "2382000000000000000000",
+          "collGainsBalance": "3421593934602051923",
+          "interestGainsBalance": "2532245326122879382",
+          "deposits": {
+            "erin": {
+              "initial": "3000000000000000000000",
+              "snapP": "1000000000000000000000000000000000000",
+              "snapS": "0",
+              "snapG": "0",
+              "snapEpoch": "1",
+              "snapScale": "0",
+              "compounded": "899999805062120412226",
+              "collGain": "1191892002532311000",
+              "interestGain": "1775578947465000"
+            },
+            "frank": {
+              "initial": "4000000000000000000000",
+              "snapP": "1000000000000000000000000000000000000",
+              "snapS": "0",
+              "snapG": "0",
+              "snapEpoch": "0",
+              "snapScale": "0",
+              "compounded": "0",
+              "collGain": "2229701932069740000",
+              "interestGain": "2530469747175412000"
+            }
+          },
+          "depositorCount": {
+            "0": "1",
+            "1": "1"
+          }
+        }
+      }
+    },
+    {
+      "name": "no_stakes_deficit_A",
+      "level": "system",
+      "note": "a no-stakes deficit adds 1 to Y (spec 10.2)",
+      "inputs": {
+        "variant": "A",
+        "t0": "1000000",
+        "params": {
+          "MCR": "1100000000000000000",
+          "MIN_DEBT": "2000000000000000000000",
+          "GAS_RESERVE": "37500000000000000",
+          "RATE_PER_SECOND": "1547125957863212449",
+          "POOL_SHARE_BPS": "7500",
+          "MAX_HINT_STEPS": "30",
+          "LIQUIDATION_PENALTY": "50000000000000000",
+          "MIN_DEPOSIT": "1000000000000000000",
+          "REDEMPTION_FEE_FLOOR": "5000000000000000",
+          "BETA": "2",
+          "BASE_RATE_DECAY": "999983955055097432543272791",
+          "BUFFER": "1200000000000000000",
+          "CUT": "998845421738030152760841918",
+          "TAIL": "7200",
+          "CUSP": "400000000000000000",
+          "TIP": "5000000000000000000",
+          "STALENESS": "3600",
+          "GRACE_PERIOD": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "ORACLE_GAS": "100000",
+          "ORACLE_POST_FAILURE_GAS": "1588",
+          "FEED_DECIMALS": "8",
+          "ORACLE_FAILURE_DURATION": "172800",
+          "CRITICAL_TCR": "1050000000000000000",
+          "DEFICIT_LIMIT_BPS": "500",
+          "REPAYMENT_WINDOW": "604800"
+        },
+        "actors": [
+          "alice",
+          "liq"
+        ],
+        "actorWeth": "1000000000000000000000000000000",
+        "notes": "weth deltas in expected are relative to actorWeth"
+      },
+      "steps": [
+        {
+          "op": "open",
+          "phase": "act",
+          "t": "1000000",
+          "caller": "alice",
+          "coll": "5600000000000000000",
+          "debt": "10000000000000000000003",
+          "price": "2000000000000000000000",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "result": {
+            "id": "1"
+          },
+          "drift": {
+            "N": "0",
+            "X": "1",
+            "Y": "0",
+            "index": "1000000000000000000000000000",
+            "totalNormDebt": "10000000000000000000003",
+            "totalSupply": "10000000000000000000003",
+            "auctionDebt": "0",
+            "deficit": "0",
+            "E": "0",
+            "lowerBound": "0",
+            "upperBound": "1000000000000000000000000000"
+          }
+        },
+        {
+          "op": "warp",
+          "phase": "act",
+          "t": "1000000",
+          "dt": "86401"
+        },
+        {
+          "op": "liquidate",
+          "phase": "act",
+          "t": "1086401",
+          "caller": "liq",
+          "id": "1",
+          "price": "1900000000000000000000",
+          "result": {
+            "debt": "10001336821644462189669",
+            "coll": "5600000000000000000",
+            "debtAbsorbed": "0",
+            "collRemainder": "5527054559329834368",
+            "normAbsorbed": "0",
+            "normRemainder": "10000000000000000000003",
+            "remainderPath": "DEFICIT",
+            "pool": {
+              "seized": "5527054559329834368",
+              "surplus": "72945440670165632",
+              "debtOffset": "0",
+              "collToPool": "0",
+              "collReturned": "5527054559329834368"
+            }
+          },
+          "drift": {
+            "N": "1",
+            "X": "1",
+            "Y": "1",
+            "index": "1000133682164446218966550519",
+            "totalNormDebt": "0",
+            "totalSupply": "10001336821644462189669",
+            "auctionDebt": "0",
+            "deficit": "10001336821644462189669",
+            "E": "0",
+            "lowerBound": "-1000000000000000000000000000",
+            "upperBound": "2000133682164446218966550519"
+          }
+        }
+      ],
+      "expected": {
+        "vault": {
+          "index": "1000133682164446218966550519",
+          "lastAccrual": "1086401",
+          "totalNormDebt": "0",
+          "totalCollateral": "0",
+          "totalStakes": "0",
+          "totalStakesSnapshot": "0",
+          "totalCollateralSnapshot": "0",
+          "LColl": "0",
+          "LDebt": "0",
+          "lastErrorColl": "0",
+          "lastErrorDebt": "0",
+          "pendingColl": "0",
+          "pendingNormDebt": "0",
+          "activeCount": "0",
+          "sortedOrder": []
+        },
+        "positions": {
+          "1": {
+            "owner": "alice",
+            "status": "ClosedByLiquidation",
+            "coll": "0",
+            "normDebt": "0",
+            "stake": "0",
+            "snapLColl": "0",
+            "snapLDebt": "0"
+          }
+        },
+        "ledger": {
+          "reserve": "1336821644462189666",
+          "auctionDebt": "0",
+          "deficit": "10001336821644462189669",
+          "recoveredColl": "5527054559329834368"
+        },
+        "redemption": {
+          "baseRate": "0",
+          "lastFeeOperationTime": "1000000"
+        },
+        "token": {
+          "totalSupply": "10001336821644462189669",
+          "balances": {
+            "alice": "10000000000000000000003",
+            "ledger": "1336821644462189666"
+          }
+        },
+        "weth": {
+          "alice": "-5564554559329834368",
+          "ledger": "5527054559329834368",
+          "liq": "37500000000000000",
+          "pool": "0",
+          "strategy": "0",
+          "vm": "0"
+        },
+        "pool": {
+          "totalDeposits": "0",
+          "P": "1000000000000000000000000000000000000",
+          "currentScale": "0",
+          "currentEpoch": "0",
+          "S": {},
+          "G": {},
+          "lastCollError": "0",
+          "lastInterestError": "0",
+          "collGainsBalance": "0",
+          "interestGainsBalance": "0",
+          "deposits": {},
+          "depositorCount": {}
+        }
+      }
+    },
+    {
+      "name": "sequence_B",
+      "level": "system",
+      "note": "auction start adds 1 to Y; purchases and penalty transfers leave E unchanged (spec 10.2)",
+      "inputs": {
+        "variant": "B",
+        "t0": "1000000",
+        "params": {
+          "MCR": "1100000000000000000",
+          "MIN_DEBT": "2000000000000000000000",
+          "GAS_RESERVE": "37500000000000000",
+          "RATE_PER_SECOND": "1547125957863212449",
+          "POOL_SHARE_BPS": "0",
+          "MAX_HINT_STEPS": "30",
+          "LIQUIDATION_PENALTY": "50000000000000000",
+          "MIN_DEPOSIT": "1000000000000000000",
+          "REDEMPTION_FEE_FLOOR": "5000000000000000",
+          "BETA": "2",
+          "BASE_RATE_DECAY": "999983955055097432543272791",
+          "BUFFER": "1200000000000000000",
+          "CUT": "998845421738030152760841918",
+          "TAIL": "7200",
+          "CUSP": "400000000000000000",
+          "TIP": "5000000000000000000",
+          "STALENESS": "3600",
+          "GRACE_PERIOD": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "ORACLE_GAS": "100000",
+          "ORACLE_POST_FAILURE_GAS": "1588",
+          "FEED_DECIMALS": "8",
+          "ORACLE_FAILURE_DURATION": "172800",
+          "CRITICAL_TCR": "1050000000000000000",
+          "DEFICIT_LIMIT_BPS": "500",
+          "REPAYMENT_WINDOW": "604800"
+        },
+        "actors": [
+          "alice",
+          "bob",
+          "erin",
+          "keeper"
+        ],
+        "actorWeth": "1000000000000000000000000000000",
+        "notes": "weth deltas in expected are relative to actorWeth"
+      },
+      "steps": [
+        {
+          "op": "open",
+          "phase": "act",
+          "t": "1000000",
+          "caller": "bob",
+          "coll": "20000000000000000000",
+          "debt": "10000000000000000000001",
+          "price": "2000000000000000000000",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "result": {
+            "id": "1"
+          },
+          "drift": {
+            "N": "0",
+            "X": "1",
+            "Y": "0",
+            "index": "1000000000000000000000000000",
+            "totalNormDebt": "10000000000000000000001",
+            "totalSupply": "10000000000000000000001",
+            "auctionDebt": "0",
+            "deficit": "0",
+            "E": "0",
+            "lowerBound": "0",
+            "upperBound": "1000000000000000000000000000"
+          }
+        },
+        {
+          "op": "open",
+          "phase": "act",
+          "t": "1000000",
+          "caller": "alice",
+          "coll": "5600000000000000000",
+          "debt": "10000000000000000000007",
+          "price": "2000000000000000000000",
+          "upperHint": "1",
+          "lowerHint": "0",
+          "result": {
+            "id": "2"
+          },
+          "drift": {
+            "N": "0",
+            "X": "2",
+            "Y": "0",
+            "index": "1000000000000000000000000000",
+            "totalNormDebt": "20000000000000000000008",
+            "totalSupply": "20000000000000000000008",
+            "auctionDebt": "0",
+            "deficit": "0",
+            "E": "0",
+            "lowerBound": "0",
+            "upperBound": "2000000000000000000000000000"
+          }
+        },
+        {
+          "op": "open",
+          "phase": "act",
+          "t": "1000000",
+          "caller": "erin",
+          "coll": "100000000000000000000",
+          "debt": "30000000000000000000000",
+          "price": "2000000000000000000000",
+          "upperHint": "0",
+          "lowerHint": "1",
+          "result": {
+            "id": "3"
+          },
+          "drift": {
+            "N": "0",
+            "X": "3",
+            "Y": "0",
+            "index": "1000000000000000000000000000",
+            "totalNormDebt": "50000000000000000000008",
+            "totalSupply": "50000000000000000000008",
+            "auctionDebt": "0",
+            "deficit": "0",
+            "E": "0",
+            "lowerBound": "0",
+            "upperBound": "3000000000000000000000000000"
+          }
+        },
+        {
+          "op": "warp",
+          "phase": "act",
+          "t": "1000000",
+          "dt": "7777"
+        },
+        {
+          "op": "liquidate",
+          "phase": "act",
+          "t": "1007777",
+          "caller": "keeper",
+          "id": "2",
+          "price": "1950000000000000000000",
+          "result": {
+            "debt": "10000120320709497797403",
+            "coll": "5600000000000000000",
+            "debtAbsorbed": "10000120320709497797403",
+            "collRemainder": "0",
+            "normAbsorbed": "10000000000000000000007",
+            "normRemainder": "0",
+            "remainderPath": "NONE"
+          },
+          "drift": {
+            "N": "1",
+            "X": "3",
+            "Y": "1",
+            "index": "1000012032070949779739504948",
+            "totalNormDebt": "40000000000000000000001",
+            "totalSupply": "50000601603547488986984",
+            "auctionDebt": "10000120320709497797403",
+            "deficit": "0",
+            "E": "197932032070949779739504948",
+            "lowerBound": "-1000000000000000000000000000",
+            "upperBound": "4000036096212849339218514844"
+          }
+        },
+        {
+          "op": "warp",
+          "phase": "act",
+          "t": "1007777",
+          "dt": "60"
+        },
+        {
+          "op": "buy",
+          "phase": "act",
+          "t": "1007837",
+          "caller": "erin",
+          "auctionId": "1",
+          "maxColl": "2000000000000000000",
+          "maxPrice": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+          "who": "erin",
+          "data": "0x",
+          "result": {
+            "price": "2183297200196129353397",
+            "slice": "2000000000000000000",
+            "owe": "4366594400392258706794",
+            "burned": "4366594400392258706794",
+            "toReserve": "0",
+            "dustRuleApplied": false,
+            "finished": null,
+            "finishAmount": "0"
+          },
+          "drift": {
+            "N": "1",
+            "X": "3",
+            "Y": "1",
+            "index": "1000012032070949779739504948",
+            "totalNormDebt": "40000000000000000000001",
+            "totalSupply": "45634007203155230280190",
+            "auctionDebt": "5633525920317239090609",
+            "deficit": "0",
+            "E": "197932032070949779739504948",
+            "lowerBound": "-1000000000000000000000000000",
+            "upperBound": "4000036096212849339218514844"
+          }
+        }
+      ],
+      "expected": {
+        "vault": {
+          "index": "1000012032070949779739504948",
+          "lastAccrual": "1007777",
+          "totalNormDebt": "40000000000000000000001",
+          "totalCollateral": "120000000000000000000",
+          "totalStakes": "120000000000000000000",
+          "totalStakesSnapshot": "120000000000000000000",
+          "totalCollateralSnapshot": "120000000000000000000",
+          "LColl": "0",
+          "LDebt": "0",
+          "lastErrorColl": "0",
+          "lastErrorDebt": "0",
+          "pendingColl": "0",
+          "pendingNormDebt": "0",
+          "activeCount": "2",
+          "sortedOrder": [
+            "3",
+            "1"
+          ]
+        },
+        "positions": {
+          "1": {
+            "owner": "bob",
+            "status": "Active",
+            "coll": "20000000000000000000",
+            "normDebt": "10000000000000000000001",
+            "stake": "20000000000000000000",
+            "snapLColl": "0",
+            "snapLDebt": "0",
+            "effColl": "20000000000000000000",
+            "effNorm": "10000000000000000000001",
+            "debt": "10000120320709497797397"
+          },
+          "2": {
+            "owner": "alice",
+            "status": "ClosedByLiquidation",
+            "coll": "0",
+            "normDebt": "0",
+            "stake": "0",
+            "snapLColl": "0",
+            "snapLDebt": "0"
+          },
+          "3": {
+            "owner": "erin",
+            "status": "Active",
+            "coll": "100000000000000000000",
+            "normDebt": "30000000000000000000000",
+            "stake": "100000000000000000000",
+            "snapLColl": "0",
+            "snapLDebt": "0",
+            "effColl": "100000000000000000000",
+            "effNorm": "30000000000000000000000",
+            "debt": "30000360962128493392186"
+          }
+        },
+        "ledger": {
+          "reserve": "601603547488986976",
+          "auctionDebt": "5633525920317239090609",
+          "deficit": "0",
+          "recoveredColl": "0"
+        },
+        "redemption": {
+          "baseRate": "0",
+          "lastFeeOperationTime": "1000000"
+        },
+        "token": {
+          "totalSupply": "45634007203155230280190",
+          "balances": {
+            "alice": "10000000000000000000007",
+            "bob": "10000000000000000000001",
+            "erin": "25633405599607741293206",
+            "ledger": "601603547488986976"
+          }
+        },
+        "weth": {
+          "alice": "-5637500000000000000",
+          "bob": "-20037500000000000000",
+          "erin": "-98037500000000000000",
+          "house": "3600000000000000000",
+          "keeper": "37500000000000000",
+          "strategy": "0",
+          "vm": "120075000000000000000"
+        },
+        "auctionHouse": {
+          "totalLot": "3600000000000000000",
+          "auctions": {
+            "1": {
+              "positionId": "2",
+              "owner": "alice",
+              "debtRemaining": "5633525920317239090609",
+              "tab": "6133531936352713980480",
+              "lot": "3600000000000000000",
+              "top": "2340000000000000000000",
+              "tic": "1007777",
+              "active": true
+            }
+          }
+        }
+      }
+    }
+  ]
+}

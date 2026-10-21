@@ -1,0 +1,529 @@
+{
+  "file": "product_sum.json",
+  "spec": "docs/spec.md \u00a76.6, \u00a75.3",
+  "version": 2,
+  "description": "Stability pool product-sum (pool driven by a test vault)",
+  "vectors": [
+    {
+      "name": "sequence",
+      "level": "unit",
+      "note": "pool driven by a test VaultManager: accrue() is a no-op, hook.offset(d, c) = offset with c WETH already received, hook.onInterest(g) = g minted to the pool then onInterest(g). Deposits, offsets, interest, a scale change, an epoch change, withdrawals (spec 6.6)",
+      "inputs": {
+        "params": {
+          "MIN_DEPOSIT": "1000000000000000000",
+          "P_PRECISION": "1000000000000000000000000000000000000",
+          "SCALE_FACTOR": "1000000000",
+          "DECIMAL_PRECISION": "1000000000000000000"
+        },
+        "stablecoinBalances": {
+          "alice": "1000000000000000000000000000000",
+          "bob": "1000000000000000000000000000000",
+          "carol": "1000000000000000000000000000000"
+        },
+        "poolStateAtStart": "fresh (P = P_PRECISION, epoch 0, scale 0, all sums 0)"
+      },
+      "steps": [
+        {
+          "op": "deposit",
+          "caller": "alice",
+          "amount": "100000000000000000000",
+          "result": {
+            "collGainPaid": "0",
+            "interestGainPaid": "0",
+            "compoundedBefore": "0",
+            "deposit": "100000000000000000000"
+          },
+          "after": {
+            "totalDeposits": "100000000000000000000",
+            "P": "1000000000000000000000000000000000000",
+            "currentScale": "0",
+            "currentEpoch": "0",
+            "S": {},
+            "G": {},
+            "lastCollError": "0",
+            "lastInterestError": "0",
+            "collGainsBalance": "0",
+            "interestGainsBalance": "0",
+            "depositors": {
+              "alice": {
+                "compounded": "100000000000000000000",
+                "collGain": "0",
+                "interestGain": "0"
+              }
+            }
+          }
+        },
+        {
+          "op": "deposit",
+          "caller": "bob",
+          "amount": "300000000000000000000",
+          "result": {
+            "collGainPaid": "0",
+            "interestGainPaid": "0",
+            "compoundedBefore": "0",
+            "deposit": "300000000000000000000"
+          },
+          "after": {
+            "totalDeposits": "400000000000000000000",
+            "P": "1000000000000000000000000000000000000",
+            "currentScale": "0",
+            "currentEpoch": "0",
+            "S": {},
+            "G": {},
+            "lastCollError": "0",
+            "lastInterestError": "0",
+            "collGainsBalance": "0",
+            "interestGainsBalance": "0",
+            "depositors": {
+              "alice": {
+                "compounded": "100000000000000000000",
+                "collGain": "0",
+                "interestGain": "0"
+              },
+              "bob": {
+                "compounded": "300000000000000000000",
+                "collGain": "0",
+                "interestGain": "0"
+              }
+            }
+          }
+        },
+        {
+          "op": "hook.offset",
+          "debt": "100000000000000000000",
+          "coll": "52500000000000000",
+          "after": {
+            "totalDeposits": "300000000000000000000",
+            "P": "750000000000000000000000000000000000",
+            "currentScale": "0",
+            "currentEpoch": "0",
+            "S": {
+              "0:0": "131250000000000000000000000000000000000000000000000"
+            },
+            "G": {},
+            "lastCollError": "0",
+            "lastInterestError": "0",
+            "collGainsBalance": "52500000000000000",
+            "interestGainsBalance": "0",
+            "depositors": {
+              "alice": {
+                "compounded": "75000000000000000000",
+                "collGain": "13125000000000000",
+                "interestGain": "0"
+              },
+              "bob": {
+                "compounded": "225000000000000000000",
+                "collGain": "39375000000000000",
+                "interestGain": "0"
+              }
+            }
+          }
+        },
+        {
+          "op": "hook.onInterest",
+          "amount": "7000000000000000000",
+          "after": {
+            "totalDeposits": "300000000000000000000",
+            "P": "750000000000000000000000000000000000",
+            "currentScale": "0",
+            "currentEpoch": "0",
+            "S": {
+              "0:0": "131250000000000000000000000000000000000000000000000"
+            },
+            "G": {
+              "0:0": "17499999999999999750000000000000000000000000000000000"
+            },
+            "lastCollError": "0",
+            "lastInterestError": "100000000000000000000",
+            "collGainsBalance": "52500000000000000",
+            "interestGainsBalance": "7000000000000000000",
+            "depositors": {
+              "alice": {
+                "compounded": "75000000000000000000",
+                "collGain": "13125000000000000",
+                "interestGain": "1749999999999999975"
+              },
+              "bob": {
+                "compounded": "225000000000000000000",
+                "collGain": "39375000000000000",
+                "interestGain": "5249999999999999925"
+              }
+            }
+          }
+        },
+        {
+          "op": "hook.offset",
+          "debt": "299999999997000000000",
+          "coll": "157499999998425000",
+          "note": "T \u2212 d = 3e9: P falls below P_MIN and is rescaled (scale 0 -> 1)",
+          "after": {
+            "totalDeposits": "3000000000",
+            "P": "7500000000000000000000000000000000",
+            "currentScale": "1",
+            "currentEpoch": "0",
+            "S": {
+              "0:0": "524999999996062500000000000000000000000000000000000"
+            },
+            "G": {
+              "0:0": "17499999999999999750000000000000000000000000000000000"
+            },
+            "lastCollError": "0",
+            "lastInterestError": "100000000000000000000",
+            "collGainsBalance": "209999999998425000",
+            "interestGainsBalance": "7000000000000000000",
+            "depositors": {
+              "alice": {
+                "compounded": "750000000",
+                "collGain": "52499999999606250",
+                "interestGain": "1749999999999999975"
+              },
+              "bob": {
+                "compounded": "2250000000",
+                "collGain": "157499999998818750",
+                "interestGain": "5249999999999999925"
+              }
+            }
+          }
+        },
+        {
+          "op": "deposit",
+          "caller": "carol",
+          "amount": "50000000000000000000",
+          "result": {
+            "collGainPaid": "0",
+            "interestGainPaid": "0",
+            "compoundedBefore": "0",
+            "deposit": "50000000000000000000"
+          },
+          "after": {
+            "totalDeposits": "50000000003000000000",
+            "P": "7500000000000000000000000000000000",
+            "currentScale": "1",
+            "currentEpoch": "0",
+            "S": {
+              "0:0": "524999999996062500000000000000000000000000000000000"
+            },
+            "G": {
+              "0:0": "17499999999999999750000000000000000000000000000000000"
+            },
+            "lastCollError": "0",
+            "lastInterestError": "100000000000000000000",
+            "collGainsBalance": "209999999998425000",
+            "interestGainsBalance": "7000000000000000000",
+            "depositors": {
+              "alice": {
+                "compounded": "750000000",
+                "collGain": "52499999999606250",
+                "interestGain": "1749999999999999975"
+              },
+              "bob": {
+                "compounded": "2250000000",
+                "collGain": "157499999998818750",
+                "interestGain": "5249999999999999925"
+              },
+              "carol": {
+                "compounded": "50000000000000000000",
+                "collGain": "0",
+                "interestGain": "0"
+              }
+            }
+          }
+        },
+        {
+          "op": "hook.offset",
+          "debt": "10000000000000000000",
+          "coll": "5000000000000000",
+          "after": {
+            "totalDeposits": "40000000003000000000",
+            "P": "6000000000089999999994600000000323",
+            "currentScale": "1",
+            "currentEpoch": "0",
+            "S": {
+              "0:0": "524999999996062500000000000000000000000000000000000",
+              "0:1": "749999999955000000000000000000000000000000000000"
+            },
+            "G": {
+              "0:0": "17499999999999999750000000000000000000000000000000000"
+            },
+            "lastCollError": "18000000000000",
+            "lastInterestError": "100000000000000000000",
+            "collGainsBalance": "214999999998425000",
+            "interestGainsBalance": "7000000000000000000",
+            "depositors": {
+              "alice": {
+                "compounded": "600000000",
+                "collGain": "52499999999681249",
+                "interestGain": "1749999999999999975"
+              },
+              "bob": {
+                "compounded": "1800000000",
+                "collGain": "157499999999043749",
+                "interestGain": "5249999999999999925"
+              },
+              "carol": {
+                "compounded": "40000000000599999999",
+                "collGain": "4999999999700000",
+                "interestGain": "0"
+              }
+            }
+          }
+        },
+        {
+          "op": "hook.offset",
+          "debt": "40000000003000000000",
+          "coll": "21000000001575000",
+          "note": "d == T: epoch 0 -> 1, scale 0, P = P_PRECISION",
+          "after": {
+            "totalDeposits": "0",
+            "P": "1000000000000000000000000000000000000",
+            "currentScale": "0",
+            "currentEpoch": "1",
+            "S": {
+              "0:0": "524999999996062500000000000000000000000000000000000",
+              "0:1": "3900000000002249999997165000000169575000000000000"
+            },
+            "G": {
+              "0:0": "17499999999999999750000000000000000000000000000000000"
+            },
+            "lastCollError": "18000000000000",
+            "lastInterestError": "100000000000000000000",
+            "collGainsBalance": "236000000000000000",
+            "interestGainsBalance": "7000000000000000000",
+            "depositors": {
+              "alice": {
+                "compounded": "0",
+                "collGain": "52499999999996250",
+                "interestGain": "1749999999999999975"
+              },
+              "bob": {
+                "compounded": "0",
+                "collGain": "157499999999988750",
+                "interestGain": "5249999999999999925"
+              },
+              "carol": {
+                "compounded": "0",
+                "collGain": "26000000000014999",
+                "interestGain": "0"
+              }
+            }
+          }
+        },
+        {
+          "op": "withdraw",
+          "caller": "bob",
+          "amount": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+          "result": {
+            "collGainPaid": "157499999999988750",
+            "interestGainPaid": "5249999999999999925",
+            "compoundedBefore": "0",
+            "withdrawn": "0",
+            "deposit": "0",
+            "dustSwept": "0"
+          },
+          "after": {
+            "totalDeposits": "0",
+            "P": "1000000000000000000000000000000000000",
+            "currentScale": "0",
+            "currentEpoch": "1",
+            "S": {
+              "0:0": "524999999996062500000000000000000000000000000000000",
+              "0:1": "3900000000002249999997165000000169575000000000000"
+            },
+            "G": {
+              "0:0": "17499999999999999750000000000000000000000000000000000"
+            },
+            "lastCollError": "18000000000000",
+            "lastInterestError": "100000000000000000000",
+            "collGainsBalance": "78500000000011250",
+            "interestGainsBalance": "1750000000000000075",
+            "depositors": {
+              "alice": {
+                "compounded": "0",
+                "collGain": "52499999999996250",
+                "interestGain": "1749999999999999975"
+              },
+              "carol": {
+                "compounded": "0",
+                "collGain": "26000000000014999",
+                "interestGain": "0"
+              }
+            }
+          }
+        },
+        {
+          "op": "deposit",
+          "caller": "alice",
+          "amount": "20000000000000000000",
+          "note": "old-epoch gains paid, new record in epoch 1",
+          "result": {
+            "collGainPaid": "52499999999996250",
+            "interestGainPaid": "1749999999999999975",
+            "compoundedBefore": "0",
+            "deposit": "20000000000000000000"
+          },
+          "after": {
+            "totalDeposits": "20000000000000000000",
+            "P": "1000000000000000000000000000000000000",
+            "currentScale": "0",
+            "currentEpoch": "1",
+            "S": {
+              "0:0": "524999999996062500000000000000000000000000000000000",
+              "0:1": "3900000000002249999997165000000169575000000000000"
+            },
+            "G": {
+              "0:0": "17499999999999999750000000000000000000000000000000000"
+            },
+            "lastCollError": "18000000000000",
+            "lastInterestError": "100000000000000000000",
+            "collGainsBalance": "26000000000015000",
+            "interestGainsBalance": "100",
+            "depositors": {
+              "alice": {
+                "compounded": "20000000000000000000",
+                "collGain": "0",
+                "interestGain": "0"
+              },
+              "carol": {
+                "compounded": "0",
+                "collGain": "26000000000014999",
+                "interestGain": "0"
+              }
+            }
+          }
+        },
+        {
+          "op": "withdraw",
+          "caller": "carol",
+          "amount": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+          "result": {
+            "collGainPaid": "26000000000014999",
+            "interestGainPaid": "0",
+            "compoundedBefore": "0",
+            "withdrawn": "0",
+            "deposit": "0",
+            "dustSwept": "0"
+          },
+          "after": {
+            "totalDeposits": "20000000000000000000",
+            "P": "1000000000000000000000000000000000000",
+            "currentScale": "0",
+            "currentEpoch": "1",
+            "S": {
+              "0:0": "524999999996062500000000000000000000000000000000000",
+              "0:1": "3900000000002249999997165000000169575000000000000"
+            },
+            "G": {
+              "0:0": "17499999999999999750000000000000000000000000000000000"
+            },
+            "lastCollError": "18000000000000",
+            "lastInterestError": "100000000000000000000",
+            "collGainsBalance": "1",
+            "interestGainsBalance": "100",
+            "depositors": {
+              "alice": {
+                "compounded": "20000000000000000000",
+                "collGain": "0",
+                "interestGain": "0"
+              }
+            }
+          }
+        },
+        {
+          "op": "withdraw",
+          "caller": "alice",
+          "amount": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+          "result": {
+            "collGainPaid": "0",
+            "interestGainPaid": "0",
+            "compoundedBefore": "20000000000000000000",
+            "withdrawn": "20000000000000000000",
+            "deposit": "0",
+            "dustSwept": "0"
+          },
+          "after": {
+            "totalDeposits": "0",
+            "P": "1000000000000000000000000000000000000",
+            "currentScale": "0",
+            "currentEpoch": "1",
+            "S": {
+              "0:0": "524999999996062500000000000000000000000000000000000",
+              "0:1": "3900000000002249999997165000000169575000000000000"
+            },
+            "G": {
+              "0:0": "17499999999999999750000000000000000000000000000000000"
+            },
+            "lastCollError": "18000000000000",
+            "lastInterestError": "100000000000000000000",
+            "collGainsBalance": "1",
+            "interestGainsBalance": "100",
+            "depositors": {}
+          }
+        }
+      ],
+      "expected": {
+        "reserve": "0"
+      }
+    },
+    {
+      "name": "dust_sweep",
+      "level": "unit",
+      "note": "same harness: two deposits, one offset, both withdraw everything; \u03a3 compounded < totalDeposits by rounding, so the last current-epoch withdrawal sweeps the residual to the DeficitLedger reserve (spec 5.3.2)",
+      "inputs": {
+        "stablecoinBalances": {
+          "alice": "1000000000000000000000000000000",
+          "bob": "1000000000000000000000000000000"
+        }
+      },
+      "steps": [
+        {
+          "op": "deposit",
+          "caller": "alice",
+          "amount": "1000000000000000000"
+        },
+        {
+          "op": "deposit",
+          "caller": "bob",
+          "amount": "3000000000000000001"
+        },
+        {
+          "op": "hook.offset",
+          "debt": "1000000000000000003",
+          "coll": "500000000000000"
+        },
+        {
+          "op": "withdraw",
+          "caller": "alice",
+          "amount": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+          "result": {
+            "collGainPaid": "124999999999999",
+            "interestGainPaid": "0",
+            "compoundedBefore": "749999999999999999",
+            "withdrawn": "749999999999999999",
+            "deposit": "0",
+            "dustSwept": "0"
+          }
+        },
+        {
+          "op": "withdraw",
+          "caller": "bob",
+          "amount": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+          "result": {
+            "collGainPaid": "374999999999997",
+            "interestGainPaid": "0",
+            "compoundedBefore": "2249999999999999998",
+            "withdrawn": "2249999999999999998",
+            "deposit": "0",
+            "dustSwept": "1"
+          }
+        }
+      ],
+      "expected": {
+        "totalDeposits": "0",
+        "reserve": "1",
+        "depositorCount": {
+          "0": "0"
+        }
+      }
+    }
+  ]
+}

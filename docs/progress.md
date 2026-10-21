@@ -6,7 +6,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 |---|---|---|---|---|
 | P00 | Repository bootstrap and toolchain | done | a4e5b1d | `just check` and `just static` green; all toolchains pinned; hooks verified |
 | P01 | Continuous integration | done | c47245f | PR [#1](https://github.com/N3BCKN/bagehot/pull/1), run [39670041216](https://github.com/N3BCKN/bagehot/actions/runs/39670041216) green: 5 jobs pass, `differential (quick)` skipped as designed |
-| P02 | Protocol specification (human gate) | todo | | |
+| P02 | Protocol specification (human gate) | in progress | | Plan approved; decisions: redistribute, redemption fee stays in positions, B penalty in tab → reserve |
 | P03 | Invariants (human gate) | todo | | |
 | P04 | ADRs and threat model skeleton | todo | | |
 | P05 | Preregistration draft | todo | | |
@@ -54,6 +54,39 @@ Claude updates this file at the end of every session. Status: todo · in progres
 ## Session log
 
 <!-- newest first: date · prompt · what changed · decisions · next -->
+
+### 2026-10-21/22 · P02 · Protocol specification
+
+**Changed.** `docs/spec.md` (12 sections + appendices: scope, notation, 27 parameters with ranges and
+start values, constructor/`wire` signatures, state of all 9 contracts, every external operation in
+normative pseudocode, algorithms, oracle table, 34-row rounding table, permission matrix, I1/I2
+identities with a derived drift bound, events, errors, 26 deviations from the blueprint).
+`spec/vectors/` — 54 vectors in 12 files (format v2: system vectors are complete public-operation
+logs from deployment; unit vectors drive one algorithm from an explicit state) + README.
+
+**Decisions (human, at the plan gate).** D-1 deployment A redistributes the pool remainder (deficit
+only with no stakes left); D-2 the redemption fee stays in the redeemed positions; D-3 in B the
+penalty is in the tab and goes to the reserve.
+
+**How the numbers were produced.** A throwaway exact-integer reference (scratchpad, not committed —
+P22 builds the real model) transcribes the pseudocode; vectors are generated from it. Before
+generation it was fuzzed against the spec's identities: 60 seeds × 300 steps × {A, B} for I1/I2 and
+the bucket inequalities; a product–sum stress with an exact-fraction shadow (5,247 scale changes,
+2,221 epoch changes).
+
+**Design bugs found and fixed before freezing.**
+- Product–sum error carry carried in `P` units over-credited depositors by up to 671 wei across
+  epochs → carry made independent of `P` (Liquity structure).
+- Interest into a near-empty pool could overflow `G` → pool share only when
+  `totalDeposits ≥ MIN_DEPOSIT`.
+- (spec-auditor B1) Stakes stuck at 0 forever after the last position is liquidated with pending
+  dust → snapshots reset when no position remains.
+
+**Audit.** `spec-auditor` in spec-only mode, three rounds: 1 blocker, 10 major, 18 minor → all
+resolved; round two found 5 small new issues (N1–N5) → resolved. Every vector value the auditor
+recomputed independently matched.
+
+**Next.** Human gate: approve, then protect `docs/spec.md` and `spec/vectors/**`. Then P03.
 
 ### 2026-10-21 · P01 · Continuous integration
 
@@ -173,6 +206,9 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
 | P01-5 | The `contracts` and `differential-quick` jobs share one Foundry build cache key, derived from `foundry.toml` + `foundry.lock` + `remappings.txt`. Since `foundry.toml` carries `solc_version`, caches are never shared across solc versions, but confirm this still holds if the profile layout changes. | Claude | no |
 | P01-6 | Resolved. Run [39668831000](https://github.com/N3BCKN/bagehot/actions/runs/39668831000) had every job fail at startup — *"recent account payments have failed or your spending limit needs to be increased"* — because the repository was private and Actions billed against the account quota. The human made the repository **public**, after an audit that found no leaks in the full history, no credential file ever committed, and nothing in the tree but source, docs and config. Actions is free and unlimited for public repositories. | human | no |
 | P01-7 | Found by CI, not locally: the `secret scan` job installed gitleaks into `~/.local/bin/`, which does not exist there because that job runs no `setup-uv` step. Fixed in `c47245f` — both binary installs now `mkdir -p` the directory, install to an explicit filename and append it to `$GITHUB_PATH`. A reminder that a job without `setup-uv` starts from a barer environment than the others. | Claude | no |
+| P02-1 | Sorted-list order is not exactly preserved under redistribution: near-tied NICRs can swap by up to ~7·10⁻¹⁹ relative (≈ 1/min collateral in wei) through stake/reward rounding. I13 in P03 needs a derived tolerance (spec §6.3.3, App. B). | Claude | at P03 |
+| P02-2 | The kit's "Corrections to the blueprint" list referenced by the P02 prompt is not in the repo; spec §12 was built from the blueprint itself. Merge it if the human has it. | human | no |
+| P02-3 | The vector reference implementation is throwaway (scratchpad). Vectors are validated independently from P10 (Foundry) and P22 (Python model); a vector that disagrees with both implementations is a spec question for `/spec-change`. | Claude | at P10/P22 |
 | P01-8 | The repository is public, so all seven commits expose the author email `ka.koszewski@gmail.com` permanently. Four of them are also authored `H3BCKN`. Neither can be changed without a force push, which the permission rules forbid. If this matters, GitHub's `noreply` address plus `git config user.email` fixes it for future commits. | human | no |
 
 ## Human actions required

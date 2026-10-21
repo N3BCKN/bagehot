@@ -1,0 +1,81 @@
+{
+  "file": "shutdown.json",
+  "spec": "docs/spec.md \u00a76.11.3\u20136.11.4",
+  "version": 2,
+  "description": "Pro-rata settlement claims",
+  "vectors": [
+    {
+      "name": "pro_rata_claims",
+      "level": "unit",
+      "note": "ShutdownModule after settle(): the ledger burned a 50,000e18 reserve before the supply snapshot; each claim pays floor(amount\u00b7claimColl/claimSupply); identical payouts in either order; the remainder stays in the module",
+      "inputs": {
+        "claimColl": "1000000000000000000007",
+        "supplyBeforeReserveBurn": "2000000000000000000000003",
+        "reserveBurned": "50000000000000000000000",
+        "claimSupply": "1950000000000000000000003",
+        "holderBalances": {
+          "alice": "1000000000000000000000000",
+          "bob": "333333000000000000000001",
+          "carol": "616667000000000000000002"
+        }
+      },
+      "steps": [
+        {
+          "op": "claim",
+          "caller": "alice",
+          "amount": "1000000000000000000000000",
+          "result": {
+            "collOut": "512820512820512820516"
+          }
+        },
+        {
+          "op": "claim",
+          "caller": "bob",
+          "amount": "333333000000000000000001",
+          "result": {
+            "collOut": "170940000000000000001"
+          }
+        },
+        {
+          "op": "claim",
+          "caller": "carol",
+          "amount": "616667000000000000000002",
+          "result": {
+            "collOut": "316239487179487179489"
+          }
+        },
+        {
+          "op": "--- second ordering on a fresh copy ---"
+        },
+        {
+          "op": "claim",
+          "caller": "carol",
+          "amount": "616667000000000000000002",
+          "result": {
+            "collOut": "316239487179487179489"
+          }
+        },
+        {
+          "op": "claim",
+          "caller": "bob",
+          "amount": "333333000000000000000001",
+          "result": {
+            "collOut": "170940000000000000001"
+          }
+        },
+        {
+          "op": "claim",
+          "caller": "alice",
+          "amount": "1000000000000000000000000",
+          "result": {
+            "collOut": "512820512820512820516"
+          }
+        }
+      ],
+      "expected": {
+        "totalPaid": "1000000000000000000006",
+        "remainder": "1"
+      }
+    }
+  ]
+}
