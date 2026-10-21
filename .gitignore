@@ -1,0 +1,7 @@
+.claude 
+CLAUDE.md 
+/docs/CLAUDE.md 
+justfile
+justfile-1
+.DS_Store
+env
