@@ -4,7 +4,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 
 | Prompt | Title | Status | Commit | Notes |
 |---|---|---|---|---|
-| P00 | Repository bootstrap and toolchain | done | | `just check` and `just static` green; all toolchains pinned; hooks verified |
+| P00 | Repository bootstrap and toolchain | done | a4e5b1d | `just check` and `just static` green; all toolchains pinned; hooks verified |
 | P01 | Continuous integration | todo | | |
 | P02 | Protocol specification (human gate) | todo | | |
 | P03 | Invariants (human gate) | todo | | |
