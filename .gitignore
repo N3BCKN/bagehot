@@ -1,7 +1,34 @@
-.claude 
-CLAUDE.md 
-/docs/CLAUDE.md 
-justfile
-justfile-1
+# Foundry build artefacts
+contracts/out/
+contracts/cache/
+contracts/broadcast/*/31337/
+contracts/broadcast/*/8453/
+
+# Secrets — never commit. env.example is the tracked template.
+.env
+.env.*
+!env.example
+
+# Generated data and results (data/cards/ stays tracked)
+data/raw/
+data/processed/
+experiments/results/
+reports/static/*
+!reports/static/.gitkeep
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+
+# Pinned local tool binaries (see docs/dependencies.md)
+.tools/
+
+# Session scratch
+docs/handoff.md
+
+# OS
 .DS_Store
-env

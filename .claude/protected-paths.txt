@@ -1,0 +1,14 @@
+# Paths Claude Code may not edit (gitignore-style globs, relative to the repo root).
+# Human-maintained. Add a path when you freeze it; remove a line temporarily to approve a change.
+# Always protected regardless of this file: .claude/settings.json, .claude/hooks/**,
+# .claude/protected-paths.txt, .env*, data/raw/**, deployments/**
+#
+# Add after the P02 human gate:
+# docs/spec.md
+# spec/vectors/**
+# Add after the P03 human gate:
+# docs/invariants.md
+# Add after the P30 human gate:
+# docs/preregistration.md
+# Accepted ADRs (add each file once accepted):
+# docs/adr/0001-*.md

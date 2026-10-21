@@ -1,0 +1,11 @@
+{
+  "filter_paths": "lib/|test/|src/mocks/",
+  "exclude_dependencies": true,
+  "exclude_informational": false,
+  "exclude_low": false,
+  "exclude_medium": false,
+  "exclude_high": false,
+  "solc_disable_warnings": false,
+  "disable_color": true,
+  "legacy_ast": false
+}

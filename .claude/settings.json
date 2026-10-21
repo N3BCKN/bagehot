@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(just *)",
+      "Bash(forge build *)", "Bash(forge build)",
+      "Bash(forge test *)", "Bash(forge test)",
+      "Bash(forge fmt *)", "Bash(forge fmt)",
+      "Bash(forge snapshot *)", "Bash(forge coverage *)",
+      "Bash(forge inspect *)", "Bash(forge tree *)",
+      "Bash(uv run *)", "Bash(uv sync *)", "Bash(uv lock *)",
+      "Bash(slither *)", "Bash(aderyn *)", "Bash(halmos *)", "Bash(medusa *)",
+      "Bash(git status *)", "Bash(git status)", "Bash(git diff *)", "Bash(git diff)",
+      "Bash(git log *)", "Bash(git show *)", "Bash(git add *)", "Bash(git commit *)",
+      "Bash(git branch *)", "Bash(git switch *)", "Bash(git stash *)", "Bash(git rev-parse *)",
+      "Bash(ls *)", "Bash(cat *)", "Bash(head *)", "Bash(tail *)", "Bash(wc *)",
+      "Bash(grep *)", "Bash(rg *)", "Bash(find *)", "Bash(jq *)", "Bash(sha256sum *)"
+    ],
+    "ask": [
+      "Bash(git push *)",
+      "Bash(forge install *)", "Bash(forge update *)", "Bash(forge script *)",
+      "Bash(uv add *)", "Bash(uv remove *)", "Bash(uv tool *)", "Bash(pip *)",
+      "Bash(cast send *)", "Bash(cast rpc *)", "Bash(anvil *)",
+      "Bash(curl *)", "Bash(wget *)", "Bash(docker *)", "Bash(rm *)",
+      "WebFetch"
+    ],
+    "deny": [
+      "Read(./.env)", "Read(./.env.*)", "Read(**/.env)", "Read(**/.env.*)",
+      "Read(~/.foundry/keystores/**)", "Read(~/.ssh/**)", "Read(~/.aws/**)",
+      "Edit(./.env)", "Edit(./.env.*)",
+      "Edit(./data/raw/**)", "Edit(./deployments/**)",
+      "Bash(cast wallet *)", "Bash(git push --force *)", "Bash(git push -f *)",
+      "Bash(git reset --hard *)", "Bash(sudo *)", "Bash(rm -rf /*)", "Bash(rm -rf ~*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [{ "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/protect_paths.py" }]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard_bash.py" }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [{ "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/format_file.py" }]
+      }
+    ]
+  },
+  "includeCoAuthoredBy": false
+}
