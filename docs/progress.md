@@ -13,7 +13,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | P06 | Price data | done | | Coinbase ETH-USD (primary) and Bitstamp ETH/USD (cross-check; Kraken cannot serve history) 1-minute candles 2019-01 → 2026-09; 17,724 requests; re-run sends 0; cards match; 64 tests |
 | P07 | Oracle and sequencer history on Base | blocked | | Code, config and 32 offline tests ready; live fetch blocked: `BASE_ARCHIVE_RPC` not visible to `just` (human action 11) |
 | P08 | Liquidation events and liquidatable windows | blocked | | Plan approved (Aave v3 only). Code, config and 23 offline tests ready; live run blocked on the same RPC as P07 (human action 11). Finding: Aave reads the SVR ETH/USD feed (P08-1) |
-| P09 | Stress blocks and transaction costs | todo | | |
+| P09 | Stress blocks and transaction costs | blocked | | Code and 22 offline tests ready; block selection verified on real P06 data (31 blocks). Live run needs `BASE_ARCHIVE_RPC` and `ETH_MAINNET_RPC` (human action 11) |
 | P10 | Math library and shared vectors | todo | | |
 | P11 | StableToken, wiring pattern and mocks | todo | | |
 | P12 | OracleAdapter | todo | | |
@@ -263,6 +263,27 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
 
 **Next.** P01, continuous integration.
 
+### 2026-10-22 · P09 · Stress blocks and costs (code ready, live run blocked)
+
+**Changed.** `data/blocks.py` (selection + cached timestamp→block binary search), `data/fetch_costs.py`
+(Base: `eth_feeHistory` over the minute ending at each selected block, and `GasPriceOracle.getL1Fee`
+on three signed EIP-1559 payloads — Bagehot A `liquidate`, Bagehot B `buy`, Aave `liquidationCall`;
+Ethereum L1: per-gas prices in the four named windows, with pre-London 2020/2021 blocks sampled in
+full because they have no base fee), `data/analyze_costs.py` (`reports/cost-empirics.md`),
+`tests/data/test_blocks_costs.py` (22 tests, RLP checked against the published yellow-paper
+examples), `just blocks`, `just costs base|l1|report`. `data/rpc.py`: `from_env` takes the variable
+name, so L1 uses `ETH_MAINNET_RPC`.
+
+**Selection, run on the real P06 data (no RPC needed for this part).** 20 stress, 10 calm, plus
+2024-08-05 at its −18.1% fifteen minutes (01:10 UTC); top stress pick the +20.1% rebound of
+2025-02-03; at least 25.5 h between any two picks. One calm block (2024-06-01 22:55) has no 24 h
+return because t − 24 h falls inside Coinbase's 67-minute gap of 2024-05-31; left empty rather than
+filled from another moment.
+
+**Defect found by a test.** Calm blocks were held 7 days away from stress picks as well as from each
+other, so in a short history the selection silently returned fewer blocks. Calm-vs-calm stays 7
+days (regime diversity), calm-vs-stress is now 2 days, and a shortfall is printed.
+
 ### 2026-10-22 · P06 · Price data
 
 **Changed.** `data/http.py`, `data/sources.py`, `data/fetch_prices.py`, `data/process_prices.py`,
@@ -450,6 +471,6 @@ constrain data collection and calibration. Each is checked at its target prompt 
 | 6 | ~~Create the GitHub repository and connect it~~ | Done: `git@github.com:N3BCKN/bagehot`, `main` tracking `origin/main`. |
 | 7 | ~~Resolve the Actions billing block~~ | Done: repository made public, Actions now free and unlimited. See P01-6. |
 | 8 | ~~Record the run URL and close P01~~ | Done: run [39670041216](https://github.com/N3BCKN/bagehot/actions/runs/39670041216) is green. |
-| 11 | Make `BASE_ARCHIVE_RPC` visible to `just` | `just oracle --verify-only` still reports it unset. The dotenv file must sit at the repo root and contain the line `BASE_ARCHIVE_RPC=<url>` — no `export`, no spaces around `=`, not commented out. A check that prints a count, not the URL: `grep -c '^BASE_ARCHIVE_RPC=.'` on that file should print 1. |
+| 11 | Make `BASE_ARCHIVE_RPC` (and, for P09, `ETH_MAINNET_RPC`) visible to Claude's process | Checked on 2026-10-22 after the human set it: still not visible — a variable exported in the human's own terminal does not reach an already-running Claude Code session (or one launched from VS Code). Either put both in the dotenv file at the repo root (`just` loads it), or restart VS Code / Claude Code from a shell that exports them. `just oracle --verify-only` still reports it unset. The dotenv file must sit at the repo root and contain the line `BASE_ARCHIVE_RPC=<url>` — no `export`, no spaces around `=`, not commented out. A check that prints a count, not the URL: `grep -c '^BASE_ARCHIVE_RPC=.'` on that file should print 1. |
 | 10 | Merge PR [#1](https://github.com/N3BCKN/bagehot/pull/1) | Claude has not merged it — merging to `main` is yours to approve. The branch is `ci/p01-verify`. |
 | 9 | ~~`gh auth login`~~ | Done: logged in as `N3BCKN`, scopes `repo`, `read:org`, `gist`, `admin:public_key`. Claude can now read run status and logs for this private repository. |

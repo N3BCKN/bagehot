@@ -94,6 +94,13 @@ diff-long:
 oracle *ARGS:
     uv run python -m data.fetch_oracle {{ARGS}}
 
+# P09: stress/calm block selection on Base, and costs (`just costs base|l1|report`).
+blocks *ARGS:
+    uv run python -m data.blocks {{ARGS}}
+
+costs *ARGS:
+    uv run python -m data.fetch_costs {{ARGS}}
+
 # P08: Aave v3 liquidations on Base. Stages: logs, plan, calls --approve-calls N, build.
 liquidations *ARGS:
     uv run python -m data.fetch_liquidations {{ARGS}}

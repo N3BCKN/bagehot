@@ -83,11 +83,11 @@ class Rpc:
         self._sleep = sleep or time.sleep
 
     @classmethod
-    def from_env(cls, **kwargs) -> Rpc:
-        url = os.environ.get(ENV_VAR, "")
+    def from_env(cls, env_var: str = ENV_VAR, **kwargs) -> Rpc:
+        url = os.environ.get(env_var, "")
         if not url:
             raise SystemExit(
-                f"{ENV_VAR} is not set. Put it in .env (run through `just`, which loads .env), "
+                f"{env_var} is not set. Put it in .env (run through `just`, which loads .env), "
                 "or export it in the shell. It is never printed."
             )
         return cls(url, **kwargs)
