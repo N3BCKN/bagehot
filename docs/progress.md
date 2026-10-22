@@ -11,9 +11,9 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | P04 | ADRs and threat model skeleton | in progress | | 26 ADRs written as `proposed`; threat model filled (23 threats, trust assumptions, assets/actors, boundaries). Awaiting the human: review, set `Status: accepted`, protect the accepted files |
 | P05 | Preregistration draft | done | | DRAFT: Q1–Q3, H1–H3 with decision rules, primary + 9 secondary metrics defined over a named output schema, risk appetite, S1–S9, parameter grid, analysis plan, exclusions. 14 `TBD-P30` placeholders |
 | P06 | Price data | done | | Coinbase ETH-USD (primary) and Bitstamp ETH/USD (cross-check; Kraken cannot serve history) 1-minute candles 2019-01 → 2026-09; 17,724 requests; re-run sends 0; cards match; 64 tests |
-| P07 | Oracle and sequencer history on Base | blocked | | Code, config and 32 offline tests ready; live fetch blocked: `BASE_ARCHIVE_RPC` not visible to `just` (human action 11) |
-| P08 | Liquidation events and liquidatable windows | blocked | | Plan approved (Aave v3 only). Code, config and 23 offline tests ready; live run blocked on the same RPC as P07 (human action 11). Finding: Aave reads the SVR ETH/USD feed (P08-1) |
-| P09 | Stress blocks and transaction costs | blocked | | Code and 22 offline tests ready; block selection verified on real P06 data (31 blocks). Live run needs `BASE_ARCHIVE_RPC` and `ETH_MAINNET_RPC` (human action 11) |
+| P07 | Oracle and sequencer history on Base | blocked | | Feeds verified on-chain; phases found (ETH/USD 3, sequencer 1). Log scan blocked: the RPC plan caps `eth_getLogs` at ~10 blocks → 14.5M requests (P07-2) |
+| P08 | Liquidation events and liquidatable windows | blocked | | Plan approved (Aave v3 only). Code, config and 23 offline tests ready; needs `eth_getLogs` over wide ranges — same blocker as P07 (P07-2). Finding: Aave reads the SVR ETH/USD feed (P08-1) |
+| P09 | Stress blocks and transaction costs | done | | 31 blocks (20 stress, 10 calm, 2024-08-05); Base costs 930 blocks, L1 crash windows 5,136 sampled blocks; L1 data fee of a liquidation ≈ $0.13–0.19 before blobs → ≈ $0.0001 after |
 | P10 | Math library and shared vectors | todo | | |
 | P11 | StableToken, wiring pattern and mocks | todo | | |
 | P12 | OracleAdapter | todo | | |
@@ -263,6 +263,24 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
 
 **Next.** P01, continuous integration.
 
+### 2026-10-22 · P09 · Live run
+
+**Run.** `just blocks` (31 blocks, 64 requests), `just costs base` (930 rows, 2,313 requests),
+`just costs l1` (5,136 rows, 5,318 requests), `just costs report`. Cards: `blocks_selected.md`,
+`costs_base.md`, `costs_l1.md`, each with a generated checksum block.
+
+**Provider limits found and worked around** (P07-2 has the details): `eth_feeHistory` is served only
+for recent blocks, so fee statistics are computed from full blocks — on Base with receipts (gas-used
+weights, exactly feeHistory's statistic), on L1 every 10th block (gas-limit weights). Full blocks with
+receipts triggered HTTP 429, so the fetcher gained a resumable SQLite result cache, 3 req/s pacing and
+a patient retry policy.
+
+**Results** (`reports/cost-empirics.md`). Base median base fee 0.0028 gwei calm, 0.017 stress, 0.029
+on 2024-08-05; median priority fee 0.001 / 0.013 / 0.106 gwei. L1 data fee of a liquidation:
+median ≈ $0.13–0.19 before Base's Ecotone (blob) upgrade, ≈ $0.0001 after. Ethereum L1 crash windows:
+base fee p50 74 gwei (2022-05) and 27 gwei (2024-08); pre-London median price paid 40 gwei (2020-03)
+and 178 gwei (2021-05), peaks up to 2,039 gwei. Gas used by our own liquidation comes at P20.
+
 ### 2026-10-22 · P09 · Stress blocks and costs (code ready, live run blocked)
 
 **Changed.** `data/blocks.py` (selection + cached timestamp→block binary search), `data/fetch_costs.py`
@@ -450,6 +468,8 @@ constrain data collection and calibration. Each is checked at its target prompt 
 | P02-1 | Sorted-list order is not exactly preserved under redistribution: near-tied NICRs can swap by up to ~7·10⁻¹⁹ relative (≈ 1/min collateral in wei) through stake/reward rounding. I13 in P03 needs a derived tolerance (spec §6.3.3, App. B). | Claude | at P03 |
 | P02-2 | Resolved at the gate: the human supplied the kit's "Corrections to the blueprint" (13 items, from the kit README). Spec §12.1 checks each one; items 6–10 are data/experiment work and are listed under Carry-forward above. | Claude | no |
 | P07-1 | `BASE_ARCHIVE_RPC` is not visible to `just oracle` (the script sees it unset). Blocks the P07 and P08 live runs; code and tests are ready. | human | yes — P07, P08 |
+| P07-2 | **The archive RPC plan caps `eth_getLogs` at about 10 blocks** (the probe halved from 500,000 to 7; free-tier plans of several providers do this). At that cap P07's history needs ~14.5M requests; the fetcher's budget guard stopped it. Blocks P07 and P08. Options: (a) an RPC plan allowing ≥ 10k-block `eth_getLogs` (P07 then needs ~11k requests); (b) fetch logs from the Etherscan-v2 / Basescan logs API (`BASESCAN_API_KEY` is already in `env.example`) and keep the RPC for the exact `getRoundData` cross-checks. Decision needed. Also observed: `eth_feeHistory` is served only for recent blocks (HTTP 503 at depth) — P09 now reads full blocks instead. | human | yes — P07, P08 |
+| P07-3 | Phase 3 of the standard ETH/USD proxy (from block 50,530,334) reads aggregator `0x05c84a58FE042275b37db038bAAcD15F410c7bB0` — the contract Chainlink's directory lists for the `eth-usd-shared-svr-2` entry. Since then the standard proxy and that SVR proxy read the same aggregator, which narrows P08-1 to the period before. | Claude | at P24 |
 | P08-1 | **Aave v3 on Base prices WETH from the SVR ETH/USD feed** (`WETH_ORACLE = 0x9dA00D23465282005DB222a441a663eE7B9dfCc8`, the `eth-usd-svr` secondary proxy), not the standard feed P07 calibrates on. P08 handles it by using the source in force in each window (AaveOracle `AssetSourceUpdated` history). Undecided: which feed the protocol's own oracle model (P24) should mirror. If update timing differs between the two, the liquidation calibration and the oracle calibration describe different oracles. Decide before P24. | human | at P24 |
 | P04-1 | Three threat-register rows have no test yet: `AuctionCallbackActive` on `buy`/`check` (T-14 → P33), a `redeem` called from inside a buyer callback (T-01/T-14 → P16/P33, same gap as P02-4), and the oracle gas-starvation branch (T-03 → P12). Each is marked TBD in `docs/threat-model.md` with its prompt. | Claude | at P12/P16/P33 |
 | P08-2 | `.gitleaks.toml` gained a value-only allowlist for public EVM addresses (`^0x[0-9a-fA-F]{40}$`): Aave's `a_token`/`v_token` keys in `config/8453.toml` tripped `generic-api-key`. A first version also allowlisted the `config/` path; a probe showed it hid a 64-hex private key there, so it was removed before anything was pushed. Probes confirm a 0x+64-hex key, a `private_key`, and a bare 40-hex token are still caught. The original slip: the scan and the commit were chained with `;`, so the commit ran despite the findings — scans now gate commits with `&&`. | Claude | no |
@@ -471,6 +491,7 @@ constrain data collection and calibration. Each is checked at its target prompt 
 | 6 | ~~Create the GitHub repository and connect it~~ | Done: `git@github.com:N3BCKN/bagehot`, `main` tracking `origin/main`. |
 | 7 | ~~Resolve the Actions billing block~~ | Done: repository made public, Actions now free and unlimited. See P01-6. |
 | 8 | ~~Record the run URL and close P01~~ | Done: run [39670041216](https://github.com/N3BCKN/bagehot/actions/runs/39670041216) is green. |
-| 11 | Make `BASE_ARCHIVE_RPC` (and, for P09, `ETH_MAINNET_RPC`) visible to Claude's process | Checked on 2026-10-22 after the human set it: still not visible — a variable exported in the human's own terminal does not reach an already-running Claude Code session (or one launched from VS Code). Either put both in the dotenv file at the repo root (`just` loads it), or restart VS Code / Claude Code from a shell that exports them. `just oracle --verify-only` still reports it unset. The dotenv file must sit at the repo root and contain the line `BASE_ARCHIVE_RPC=<url>` — no `export`, no spaces around `=`, not commented out. A check that prints a count, not the URL: `grep -c '^BASE_ARCHIVE_RPC=.'` on that file should print 1. |
+| 11 | ~~Make `BASE_ARCHIVE_RPC` and `ETH_MAINNET_RPC` visible~~ | Done 2026-10-22: both load through `just` (the first value pointed at Ethereum, chain id 1; fixed by the human). Remaining: P07-2. |
+| 11-old | (superseded) Make `BASE_ARCHIVE_RPC` (and, for P09, `ETH_MAINNET_RPC`) visible to Claude's process | Checked on 2026-10-22 after the human set it: still not visible — a variable exported in the human's own terminal does not reach an already-running Claude Code session (or one launched from VS Code). Either put both in the dotenv file at the repo root (`just` loads it), or restart VS Code / Claude Code from a shell that exports them. `just oracle --verify-only` still reports it unset. The dotenv file must sit at the repo root and contain the line `BASE_ARCHIVE_RPC=<url>` — no `export`, no spaces around `=`, not commented out. A check that prints a count, not the URL: `grep -c '^BASE_ARCHIVE_RPC=.'` on that file should print 1. |
 | 10 | Merge PR [#1](https://github.com/N3BCKN/bagehot/pull/1) | Claude has not merged it — merging to `main` is yours to approve. The branch is `ci/p01-verify`. |
 | 9 | ~~`gh auth login`~~ | Done: logged in as `N3BCKN`, scopes `repo`, `read:org`, `gist`, `admin:public_key`. Claude can now read run status and logs for this private repository. |

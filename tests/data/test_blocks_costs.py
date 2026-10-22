@@ -182,3 +182,67 @@ def test_ret_24h_tolerates_a_missing_minute(tmp_path):
     minutes[minutes["ts"] != gap_at].assign(source="coinbase").to_parquet(path)
     f = bl.minute_frame(path)
     assert pd.notna(f["ret_24h"].iloc[2 * 1440 + 100])
+
+
+# --------------------------------------------------------------------------- fees from full blocks
+class BlockRpc:
+    def __init__(self, block, receipts=None):
+        self.block, self.receipts = block, receipts
+
+    def call(self, method, params):
+        if method == "eth_getBlockByNumber":
+            return self.block
+        if method == "eth_getBlockReceipts":
+            if self.receipts is None:
+                raise fc.RpcError(-32601, "method not found")
+            return self.receipts
+        raise AssertionError(method)
+
+
+def base_block():
+    return {
+        "timestamp": hex(1_722_816_001),
+        "baseFeePerGas": hex(100),
+        "gasUsed": hex(600),
+        "gasLimit": hex(1_200),
+        "transactions": [
+            {"hash": "0xdep", "type": "0x7e", "gas": hex(1_000_000), "gasPrice": hex(0)},
+            {
+                "hash": "0xa",
+                "type": "0x2",
+                "gas": hex(500),
+                "maxFeePerGas": hex(200),
+                "maxPriorityFeePerGas": hex(5),
+            },
+            {"hash": "0xb", "type": "0x0", "gas": hex(500), "gasPrice": hex(150)},
+        ],
+    }
+
+
+def test_block_fee_row_skips_op_deposits_and_weights_by_gas_used():
+    receipts = [
+        {"transactionHash": "0xa", "gasUsed": hex(100)},
+        {"transactionHash": "0xb", "gasUsed": hex(400)},
+    ]
+    row = fc.block_fee_row(BlockRpc(base_block(), receipts), 7, with_receipts=True)
+    assert row["fee_txs"] == 2 and row["weights"] == "gas_used"  # the deposit is not counted
+    assert row["base_fee_wei"] == 100 and row["gas_used_ratio"] == 0.5
+    # tips: 5 (EIP-1559, 100 gas) and 50 (legacy 150 - 100, 400 gas): the median is 50
+    assert row["priority_p10_wei"] == 5 and row["priority_p50_wei"] == 50
+    assert row["price_p50_wei"] == 150
+
+
+def test_block_fee_row_falls_back_to_gas_limit_weights_without_receipts():
+    row = fc.block_fee_row(BlockRpc(base_block(), None), 7, with_receipts=True)
+    assert row["weights"] == "gas_limit"
+    assert row["priority_p50_wei"] == 5  # equal gas limits: the lower tip reaches 50% first
+
+
+def test_pre_london_blocks_have_zero_base_fee_and_tip_equals_gas_price():
+    block = {
+        **base_block(),
+        "baseFeePerGas": None,
+        "transactions": [{"hash": "0xc", "type": "0x0", "gas": hex(21_000), "gasPrice": hex(90)}],
+    }
+    row = fc.block_fee_row(BlockRpc(block), 7, with_receipts=False)
+    assert row["base_fee_wei"] == 0 and row["price_p50_wei"] == 90 and row["priority_p50_wei"] == 90

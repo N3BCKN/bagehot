@@ -5,8 +5,11 @@
     just costs report    # reports/cost-empirics.md from the two parquet files
 
 Base (kit correction 10: cost = L2 execution + L1 data fee):
-  * L2 execution: `eth_feeHistory` over FEE_WINDOW blocks ending at each selected block — base fee
-    and gas-weighted priority-fee percentiles, one row per block.
+  * L2 execution: the FEE_WINDOW blocks ending at each selected block, read in full with their
+    receipts — base fee from the header, priority-fee percentiles weighted by gas used (what
+    eth_feeHistory computes, but independent of how far back a provider serves it; P09 found one
+    that serves it only for recent blocks). OP Stack deposit transactions pay no fee and are
+    excluded.
   * L1 data fee: the OP Stack GasPriceOracle predeploy's `getL1Fee(bytes)` at that block (archive
     eth_call), for three representative signed liquidation transactions: Bagehot A
     `liquidate(uint256)`, Bagehot B `buy(...)`, and Aave v3 `liquidationCall(...)` as a reference.
@@ -15,15 +18,18 @@ Base (kit correction 10: cost = L2 execution + L1 data fee):
 
 Ethereum L1, in the named stress windows: per-gas prices only. The gas our own liquidation uses is
 measured at P20; total cost = price × that gas is computed there, not guessed here.
-  * After London (EIP-1559): `eth_feeHistory` — base fee and priority percentiles.
+  * After London (EIP-1559): `eth_feeHistory` for every block if the provider serves that depth;
+    otherwise every SAMPLE_EVERY-th block read in full (column `source` says which).
   * Before London (2020-03, 2021-05): there is no base fee. Every SAMPLE_EVERY-th block is read
-    with its transactions and the gas-weighted percentiles of the gas price paid are computed.
+    in full and the gas-weighted percentiles of the gas price paid are computed.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import random
+import sqlite3
 from pathlib import Path
 
 import pandas as pd
@@ -33,7 +39,10 @@ from eth_utils import function_signature_to_4byte_selector
 from data.analyze_oracle import day
 from data.blocks import CACHE, BlockClock
 from data.blocks import OUTPUT as BLOCKS
-from data.rpc import Rpc, RpcError
+from data.http import RetryPolicy
+from data.rpc import Rpc, RpcError, RpcUnavailable
+
+PATIENT = RetryPolicy(attempts=10, base_delay=2.0, max_delay=120.0)
 
 PROCESSED = Path("data/processed")
 COSTS_BASE = PROCESSED / "costs_base.parquet"
@@ -152,31 +161,96 @@ def fee_history_rows(rpc: Rpc, newest: int, count: int) -> list[dict]:
     return rows
 
 
-def gas_price_percentiles(txs: list[dict], base_fee: int = 0) -> dict[str, int]:
-    """Gas-weighted percentiles of the price paid per gas, as eth_feeHistory weights them.
-
-    Weights are the gas *limit* here because receipts are not fetched; the report says so.
-    """
-    paid = []
-    for tx in txs:
-        if "maxFeePerGas" in tx:
-            tip = min(int(tx["maxPriorityFeePerGas"], 16), int(tx["maxFeePerGas"], 16) - base_fee)
-            price = base_fee + tip
-        else:
-            price = int(tx["gasPrice"], 16)
-        paid.append((price, int(tx["gas"], 16)))
-    if not paid:
-        return {f"price_p{p}_wei": 0 for p in PERCENTILES}
-    paid.sort()
-    total = sum(g for _, g in paid)
+def weighted_percentiles(pairs: list[tuple[int, int]], prefix: str) -> dict[str, int]:
+    """Gas-weighted percentiles of (value, gas) pairs, the way eth_feeHistory computes rewards:
+    sort by value, walk the cumulative gas, take the value where it crosses p% of the total."""
+    if not pairs:
+        return {f"{prefix}_p{p}_wei": 0 for p in PERCENTILES}
+    pairs = sorted(pairs)
+    total = sum(g for _, g in pairs)
     out, acc, k = {}, 0, 0
     for p in PERCENTILES:
         target = total * p / 100
-        while k < len(paid) - 1 and acc + paid[k][1] < target:
-            acc += paid[k][1]
+        while k < len(pairs) - 1 and acc + pairs[k][1] < target:
+            acc += pairs[k][1]
             k += 1
-        out[f"price_p{p}_wei"] = paid[k][0]
+        out[f"{prefix}_p{p}_wei"] = pairs[k][0]
     return out
+
+
+def effective_tip(tx: dict, base_fee: int) -> int:
+    """What the block producer earned per gas: EIP-1559 capped tip, or gasPrice minus base fee."""
+    if "maxFeePerGas" in tx:
+        tip = min(int(tx["maxPriorityFeePerGas"], 16), int(tx["maxFeePerGas"], 16) - base_fee)
+    else:
+        tip = int(tx["gasPrice"], 16) - base_fee
+    return max(tip, 0)
+
+
+def gas_price_percentiles(txs: list[dict], base_fee: int = 0) -> dict[str, int]:
+    """Price paid per gas (base fee + tip), weighted by gas limit (no receipts)."""
+    return weighted_percentiles(
+        [(base_fee + effective_tip(tx, base_fee), int(tx["gas"], 16)) for tx in txs], "price"
+    )
+
+
+OP_DEPOSIT_TX = "0x7e"  # OP Stack system/deposit transaction: carries no fee
+CACHE_DB = Path("data/raw/costs/cache.sqlite")
+RPS = 3.0  # free-tier archive plans rate-limit full blocks with receipts; be patient, not fast
+
+
+class ResultCache:
+    """Small SQLite cache of computed per-block rows and eth_call results, so a rate-limit stop
+    resumes where it left off instead of starting over. Rows only, never raw blocks (too large)."""
+
+    def __init__(self, path: Path = CACHE_DB):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(path)
+        self.db.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)")
+
+    def get_or(self, key: str, compute):
+        row = self.db.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+        if row:
+            return json.loads(row[0])
+        value = compute()
+        self.db.execute("INSERT INTO kv VALUES (?, ?)", (key, json.dumps(value)))
+        self.db.commit()
+        return value
+
+
+def block_fee_row(rpc: Rpc, number: int, *, with_receipts: bool) -> dict:
+    """Fee statistics of one block from the block itself — independent of how far back a provider
+    serves eth_feeHistory. Weights are gas used (receipts) when available, else gas limit, and the
+    row says which."""
+    block = rpc.call("eth_getBlockByNumber", [hex(number), True])
+    base_fee = int(block.get("baseFeePerGas") or "0x0", 16)
+    used: dict[str, int] = {}
+    weight = "gas_limit"
+    if with_receipts:
+        try:
+            receipts = rpc.call("eth_getBlockReceipts", [hex(number)])
+            used = {r["transactionHash"]: int(r["gasUsed"], 16) for r in receipts}
+            weight = "gas_used"
+        except (RpcError, RpcUnavailable):
+            pass
+    tips, prices = [], []
+    for tx in block["transactions"]:
+        if tx.get("type") == OP_DEPOSIT_TX:
+            continue
+        gas = used.get(tx["hash"], int(tx["gas"], 16))
+        tip = effective_tip(tx, base_fee)
+        tips.append((tip, gas))
+        prices.append((base_fee + tip, gas))
+    return {
+        "block_number": number,
+        "block_timestamp": int(block["timestamp"], 16),
+        "base_fee_wei": base_fee,
+        "gas_used_ratio": int(block["gasUsed"], 16) / int(block["gasLimit"], 16),
+        "fee_txs": len(tips),
+        "weights": weight,
+        **weighted_percentiles(tips, "priority"),
+        **weighted_percentiles(prices, "price"),
+    }
 
 
 # ----------------------------------------------------------------------------- base
@@ -188,21 +262,29 @@ def call_uint(rpc: Rpc, to: str, data: bytes, block: int) -> int | None:
     return decode(["uint256"], bytes.fromhex(raw[2:]))[0] if raw not in ("0x", "") else None
 
 
-def fetch_base(rpc: Rpc) -> pd.DataFrame:
+def fetch_base(rpc: Rpc, cache: ResultCache | None = None) -> pd.DataFrame:
     blocks = pd.read_parquet(BLOCKS)
     txs = payloads(random.Random(8453))
+    cache = cache or ResultCache()
     rows = []
     for _, sel in blocks.iterrows():
         b = int(sel["block_number"])
-        l1 = {
-            name: call_uint(
-                rpc, GAS_PRICE_ORACLE, selector("getL1Fee(bytes)") + encode(["bytes"], [tx]), b
+
+        def oracle(name: str, data: bytes, blk: int = b):
+            return cache.get_or(
+                f"base:call:{blk}:{name}", lambda: call_uint(rpc, GAS_PRICE_ORACLE, data, blk)
             )
+
+        l1 = {
+            name: oracle(name, selector("getL1Fee(bytes)") + encode(["bytes"], [tx]))
             for name, tx in txs.items()
         }
-        l1_base = call_uint(rpc, GAS_PRICE_ORACLE, selector("l1BaseFee()"), b)
-        blob_base = call_uint(rpc, GAS_PRICE_ORACLE, selector("blobBaseFee()"), b)
-        for row in fee_history_rows(rpc, b, FEE_WINDOW):
+        l1_base = oracle("l1BaseFee", selector("l1BaseFee()"))
+        blob_base = oracle("blobBaseFee", selector("blobBaseFee()"))
+        for row in (
+            cache.get_or(f"base:row:{n}", lambda n=n: block_fee_row(rpc, n, with_receipts=True))
+            for n in range(b - FEE_WINDOW + 1, b + 1)
+        ):
             row.update(
                 {
                     "selected_block": b,
@@ -225,7 +307,8 @@ def fetch_base(rpc: Rpc) -> pd.DataFrame:
 
 
 # ----------------------------------------------------------------------------- l1
-def fetch_l1(rpc: Rpc) -> pd.DataFrame:
+def fetch_l1(rpc: Rpc, cache: ResultCache | None = None) -> pd.DataFrame:
+    cache = cache or ResultCache()
     clock = BlockClock(rpc, "ethereum", CACHE)
     head = rpc.block_number()
     rows, bounds = [], {}
@@ -234,28 +317,34 @@ def fetch_l1(rpc: Rpc) -> pd.DataFrame:
         hi = clock.block_at(day(b), 0, head)
         header = rpc.call("eth_getBlockByNumber", [hex(lo), False])
         post_london = header.get("baseFeePerGas") is not None
+        regime = "post_london" if post_london else "pre_london"
+        how = f"every {SAMPLE_EVERY}th block in full"
+        window_rows = []
         if post_london:
-            cursor = lo
-            while cursor <= hi:
-                count = min(FEE_HISTORY_MAX, hi - cursor + 1)
-                for r in fee_history_rows(rpc, cursor + count - 1, count):
-                    rows.append({**r, "window": wid, "regime": "post_london"})
-                cursor += count
-        else:
-            for blk in range(lo, hi + 1, SAMPLE_EVERY):
-                full = rpc.call("eth_getBlockByNumber", [hex(blk), True])
-                rows.append(
-                    {
-                        "block_number": blk,
-                        "base_fee_wei": 0,
-                        "gas_used_ratio": int(full["gasUsed"], 16) / int(full["gasLimit"], 16),
-                        **gas_price_percentiles(full["transactions"]),
-                        "window": wid,
-                        "regime": "pre_london",
-                    }
-                )
+            try:
+                cursor = lo
+                while cursor <= hi:
+                    count = min(FEE_HISTORY_MAX, hi - cursor + 1)
+                    window_rows += [
+                        {**r, "source": "fee_history"}
+                        for r in fee_history_rows(rpc, cursor + count - 1, count)
+                    ]
+                    cursor += count
+                how = "eth_feeHistory, every block"
+            except (RpcError, RpcUnavailable):
+                window_rows = []  # provider does not serve history this deep: sample blocks
+        if not window_rows:
+            window_rows = [
+                {
+                    **cache.get_or(
+                        f"l1:row:{n}", lambda n=n: block_fee_row(rpc, n, with_receipts=False)
+                    ),
+                    "source": "sampled_blocks",
+                }
+                for n in range(lo, hi + 1, SAMPLE_EVERY)
+            ]
+        rows += [{**r, "window": wid, "regime": regime} for r in window_rows]
         bounds[wid] = (lo, clock.timestamp(lo), hi, clock.timestamp(hi))
-        how = "feeHistory" if post_london else f"every {SAMPLE_EVERY}th block in full"
         print(f"l1 {wid}: blocks {lo:,}..{hi:,} ({how})")
     frame = pd.DataFrame(rows)
     frame["block_timestamp_approx"] = interpolate_timestamps(frame, bounds)
@@ -285,10 +374,10 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     PROCESSED.mkdir(parents=True, exist_ok=True)
     if args.part == "base":
-        with Rpc.from_env() as rpc:
+        with Rpc.from_env(rps=RPS, policy=PATIENT) as rpc:
             fetch_base(rpc).to_parquet(COSTS_BASE, index=False)
     elif args.part == "l1":
-        with Rpc.from_env("ETH_MAINNET_RPC") as rpc:
+        with Rpc.from_env("ETH_MAINNET_RPC", rps=RPS, policy=PATIENT) as rpc:
             fetch_l1(rpc).to_parquet(COSTS_L1, index=False)
     else:
         from data.analyze_costs import write_report
