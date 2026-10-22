@@ -7,7 +7,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | P00 | Repository bootstrap and toolchain | done | a4e5b1d | `just check` and `just static` green; all toolchains pinned; hooks verified |
 | P01 | Continuous integration | done | c47245f | PR [#1](https://github.com/N3BCKN/bagehot/pull/1), run [39670041216](https://github.com/N3BCKN/bagehot/actions/runs/39670041216) green: 5 jobs pass, `differential (quick)` skipped as designed |
 | P02 | Protocol specification (human gate) | done | a38feab, 6c8f001 | Approved at the gate with one override (D-27, the critical-TCR redemption gate) and nine confirmations; `docs/spec.md` and `spec/vectors/**` protected by the human |
-| P03 | Invariants (human gate) | todo | | |
+| P03 | Invariants (human gate) | in progress | | I1–I16 + U1–U4 written; four audit passes, 47 findings all resolved, auditor signs off. Awaiting the human: approve, protect `docs/invariants.md`, and decide CHG-002 |
 | P04 | ADRs and threat model skeleton | in progress | | 26 ADRs written as `proposed`; threat model filled (23 threats, trust assumptions, assets/actors, boundaries). Awaiting the human: review, set `Status: accepted`, protect the accepted files |
 | P05 | Preregistration draft | done | | DRAFT: Q1–Q3, H1–H3 with decision rules, primary + 9 secondary metrics defined over a named output schema, risk appetite, S1–S9, parameter grid, analysis plan, exclusions. 14 `TBD-P30` placeholders |
 | P06 | Price data | done | | Coinbase ETH-USD (primary) and Bitstamp ETH/USD (cross-check; Kraken cannot serve history) 1-minute candles 2019-01 → 2026-09; 17,724 requests; re-run sends 0; cards match; 64 tests |
@@ -263,6 +263,44 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
 
 **Next.** P01, continuous integration.
 
+### 2026-10-23 · P03 · Invariants
+
+**Changed.** `docs/invariants.md` replaces its stub: I1–I16 and U1–U4, each with statement, exact
+formula over state and named ghosts, tolerance (zero unless derived), scope by deployment and
+phase, the test on each side, and the sequences that would break it. New
+`docs/changes/CHG-002-partial-redemption-mcr-rounding.md`.
+
+**Decisions (human, at the plan gate).** Full liquidation only in I4's framing; I6 replaced with
+per-liquidation conservation; handlers donate so I1 tests "donations are inert"; I13 gets a derived
+tolerance; I5 stated exactly, with the ~21-wei edge case to be tested immediately rather than left
+as a known gap.
+
+**Audit.** `spec-auditor` in spec-only mode, four passes: 26 findings, then 16, then 5, then 1 —
+all 47 resolved; final verdict clean. Three defects were reproduced numerically before being acted
+on, and all three were mine:
+- **I4 was false twice.** The blueprint's version ("a liquidation never lowers TCR unless the
+  position was uncollateralised") is false; my first correction ("ICR ≤ TCR ⇒ TCR does not fall")
+  was also false in deployment A, because a partial pool offset leaves the redistributed remainder
+  inside `systemColl`, so the departing bundle is richer than the position (ICR 1.09, 5% penalty,
+  pool covering half the debt → bundle ratio 1.13, TCR 1.100000 → 1.098421). The third version
+  states the bundle explicitly and asserts only what holds.
+- **Two one-wei effects from the same rounding rule.** `systemDebt` takes one ceiling over the
+  aggregate, so a full-absorption liquidation can lower TCR by a wei and an auction start can raise
+  system debt by a wei (R1/R28). I derived this for the auction start and then failed to apply it
+  two lines above; the auditor caught it with two identical positions, where `ICR == TCR` exactly.
+- **The pool's error carry can over-credit a newcomer.** `offset()` never clears `lastCollError`,
+  so a carry generated at `T ≈ 10^30` survives the pool emptying and is paid to whoever deposits
+  next: reproduced at 10^12 wei against a 2-wei bound. §6.6.7's own measured maximum
+  (1.6·10^12 wei at `T ≈ 10^30`) is the same quantity, which I had read past twice.
+
+**Process note.** CHG-002's first version recommended raising the `MIN_PRICE` floor on the strength
+of "no violation found in 600,000 samples". That search almost never landed in the narrow window
+where violations live, so it measured the sampler, not the protocol; the auditor found a
+counterexample at the start parameters by searching the window directly. Absence of hits from an
+unvalidated random search is not evidence of absence, and the corrected CHG-002 says so explicitly.
+
+**Next.** Human: approve `docs/invariants.md` and protect it; decide CHG-002. Then P11.
+
 ### 2026-10-22 · P10 · Math library and shared vectors
 
 **Changed.** `contracts/src/lib/Rounding.sol` (`mulDivDown/Up`, `divUp` over OZ `Math.mulDiv` /
@@ -502,6 +540,9 @@ constrain data collection and calibration. Each is checked at its target prompt 
 | P01-5 | The `contracts` and `differential-quick` jobs share one Foundry build cache key, derived from `foundry.toml` + `foundry.lock` + `remappings.txt`. Since `foundry.toml` carries `solc_version`, caches are never shared across solc versions, but confirm this still holds if the profile layout changes. | Claude | no |
 | P01-6 | Resolved. Run [39668831000](https://github.com/N3BCKN/bagehot/actions/runs/39668831000) had every job fail at startup — *"recent account payments have failed or your spending limit needs to be increased"* — because the repository was private and Actions billed against the account quota. The human made the repository **public**, after an audit that found no leaks in the full history, no credential file ever committed, and nothing in the tree but source, docs and config. Actions is free and unlimited for public repositories. | human | no |
 | P01-7 | Found by CI, not locally: the `secret scan` job installed gitleaks into `~/.local/bin/`, which does not exist there because that job runs no `setup-uv` step. Fixed in `c47245f` — both binary installs now `mkdir -p` the directory, install to an explicit filename and append it to `$GITHUB_PATH`. A reminder that a job without `setup-uv` starts from a barer environment than the others. | Claude | no |
+| P03-1 | I13's `k = 4` is calibrated to the P02 measurement, not derived: §6.3.3's stake-ratio divergence has no constant bound when a large liquidation meets a small `totalStakes`. P17 must re-validate against the campaign and may tighten it; exceeding it is a `/spec-change`, never a bump. | Claude | at P17 |
+| P03-2 | Two one-wei TCR effects are asserted as allowances, not defects (full-absorption liquidation lowers TCR by ≤ 1 wei of debt; an auction start raises system debt by ≤ 1). The report must describe them, or a reader will take them for leaks. | Claude | at P32/P43 |
+| P03-3 | I4 does not assert the TCR direction for a partial pool offset with surplus — the departing bundle is richer than the position, so TCR can fall legitimately. Measured in the report instead. | Claude | at P32/P43 |
 | P02-1 | Sorted-list order is not exactly preserved under redistribution: near-tied NICRs can swap by up to ~7·10⁻¹⁹ relative (≈ 1/min collateral in wei) through stake/reward rounding. I13 in P03 needs a derived tolerance (spec §6.3.3, App. B). | Claude | at P03 |
 | P02-2 | Resolved at the gate: the human supplied the kit's "Corrections to the blueprint" (13 items, from the kit README). Spec §12.1 checks each one; items 6–10 are data/experiment work and are listed under Carry-forward above. | Claude | no |
 | P07-1 | `BASE_ARCHIVE_RPC` is not visible to `just oracle` (the script sees it unset). Blocks the P07 and P08 live runs; code and tests are ready. | human | yes — P07, P08 |
