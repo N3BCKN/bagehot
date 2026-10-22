@@ -126,12 +126,20 @@ class Rpc:
                 last = f"HTTP {response.status_code}"
                 self._sleep(self._policy.delay(attempt))
                 continue
-            if response.status_code >= 400:
-                raise RpcUnavailable(f"{method}: HTTP {response.status_code}") from None
-
             try:
                 payload = response.json()
             except ValueError:
+                payload = None
+            # Some providers answer an oversized eth_getLogs with HTTP 400 and a JSON-RPC error
+            # object in the body. Route such a body through the normal error handling below; any
+            # other 4xx is a request bug and is raised without echoing the body.
+            if response.status_code >= 400 and not (
+                isinstance(payload, dict) and isinstance(payload.get("error"), dict)
+            ):
+                if method == "eth_getLogs" and response.status_code == 400:
+                    raise RangeTooLarge(400, "HTTP 400 on eth_getLogs") from None
+                raise RpcUnavailable(f"{method}: HTTP {response.status_code}") from None
+            if payload is None:
                 raise RpcUnavailable(f"{method}: response is not JSON") from None
 
             error = payload.get("error")

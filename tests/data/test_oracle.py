@@ -369,3 +369,26 @@ def test_json_manifest_round_trips(tmp_path):
     fo.save_manifest(m, tmp_path)
     assert fo.load_manifest("eth_usd", tmp_path) == m
     assert json.loads(fo.manifest_path("eth_usd", tmp_path).read_text())["head"] == 10
+
+
+def test_http_400_with_a_json_rpc_range_error_is_range_too_large():
+    def handler(request):
+        return httpx.Response(
+            400, json={"error": {"code": -32600, "message": "block range too large"}}
+        )
+
+    with pytest.raises(RangeTooLarge):
+        rpc_with(handler).get_logs(AGG, [fo.ANSWER_UPDATED], 0, 10)
+
+
+def test_bare_http_400_on_get_logs_is_range_too_large():
+    with pytest.raises(RangeTooLarge):
+        rpc_with(lambda r: httpx.Response(400, text="bad")).get_logs(
+            AGG, [fo.ANSWER_UPDATED], 0, 10
+        )
+
+
+def test_bare_http_400_on_other_methods_stays_fatal_and_silent():
+    with pytest.raises(RpcUnavailable) as err:
+        rpc_with(lambda r: httpx.Response(400, text=SECRET_URL)).call("eth_call", [])
+    assert "SECRET" not in str(err.value)
