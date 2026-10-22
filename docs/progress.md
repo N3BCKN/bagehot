@@ -8,7 +8,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | P01 | Continuous integration | done | c47245f | PR [#1](https://github.com/N3BCKN/bagehot/pull/1), run [39670041216](https://github.com/N3BCKN/bagehot/actions/runs/39670041216) green: 5 jobs pass, `differential (quick)` skipped as designed |
 | P02 | Protocol specification (human gate) | in progress | a38feab + gate edits | Plan approved; decisions: redistribute, redemption fee stays in positions, B penalty in tab → reserve, redemptions gated at `CRITICAL_TCR` (D-27). Awaiting the human: protect `docs/spec.md` and `spec/vectors/**`, then mark done |
 | P03 | Invariants (human gate) | todo | | |
-| P04 | ADRs and threat model skeleton | todo | | |
+| P04 | ADRs and threat model skeleton | in progress | | 26 ADRs written as `proposed`; threat model filled (23 threats, trust assumptions, assets/actors, boundaries). Awaiting the human: review, set `Status: accepted`, protect the accepted files |
 | P05 | Preregistration draft | todo | | |
 | P06 | Price data | todo | | |
 | P07 | Oracle and sequencer history on Base | todo | | |
@@ -263,6 +263,37 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
 
 **Next.** P01, continuous integration.
 
+### 2026-10-22 · P04 · ADRs and threat model
+
+**Changed.** `docs/adr/0001…0026` — 26 records, all `Status: proposed`, each with Context,
+Decision, Alternatives considered and Consequences, and each pointing at the spec sections or
+prompts that depend on it. `docs/adr/README.md` carries the full index. `docs/threat-model.md`
+replaces its stub: trust assumptions (blueprint §17.1), an asset table and an actor table, a
+23-row threat register, an explicit out-of-scope section and the boundaries of the testnet
+deployment (§17.3).
+
+**Numbering.** 0001–0015 are the blueprint's decision register (§6) written out. 0016–0025 are the
+prompt's additions, which match the kit's corrections 1–13 one-to-one where those are protocol
+decisions. 0026 is the critical-TCR redemption gate decided at the P02 gate — one more than the
+prompt asked for, because it is a real decision with alternatives and a cost, and leaving it only
+in spec §12 (D-27) would hide it from the ADR index. Numbering is continuous, nothing reused.
+
+**Threat register.** The blueprint's 14 threats are all present. The prompt's ten additions are
+T-03 (oracle gas griefing), T-19 (wiring front-run), T-14 (auction callback reentrancy), T-11
+(sorted-list hint griefing), T-05 (dust positions), T-18 (interest accrual skipped), T-01
+(redemption of underwater positions), T-04 (sequencer grace bypass), T-20 (wrong chain) and T-21
+(credential leakage through tooling). Two more came out of writing it: T-22, dishonest or
+irreproducible results, and T-23, model/contract divergence — the failure modes specific to a
+protocol whose product is a report.
+
+**Open TBDs** (acceptance criterion): three tests named in the register do not exist yet —
+`AuctionCallbackActive` on `buy`/`check` (T-14, P33), a `redeem` from inside a buyer callback
+(T-01/T-14, P16/P33), and the gas-starvation branch of the oracle adapter (T-03, P12). They are
+listed under Open issues as P04-1. Every other row names an invariant (numbered at P03) or an
+existing test family.
+
+**Next.** Human review of the ADRs; then P03 (invariants), which the P02 gate already unblocked.
+
 ## Carry-forward
 
 Items from the kit's "Corrections to the blueprint" that no specification text can satisfy: they
@@ -298,6 +329,7 @@ constrain data collection and calibration. Each is checked at its target prompt 
 | P01-7 | Found by CI, not locally: the `secret scan` job installed gitleaks into `~/.local/bin/`, which does not exist there because that job runs no `setup-uv` step. Fixed in `c47245f` — both binary installs now `mkdir -p` the directory, install to an explicit filename and append it to `$GITHUB_PATH`. A reminder that a job without `setup-uv` starts from a barer environment than the others. | Claude | no |
 | P02-1 | Sorted-list order is not exactly preserved under redistribution: near-tied NICRs can swap by up to ~7·10⁻¹⁹ relative (≈ 1/min collateral in wei) through stake/reward rounding. I13 in P03 needs a derived tolerance (spec §6.3.3, App. B). | Claude | at P03 |
 | P02-2 | Resolved at the gate: the human supplied the kit's "Corrections to the blueprint" (13 items, from the kit README). Spec §12.1 checks each one; items 6–10 are data/experiment work and are listed under Carry-forward above. | Claude | no |
+| P04-1 | Three threat-register rows have no test yet: `AuctionCallbackActive` on `buy`/`check` (T-14 → P33), a `redeem` called from inside a buyer callback (T-01/T-14 → P16/P33, same gap as P02-4), and the oracle gas-starvation branch (T-03 → P12). Each is marked TBD in `docs/threat-model.md` with its prompt. | Claude | at P12/P16/P33 |
 | P02-4 | No vector exercises `redeem`'s `AuctionCallbackActive` branch (D-27, §6.7.2): it needs a deployment-B buyer callback that calls `redeem`, which the recorder cannot drive. Add it as a Foundry test at P16/P33 and as a model test at P22. | Claude | at P16/P33 |
 | P02-3 | The vector reference implementation is throwaway (scratchpad). Vectors are validated independently from P10 (Foundry) and P22 (Python model); a vector that disagrees with both implementations is a spec question for `/spec-change`. | Claude | at P10/P22 |
 | P01-8 | The repository is public, so all seven commits expose the author email `ka.koszewski@gmail.com` permanently. Four of them are also authored `H3BCKN`. Neither can be changed without a force push, which the permission rules forbid. If this matters, GitHub's `noreply` address plus `git config user.email` fixes it for future commits. | human | no |
