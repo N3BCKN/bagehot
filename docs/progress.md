@@ -12,7 +12,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | P05 | Preregistration draft | done | | DRAFT: Q1–Q3, H1–H3 with decision rules, primary + 9 secondary metrics defined over a named output schema, risk appetite, S1–S9, parameter grid, analysis plan, exclusions. 14 `TBD-P30` placeholders |
 | P06 | Price data | done | | Coinbase ETH-USD (primary) and Bitstamp ETH/USD (cross-check; Kraken cannot serve history) 1-minute candles 2019-01 → 2026-09; 17,724 requests; re-run sends 0; cards match; 64 tests |
 | P07 | Oracle and sequencer history on Base | blocked | | Code, config and 32 offline tests ready; live fetch blocked: `BASE_ARCHIVE_RPC` not visible to `just` (human action 11) |
-| P08 | Liquidation events and liquidatable windows | in progress | | Plan approved (Aave v3 only); needs the same archive RPC as P07. Finding: Aave reads the SVR ETH/USD feed, not the standard one (open issue P08-1) |
+| P08 | Liquidation events and liquidatable windows | blocked | | Plan approved (Aave v3 only). Code, config and 23 offline tests ready; live run blocked on the same RPC as P07 (human action 11). Finding: Aave reads the SVR ETH/USD feed (P08-1) |
 | P09 | Stress blocks and transaction costs | todo | | |
 | P10 | Math library and shared vectors | todo | | |
 | P11 | StableToken, wiring pattern and mocks | todo | | |
@@ -311,6 +311,18 @@ dotenv loading. Claude cannot inspect the file (the guard blocks it by design). 
 
 ### 2026-10-22 · P08 · Liquidations (plan approved)
 
+**Code ready, live run blocked.** `config/8453.toml` gains `[aave_v3]` (16 addresses, all EIP-55);
+`data/logscan.py` (generic resumable log scan), `data/fetch_liquidations.py` (stages `logs`,
+`plan`, `calls --approve-calls N`, `build`), `data/analyze_liquidations.py` (Kaplan–Meier with
+Greenwood log-log intervals, naive comparison, size buckets), `tests/data/test_liquidations.py`
+(23 tests, including a hand-computed KM case), `just liquidations`.
+
+Two defects caught in review before any test ran: the call budget reset on every run (now
+cumulative, stored in the cache database), and a sampled user without a predicted onset would have
+triggered a forward scan of every falling update (now one call at the window's lowest price).
+Same-block liquidations — the update and the liquidation in one block — get latency 0 and are
+counted separately; end-of-block state cannot show the moment in between.
+
 Aave v3 only (human). Addresses from the official address book (`bgd-labs/aave-address-book`,
 `src/AaveV3Base.sol`, read 2026-10-22 via jsDelivr's GitHub mirror). Method approved: logs first,
 then archive `eth_call`s with the onset predicted from each user's liquidation price and bracketed
@@ -419,6 +431,7 @@ constrain data collection and calibration. Each is checked at its target prompt 
 | P07-1 | `BASE_ARCHIVE_RPC` is not visible to `just oracle` (the script sees it unset). Blocks the P07 and P08 live runs; code and tests are ready. | human | yes — P07, P08 |
 | P08-1 | **Aave v3 on Base prices WETH from the SVR ETH/USD feed** (`WETH_ORACLE = 0x9dA00D23465282005DB222a441a663eE7B9dfCc8`, the `eth-usd-svr` secondary proxy), not the standard feed P07 calibrates on. P08 handles it by using the source in force in each window (AaveOracle `AssetSourceUpdated` history). Undecided: which feed the protocol's own oracle model (P24) should mirror. If update timing differs between the two, the liquidation calibration and the oracle calibration describe different oracles. Decide before P24. | human | at P24 |
 | P04-1 | Three threat-register rows have no test yet: `AuctionCallbackActive` on `buy`/`check` (T-14 → P33), a `redeem` called from inside a buyer callback (T-01/T-14 → P16/P33, same gap as P02-4), and the oracle gas-starvation branch (T-03 → P12). Each is marked TBD in `docs/threat-model.md` with its prompt. | Claude | at P12/P16/P33 |
+| P08-2 | `.gitleaks.toml` gained a value-only allowlist for public EVM addresses (`^0x[0-9a-fA-F]{40}$`): Aave's `a_token`/`v_token` keys in `config/8453.toml` tripped `generic-api-key`. A first version also allowlisted the `config/` path; a probe showed it hid a 64-hex private key there, so it was removed before anything was pushed. Probes confirm a 0x+64-hex key, a `private_key`, and a bare 40-hex token are still caught. The original slip: the scan and the commit were chained with `;`, so the commit ran despite the findings — scans now gate commits with `&&`. | Claude | no |
 | P02-4 | No vector exercises `redeem`'s `AuctionCallbackActive` branch (D-27, §6.7.2): it needs a deployment-B buyer callback that calls `redeem`, which the recorder cannot drive. Add it as a Foundry test at P16/P33 and as a model test at P22. | Claude | at P16/P33 |
 | P02-3 | The vector reference implementation is throwaway (scratchpad). Vectors are validated independently from P10 (Foundry) and P22 (Python model); a vector that disagrees with both implementations is a spec question for `/spec-change`. | Claude | at P10/P22 |
 | P01-8 | The repository is public, so all seven commits expose the author email `ka.koszewski@gmail.com` permanently. Four of them are also authored `H3BCKN`. Neither can be changed without a force push, which the permission rules forbid. If this matters, GitHub's `noreply` address plus `git config user.email` fixes it for future commits. | human | no |

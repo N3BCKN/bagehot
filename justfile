@@ -94,6 +94,10 @@ diff-long:
 oracle *ARGS:
     uv run python -m data.fetch_oracle {{ARGS}}
 
+# P08: Aave v3 liquidations on Base. Stages: logs, plan, calls --approve-calls N, build.
+liquidations *ARGS:
+    uv run python -m data.fetch_liquidations {{ARGS}}
+
 data:
     @test -f data/fetch_all.py || { echo "data/fetch_all.py missing — added at P06"; exit 1; }
     uv run python -m data.fetch_all

@@ -32,3 +32,18 @@ regexTarget = "secret"
 regexes = [
   '''^0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80$''',
 ]
+
+[[allowlists]]
+description = """
+Public EVM contract addresses. Keys such as `a_token` and `v_token` in config/8453.toml (Aave's
+aToken / variableDebtToken contracts) make generic-api-key fire on the address next to them. This
+matches the VALUE only, never a path: the whole secret must be `0x` followed by exactly 40 hex
+digits — a 20-byte address, public by definition. A private key is 32 bytes (`0x` + 64 hex) and
+still trips; so does a 40-hex token without the `0x` prefix, and any other secret in the same file.
+A first version of this entry also listed `paths = ['^config/…']` with `condition = "AND"`; a probe
+showed it hid a 64-hex private key in config/, so the path was removed (P08).
+"""
+regexTarget = "secret"
+regexes = [
+  '''^0x[0-9a-fA-F]{40}$''',
+]

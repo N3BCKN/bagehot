@@ -59,3 +59,43 @@ decimals = 18
 path = "eth-usd-svr"
 proxy = "0xa4250cE1aA15Ff4cb5E5a8655293b65694e436Ed"
 decimals = 8
+
+# ---------------------------------------------------------------------------------------------
+# Aave v3 on Base — read-only source of liquidation events and account health (P08).
+#
+# Source: the official Aave address book, bgd-labs/aave-address-book, src/AaveV3Base.sol
+#   https://github.com/bgd-labs/aave-address-book/blob/main/src/AaveV3Base.sol
+#   read 2026-10-22 through jsDelivr's GitHub mirror
+#   (https://cdn.jsdelivr.net/gh/bgd-labs/aave-address-book@main/src/AaveV3Base.sol), because
+#   the GitHub fetch failed in the session. Addresses copied from the raw file, not a summary.
+[aave_v3]
+pool = "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5"
+pool_addresses_provider = "0xe20fCBdBfFC4Dd138cE8b2E6FBb6CB49777ad64D"
+pool_data_provider = "0x0F43731EB8d45A581f4a36DD74F5f358bc90C73A"
+aave_oracle = "0x2Cc0Fc26eD4563A5ce5e8bdcfe1A2878676Ae156"
+source_url = "https://github.com/bgd-labs/aave-address-book/blob/main/src/AaveV3Base.sol"
+retrieved = "2026-10-22"
+
+[aave_v3.assets.WETH]
+underlying = "0x4200000000000000000000000000000000000006"
+a_token = "0xD4a0e0b9149BCee3C920d2E00b5dE09138fd8bb7"
+v_token = "0x24e6e0795b3c7c71D965fCc4f371803d1c1DcA1E"
+# The price source the address book lists today. It is the secondary proxy of Chainlink's
+# `eth-usd-svr` entry — NOT the standard eth-usd feed in [oracle.eth_usd]. P08 reads the source in
+# force at each window from AaveOracle (getSourceOfAsset at the window block), never this constant.
+oracle_today = "0x9dA00D23465282005DB222a441a663eE7B9dfCc8"
+
+# Kit correction 8: Base has native USDC and bridged USDbC. Both are labelled in every output.
+[aave_v3.assets.USDC]
+label = "USDC (native)"
+underlying = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+a_token = "0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB"
+v_token = "0x59dca05b6c26dbd64b5381374aAaC5CD05644C28"
+oracle_today = "0xf52D010c7d4ecBfda92c2509900593CE34535D86"
+
+[aave_v3.assets.USDbC]
+label = "USDbC (bridged)"
+underlying = "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA"
+a_token = "0x0a1d576f3eFeF75b330424287a95A366e8281D54"
+v_token = "0x7376b2F323dC56fCd4C191B34163ac8a84702DAB"
+oracle_today = "0xf52D010c7d4ecBfda92c2509900593CE34535D86"
