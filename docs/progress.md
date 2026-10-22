@@ -6,10 +6,10 @@ Claude updates this file at the end of every session. Status: todo · in progres
 |---|---|---|---|---|
 | P00 | Repository bootstrap and toolchain | done | a4e5b1d | `just check` and `just static` green; all toolchains pinned; hooks verified |
 | P01 | Continuous integration | done | c47245f | PR [#1](https://github.com/N3BCKN/bagehot/pull/1), run [39670041216](https://github.com/N3BCKN/bagehot/actions/runs/39670041216) green: 5 jobs pass, `differential (quick)` skipped as designed |
-| P02 | Protocol specification (human gate) | in progress | a38feab + gate edits | Plan approved; decisions: redistribute, redemption fee stays in positions, B penalty in tab → reserve, redemptions gated at `CRITICAL_TCR` (D-27). Awaiting the human: protect `docs/spec.md` and `spec/vectors/**`, then mark done |
+| P02 | Protocol specification (human gate) | done | a38feab, 6c8f001 | Approved at the gate with one override (D-27, the critical-TCR redemption gate) and nine confirmations; `docs/spec.md` and `spec/vectors/**` protected by the human |
 | P03 | Invariants (human gate) | todo | | |
 | P04 | ADRs and threat model skeleton | in progress | | 26 ADRs written as `proposed`; threat model filled (23 threats, trust assumptions, assets/actors, boundaries). Awaiting the human: review, set `Status: accepted`, protect the accepted files |
-| P05 | Preregistration draft | todo | | |
+| P05 | Preregistration draft | done | | DRAFT: Q1–Q3, H1–H3 with decision rules, primary + 9 secondary metrics defined over a named output schema, risk appetite, S1–S9, parameter grid, analysis plan, exclusions. 14 `TBD-P30` placeholders |
 | P06 | Price data | todo | | |
 | P07 | Oracle and sequencer history on Base | todo | | |
 | P08 | Liquidation events and liquidatable windows | todo | | |
@@ -262,6 +262,39 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
   3.12). Hooks are mode 644 — see Human actions.
 
 **Next.** P01, continuous integration.
+
+### 2026-10-22 · P05 · Preregistration draft
+
+**Changed.** `docs/preregistration.md` replaces its stub: research questions Q1–Q3, hypotheses
+H1–H3 with a decision rule each, the primary metric (total system cost) and nine secondary
+metrics defined as formulas over a named output schema, risk appetite as a bad-debt event rate,
+scenarios S1–S9 with the three environments, the parameter grid outline, the analysis plan,
+exclusion rules, how pilots are handled, what counts as confirmation, and an empty Addenda table.
+
+**Decisions taken in the draft.**
+- **Three outcomes, not two.** An interval that includes zero is "no detected difference", never
+  a tie and never equivalence. §6.5 also fixes the order in which ties are broken when Q1 forces
+  a parameter choice anyway.
+- **Rates, not totals.** Hypotheses test bps per debt-year, so scenarios of different horizons and
+  sizes are comparable; raw totals are stored too.
+- **Paired bootstrap.** A and B see the same seeds and therefore the same paths, so the comparison
+  resamples pairs and the price path cancels.
+- **Path classification before simulation.** "Short crash" and "long slide" are properties of the
+  path, computed before the run, so H1 and H2 cannot be tested on a set chosen after seeing
+  outcomes.
+- **Two metrics beyond blueprint §14.2**: M8 (shutdown outcome, because it changes how every other
+  metric reads) and M9 (how long the peg floor was closed by the new critical-TCR gate). Neither
+  carries a hypothesis.
+- **Exclusions may never reference an outcome value** (§8 rule 6), and runs that shut down are not
+  excluded — that tail is the subject of the study.
+
+**Open placeholders.** 14 `TBD-P30` values, each with candidates and the prompt that decides it:
+the crash/slide thresholds (`D_crash`, `X`, `D_slide`, `Y`, `R_up`), the thin-liquidity factor `Z`,
+the rebound window `W` for unnecessary liquidations, the bootstrap block length, `N`, the risk
+appetite `R`, the fork-agreement subset and band, and the freeze date and commit. P30 fails if any
+remain.
+
+**Next.** P03 (invariants) is the next prompt by dependency; P06 starts the data work.
 
 ### 2026-10-22 · P04 · ADRs and threat model
 
