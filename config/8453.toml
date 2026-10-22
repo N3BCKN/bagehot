@@ -1,0 +1,61 @@
+# Base mainnet (chain id 8453) — READ-ONLY. Nothing is ever broadcast to this chain (ADR-0019).
+#
+# Every address carries the URL it was taken from and the retrieval date. Addresses are EIP-55
+# checksummed; `data/fetch_oracle.py` re-verifies each feed on-chain (description, decimals,
+# current phase) before it scans anything and refuses to run if the chain disagrees with this
+# file.
+
+chain_id = 8453
+name = "Base"
+
+# ---------------------------------------------------------------------------------------------
+# ETH / USD — the feed the protocol model is calibrated on (P07 decision: the standard feed).
+#
+# Source: Chainlink's feed directory, the data behind docs.chain.link's address tables
+#   https://reference-data-directory.vercel.app/feeds-ethereum-mainnet-base-1.json
+#   (linked from https://docs.chain.link/data-feeds/price-feeds/addresses?network=base)
+#   retrieved 2026-10-22.
+# The directory lists this address as the `secondaryProxyAddress` (ENS `eth-usd`) of the entry
+# with path `eth-usd-shared-svr-2`. It is the ENS-named standard proxy with history back to Base's
+# launch; the on-chain check in fetch_oracle.py confirms description and decimals.
+[oracle.eth_usd]
+proxy = "0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70"
+ens = "eth-usd"
+description = "ETH / USD"
+decimals = 8
+deviation_threshold_pct = 0.15   # documented; P07 infers it from history and compares
+heartbeat_s = 1200               # documented; P07 infers it from history and compares
+source_url = "https://reference-data-directory.vercel.app/feeds-ethereum-mainnet-base-1.json"
+retrieved = "2026-10-22"
+
+# ---------------------------------------------------------------------------------------------
+# L2 sequencer uptime feed. answer 0 = up, 1 = down; startedAt = time of the last status change.
+#
+# Source: https://docs.chain.link/data-feeds/l2-sequencer-feeds  retrieved 2026-10-22.
+[oracle.sequencer_uptime]
+proxy = "0xBCF85224fc0756B9Fa45aA7892530B47e10b6433"
+description = "L2 Sequencer Uptime Status Feed"
+decimals = 0
+source_url = "https://docs.chain.link/data-feeds/l2-sequencer-feeds"
+retrieved = "2026-10-22"
+
+# ---------------------------------------------------------------------------------------------
+# Known ETH / USD feeds that are NOT used. Recorded so that nobody later "discovers" them and
+# silently switches feeds. All three are Smart Value Recapture (SVR) variants, a newer feed type;
+# the protocol model is calibrated on the standard feed above.
+# Same source and retrieval date as [oracle.eth_usd].
+[[oracle.known_unused]]
+path = "eth-usd-shared-svr-2"
+proxy = "0x50015f8b17fb2C290Dde41fDc246ed0dcEE93a8b"
+decimals = 8
+note = "primary proxy of the directory entry whose secondary proxy is the standard eth-usd feed"
+
+[[oracle.known_unused]]
+path = "eth-usd-shared-svr"
+proxy = "0x5731Ae06077c79A3B292498940211E0aE7130bd3"
+decimals = 18
+
+[[oracle.known_unused]]
+path = "eth-usd-svr"
+proxy = "0xa4250cE1aA15Ff4cb5E5a8655293b65694e436Ed"
+decimals = 8

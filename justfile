@@ -89,6 +89,11 @@ diff-long:
       || { echo "differential/ is empty — added at P23"; exit 1; }
     uv run pytest differential -q --hypothesis-profile=nightly
 
+# P07: Chainlink ETH/USD and sequencer-uptime history on Base. BASE_ARCHIVE_RPC comes from the
+# dotenv file loaded above and is never printed. `just oracle --dry-run` prints the budget only.
+oracle *ARGS:
+    uv run python -m data.fetch_oracle {{ARGS}}
+
 data:
     @test -f data/fetch_all.py || { echo "data/fetch_all.py missing — added at P06"; exit 1; }
     uv run python -m data.fetch_all
