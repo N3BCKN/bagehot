@@ -56,12 +56,10 @@ static:
     mkdir -p reports/static
     cd contracts && slither . --config-file slither.config.json --foundry-compile-all \
       --fail-none --json ../reports/static/slither.json
-    python3 scripts/check_triage.py reports/static/slither.json docs/static-analysis-triage.md
-    @if [ -n "$(find contracts/src -name '*.sol' -print -quit)" ]; then \
-        cd contracts && aderyn . --path-excludes src/mocks --output ../reports/static/aderyn.md; \
-      else \
-        echo "aderyn skipped: contracts/src/ holds no contracts yet — first one lands at P10"; \
-      fi
+    cd contracts && aderyn . --path-excludes src/mocks --output ../reports/static/aderyn.md
+    cd contracts && aderyn . --path-excludes src/mocks --output ../reports/static/aderyn.json
+    python3 scripts/check_triage.py reports/static/slither.json docs/static-analysis-triage.md \
+      --aderyn reports/static/aderyn.json
 
 coverage:
     cd contracts && forge coverage --report summary --no-match-path "test/fork/*"

@@ -9,7 +9,7 @@ what is not. A row needs a reason a reviewer can disagree with — "false positi
 
 | id | tool | detector | location | severity | decision | justification | date |
 |---|---|---|---|---|---|---|---|
-| | | | | | | | |
+| SA-001 | aderyn | internal-function-used-once | src/lib/WadRayMath.sol:75 | Low | accepted | `rpow(x, n)` is the spec's power function (§2.3, every product rounded up) and the only form protocol code is meant to call; the three-argument `rpow(x, n, rounding)` exists so tests can bracket the exact value with Floor. "Used once" is true only until P15: VaultManager (interest index, R4), RedemptionModule (base-rate decay, R19) and DutchAuctionHouse (price curve, R23) all call it. Re-check at P33, when it should no longer fire. | 2026-10-22 |
 
 Decision is one of: `fixed` (with the commit), `accepted` (risk understood and taken),
 `false-positive` (the detector's premise does not hold here, say why).
@@ -20,6 +20,7 @@ Decision is one of: `fixed` (with the commit), `accepted` (risk understood and t
 Solidity in the repo is `contracts/test/unit/Sanity.t.sol` plus the pinned libraries, which
 `contracts/slither.config.json` filters out of the report.
 
-aderyn is skipped while `contracts/src/` holds no contracts — it exits 1 on an empty source
-directory. The guard in the `static` recipe disappears on its own once the first contract lands at
-P10; nothing needs to be changed then. See the open issue in `progress.md`.
+`just static` at P10 (first contracts in `src/`: `Rounding.sol`, `WadRayMath.sol`): slither
+**0 results**; aderyn 88 detectors, **1 low** (SA-001, accepted). From P10 aderyn is gated too:
+it writes `reports/static/aderyn.json` and `scripts/check_triage.py --aderyn` fails on any finding
+without a row, exactly as for slither (closes open issue P01-4).

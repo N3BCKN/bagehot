@@ -14,7 +14,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | P07 | Oracle and sequencer history on Base | blocked | | Feeds verified on-chain; phases found (ETH/USD 3, sequencer 1). Log scan blocked: the RPC plan caps `eth_getLogs` at ~10 blocks → 14.5M requests (P07-2) |
 | P08 | Liquidation events and liquidatable windows | blocked | | Plan approved (Aave v3 only). Code, config and 23 offline tests ready; needs `eth_getLogs` over wide ranges — same blocker as P07 (P07-2). Finding: Aave reads the SVR ETH/USD feed (P08-1) |
 | P09 | Stress blocks and transaction costs | done | | 31 blocks (20 stress, 10 calm, 2024-08-05); Base costs 930 blocks, L1 crash windows 5,136 sampled blocks; L1 data fee of a liquidation ≈ $0.13–0.19 before blobs → ≈ $0.0001 after |
-| P10 | Math library and shared vectors | todo | | |
+| P10 | Math library and shared vectors | in progress | | Libraries, model, generator, 25 Foundry + 19 Python tests green; error bound measured (CHG-001 awaiting review). Halmos proofs time out with the bundled solvers (P10-1, decision needed) |
 | P11 | StableToken, wiring pattern and mocks | todo | | |
 | P12 | OracleAdapter | todo | | |
 | P13 | SortedPositions and hint helpers | todo | | |
@@ -263,6 +263,43 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
 
 **Next.** P01, continuous integration.
 
+### 2026-10-22 · P10 · Math library and shared vectors
+
+**Changed.** `contracts/src/lib/Rounding.sol` (`mulDivDown/Up`, `divUp` over OZ `Math.mulDiv` /
+`ceilDiv`), `contracts/src/lib/WadRayMath.sol` (WAD/RAY products and quotients in both directions;
+`rpow(x, n)` = the spec's power function, `rpow(x, n, rounding)` for test brackets),
+`model/math.py` (bit-identical Python), `spec/tools/gen_math_vectors.py` →
+`spec/generated/math_random.json` (800 cases, 104 expected reverts; expected values from `Fraction`
+and an independent transcription of §2.3, deliberately not from the model), `spec/tools/rpow_error.py`,
+tests: `test/vectors/MathVectors.t.sol` (7), `test/unit/Rounding.t.sol` (6), `test/unit/WadRayMath.t.sol`
+(11), `tests/model/test_math.py` (19). Static gate extended to aderyn (closes P01-4; SA-001 triaged).
+
+**Decisions (spec over prompt, `CLAUDE.md`).** (1) Overflow reverts `Panic(0x11)` from OZ `mulDiv`,
+not a custom `Overflow()` error: spec §2.2 defines overflow that way (model: `Overflow` exception)
+and §11.2 lists no `Overflow()` error. (2) `rpow` takes a rounding argument as the prompt asks, but
+the protocol only ever uses Ceil (§2.3); Floor exists to bracket the exact value in tests.
+
+**Results.** All 18 checks of `spec/vectors/math.json` pass on both sides, including the trace that
+pins the product order; all 800 generated cases pass on both sides, reverts included. Fuzz (1,024 runs
+each, no `vm.assume` — every input region asserts its own outcome): `mulDivUp − mulDivDown` is 1 iff
+inexact, floor proven exact via 512-bit arithmetic, ceil overflow at the top edge reverts; rpow
+monotone in n (growth and decay) and in x; rpow equals repeated rmul for n ≤ 3 and brackets the same
+value for n ≤ 64; overflow boundary exact (`rpow(2·RAY, 166)` fits, 167 reverts).
+
+**rpow error bound** (52,000 random inputs, two seeds): `rpowDown ≤ exact ≤ rpowUp` always (and
+provably), and `|error| ≤ n · max(1, exact/RAY)` RAY units — tight. A first guess (error ≤ number of
+roundings) was refuted by six orders of magnitude: early roundings are doubled by every later squaring,
+so the error is linear in n. A year in one accrual: relative error < 4·10^-20. The spec states no bound,
+so recording it is a spec change: **CHG-001** (`docs/changes/CHG-001-rpow-error-bound.md`), awaiting
+review.
+
+**Halmos — not achieved.** The `check_` functions (`test/symbolic/RoundingSymbolic.t.sol`, kept
+uncommitted so CI does not go red) time out with both solvers bundled in the pinned halmos 0.3.3 —
+yices and z3, 300 s per query — at 128-bit and even 64-bit operands; at 16 bits mulDiv still times out,
+only an 8-bit divUp closes. EVM words are 256 bits, so the solver bit-blasts 256-bit multiplier and
+divider circuits regardless of operand width. Halmos's default solver choice also tries to *download*
+yices at run time, which is blocked (a new tool needs approval). Decision needed: P10-1.
+
 ### 2026-10-22 · P09 · Live run
 
 **Run.** `just blocks` (31 blocks, 64 requests), `just costs base` (930 rows, 2,313 requests),
@@ -461,13 +498,15 @@ constrain data collection and calibration. Each is checked at its target prompt 
 | P01-1 | `.gitleaks.toml` carries two allowlist entries, both narrow and both justified in the file: Anvil's published account-0 key (matched as an exact literal, so any other secret in the justfile still trips), and the `contracts/lib/` submodule tree (180 `generic-api-key` false positives in OpenZeppelin's own JS tests; that path is protected by its commit pin, not by the scanner). Re-check both if the scan ever goes quiet unexpectedly. | Claude | no |
 | P01-2 | Resolved: the project now uses `N3BCKN` everywhere — README badges, `LICENSE`, and a repo-local `git config user.name`. Four commits predating the fix (`2705e33`, `a4e5b1d`, `283516a`, `3cb1d71`) are authored `H3BCKN` and were already pushed; re-authoring them needs a force push, which the permission rules and `guard_bash.py` both forbid, so they stay as they are. The global `~/.gitconfig` still says `H3BCKN` and was deliberately not touched — it is outside this repository. | human | no |
 | P01-3 | The nightly `report` job cannot find processed data on a scheduled run — artefacts do not cross workflow runs without an explicit id. It needs `workflow_dispatch` with `data_run_id`. Revisit at P29/P32 once a data workflow actually produces the `processed-data` artefact; a scheduled run may then want to locate the newest one via the API. | Claude | at P32 |
-| P01-4 | `scripts/check_triage.py` gates slither only. aderyn findings are uploaded as an artefact but not yet gated; aderyn can emit JSON, so the script can be extended when `contracts/src/` has contracts. The triage table's `tool` column already distinguishes them. | Claude | at P10 |
+| P01-4 | Resolved at P10: `scripts/check_triage.py --aderyn` gates aderyn findings like slither's; the `static` recipe writes `reports/static/aderyn.json`. Original note: `scripts/check_triage.py` gates slither only. aderyn findings are uploaded as an artefact but not yet gated; aderyn can emit JSON, so the script can be extended when `contracts/src/` has contracts. The triage table's `tool` column already distinguishes them. | Claude | at P10 |
 | P01-5 | The `contracts` and `differential-quick` jobs share one Foundry build cache key, derived from `foundry.toml` + `foundry.lock` + `remappings.txt`. Since `foundry.toml` carries `solc_version`, caches are never shared across solc versions, but confirm this still holds if the profile layout changes. | Claude | no |
 | P01-6 | Resolved. Run [39668831000](https://github.com/N3BCKN/bagehot/actions/runs/39668831000) had every job fail at startup — *"recent account payments have failed or your spending limit needs to be increased"* — because the repository was private and Actions billed against the account quota. The human made the repository **public**, after an audit that found no leaks in the full history, no credential file ever committed, and nothing in the tree but source, docs and config. Actions is free and unlimited for public repositories. | human | no |
 | P01-7 | Found by CI, not locally: the `secret scan` job installed gitleaks into `~/.local/bin/`, which does not exist there because that job runs no `setup-uv` step. Fixed in `c47245f` — both binary installs now `mkdir -p` the directory, install to an explicit filename and append it to `$GITHUB_PATH`. A reminder that a job without `setup-uv` starts from a barer environment than the others. | Claude | no |
 | P02-1 | Sorted-list order is not exactly preserved under redistribution: near-tied NICRs can swap by up to ~7·10⁻¹⁹ relative (≈ 1/min collateral in wei) through stake/reward rounding. I13 in P03 needs a derived tolerance (spec §6.3.3, App. B). | Claude | at P03 |
 | P02-2 | Resolved at the gate: the human supplied the kit's "Corrections to the blueprint" (13 items, from the kit README). Spec §12.1 checks each one; items 6–10 are data/experiment work and are listed under Carry-forward above. | Claude | no |
 | P07-1 | `BASE_ARCHIVE_RPC` is not visible to `just oracle` (the script sees it unset). Blocks the P07 and P08 live runs; code and tests are ready. | human | yes — P07, P08 |
+| P10-1 | **Halmos cannot close the rounding proofs with the solvers bundled in halmos 0.3.3** (yices, z3: timeouts at 128, 64 and 16 bits). Options: (a) approve **bitwuzla** (halmos's recommended bit-vector solver; pinned 0.8.1, downloaded once via `HALMOS_ALLOW_DOWNLOAD=1` or installed explicitly, recorded in `docs/dependencies.md`) and re-run — no guarantee it closes 128-bit mulDiv, but it is the strongest option; (b) accept fuzzing + the independent generated vectors + both-side vector parity as the evidence for P10 and record the deviation from the acceptance criterion. Also: the `just halmos` recipe must point at a solver explicitly either way, or CI's halmos step tries a blocked download. `RoundingSymbolic.t.sol` stays uncommitted until decided. | human | P10 acceptance |
+| P10-2 | P10 lists P03 (invariants) as a dependency, but P03 has not been run (it was paused at the P02 gate). The math library depends only on the spec, so P10 proceeded; P03 should run before P11+ need invariant references. | human | before P11 |
 | P07-2 | **The archive RPC plan caps `eth_getLogs` at about 10 blocks** (the probe halved from 500,000 to 7; free-tier plans of several providers do this). At that cap P07's history needs ~14.5M requests; the fetcher's budget guard stopped it. Blocks P07 and P08. Options: (a) an RPC plan allowing ≥ 10k-block `eth_getLogs` (P07 then needs ~11k requests); (b) fetch logs from the Etherscan-v2 / Basescan logs API (`BASESCAN_API_KEY` is already in `env.example`) and keep the RPC for the exact `getRoundData` cross-checks. Decision needed. Also observed: `eth_feeHistory` is served only for recent blocks (HTTP 503 at depth) — P09 now reads full blocks instead. | human | yes — P07, P08 |
 | P07-3 | Phase 3 of the standard ETH/USD proxy (from block 50,530,334) reads aggregator `0x05c84a58FE042275b37db038bAAcD15F410c7bB0` — the contract Chainlink's directory lists for the `eth-usd-shared-svr-2` entry. Since then the standard proxy and that SVR proxy read the same aggregator, which narrows P08-1 to the period before. | Claude | at P24 |
 | P08-1 | **Aave v3 on Base prices WETH from the SVR ETH/USD feed** (`WETH_ORACLE = 0x9dA00D23465282005DB222a441a663eE7B9dfCc8`, the `eth-usd-svr` secondary proxy), not the standard feed P07 calibrates on. P08 handles it by using the source in force in each window (AaveOracle `AssetSourceUpdated` history). Undecided: which feed the protocol's own oracle model (P24) should mirror. If update timing differs between the two, the liquidation calibration and the oracle calibration describe different oracles. Decide before P24. | human | at P24 |
