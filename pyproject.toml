@@ -45,6 +45,9 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--strict-markers"
+# The top-level packages are run as `python -m <pkg>` from the repo root (see [tool.uv] above);
+# pytest needs the same root on sys.path to import them from tests/.
+pythonpath = ["."]
 markers = [
     "slow: long-running test, excluded from `just py-test`",
     "network: needs network or an RPC endpoint, excluded from `just py-test`",

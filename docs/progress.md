@@ -10,9 +10,9 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | P03 | Invariants (human gate) | todo | | |
 | P04 | ADRs and threat model skeleton | in progress | | 26 ADRs written as `proposed`; threat model filled (23 threats, trust assumptions, assets/actors, boundaries). Awaiting the human: review, set `Status: accepted`, protect the accepted files |
 | P05 | Preregistration draft | done | | DRAFT: Q1–Q3, H1–H3 with decision rules, primary + 9 secondary metrics defined over a named output schema, risk appetite, S1–S9, parameter grid, analysis plan, exclusions. 14 `TBD-P30` placeholders |
-| P06 | Price data | todo | | |
-| P07 | Oracle and sequencer history on Base | todo | | |
-| P08 | Liquidation events and liquidatable windows | todo | | |
+| P06 | Price data | done | | Coinbase ETH-USD (primary) and Bitstamp ETH/USD (cross-check; Kraken cannot serve history) 1-minute candles 2019-01 → 2026-09; 17,724 requests; re-run sends 0; cards match; 64 tests |
+| P07 | Oracle and sequencer history on Base | blocked | | Code, config and 32 offline tests ready; live fetch blocked: `BASE_ARCHIVE_RPC` not visible to `just` (human action 11) |
+| P08 | Liquidation events and liquidatable windows | in progress | | Plan approved (Aave v3 only); needs the same archive RPC as P07. Finding: Aave reads the SVR ETH/USD feed, not the standard one (open issue P08-1) |
 | P09 | Stress blocks and transaction costs | todo | | |
 | P10 | Math library and shared vectors | todo | | |
 | P11 | StableToken, wiring pattern and mocks | todo | | |
@@ -263,6 +263,60 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
 
 **Next.** P01, continuous integration.
 
+### 2026-10-22 · P06 · Price data
+
+**Changed.** `data/http.py`, `data/sources.py`, `data/fetch_prices.py`, `data/process_prices.py`,
+`data/validate.py` (prices part), `data/fetch_all.py` (driven by `just data`), two data cards,
+recorded fixtures under `data/tests/fixtures/`, `tests/data/test_prices.py` (31 tests), and
+`reports/data-validation.md`. `pyproject.toml` gains `pythonpath = ["."]` so tests can import the
+top-level packages.
+
+**Decisions.**
+- **Bitstamp, not Kraken, as the cross-check.** Kraken's REST OHLC returns only the latest 720
+  candles and its docs say older data "cannot be retrieved"; the human chose Bitstamp.
+- **Bitstamp pads no-trade minutes, and those bars become gaps.** Found in the data, not in the
+  docs: 620,593 zero-volume bars (15.2%; 42% in 2019), 620,289 exactly at the previous close.
+  Storing them would store venue-forward-filled prices (P06 forbids forward-fill) and would inflate
+  the divergence against Coinbase. `Source.emits_empty_minutes` handles it; the count is in the card.
+- **Resume is window-aware.** A month counts as done only if its meta matches the file checksum
+  *and* the exact window requested; a partial `--start/--end` run cannot leave a half-filled month
+  marked complete. Tested, as is a truncated file.
+- Verified against the live APIs before trusting the docs: Coinbase returns newest-first with
+  elements `[time, low, high, open, close, volume]`; Bitstamp's `end` is inclusive.
+
+**Results.** Coinbase 4,059,243 rows (99.61% coverage, 12,131 gaps, longest 394 min on 2026-05-08);
+Bitstamp 3,454,607 rows (84.77% after padding removal). Median cross-source divergence 2.0 bps; in
+the stress windows 18.3 (2020-03), 8.7 (2021-05), 4.6 (2022-05), 3.1 bps (2024-08). Largest single
+divergence 2,318 bps: a −19.28% Bitstamp minute on 2019-07-14, flagged and kept. Processing is
+byte-deterministic (Coinbase checksum identical across runs).
+
+**Acceptance.** `just data` completes; a re-run sends 0 requests; card checksums match the files;
+`just py-test` green.
+
+### 2026-10-22 · P07 · Oracle history (code ready, live fetch blocked)
+
+**Changed.** `config/8453.toml` (standard `eth-usd` proxy and the sequencer feed, each with source
+URL and date; the three SVR ETH/USD feeds recorded as known but unused), `data/rpc.py` (a JSON-RPC
+client that keeps the endpoint out of every exception, repr and traceback), `data/fetch_oracle.py`,
+`data/process_oracle.py`, `data/analyze_oracle.py` (with the approved oracle-vs-market section),
+`tests/data/test_oracle.py` (32 tests), and a `just oracle` recipe.
+
+**Decisions (human, at the plan gate).** Calibrate on the standard ETH/USD feed; add the
+oracle-vs-market section. **Found while planning:** the Chainlink directory lists three ETH/USD feeds
+on Base (one standard, two SVR variants); all five addresses pass EIP-55, and the fetcher re-verifies
+description and decimals on-chain before it scans anything.
+
+**Blocked.** `just oracle --verify-only` reports `BASE_ARCHIVE_RPC` unset, even through `just`'s
+dotenv loading. Claude cannot inspect the file (the guard blocks it by design). Human action 11.
+
+### 2026-10-22 · P08 · Liquidations (plan approved)
+
+Aave v3 only (human). Addresses from the official address book (`bgd-labs/aave-address-book`,
+`src/AaveV3Base.sol`, read 2026-10-22 via jsDelivr's GitHub mirror). Method approved: logs first,
+then archive `eth_call`s with the onset predicted from each user's liquidation price and bracketed
+by two calls, a SQLite call cache, and a mechanical `--approve-calls N` gate. Code next; the live
+run needs the same RPC as P07.
+
 ### 2026-10-22 · P05 · Preregistration draft
 
 **Changed.** `docs/preregistration.md` replaces its stub: research questions Q1–Q3, hypotheses
@@ -362,6 +416,8 @@ constrain data collection and calibration. Each is checked at its target prompt 
 | P01-7 | Found by CI, not locally: the `secret scan` job installed gitleaks into `~/.local/bin/`, which does not exist there because that job runs no `setup-uv` step. Fixed in `c47245f` — both binary installs now `mkdir -p` the directory, install to an explicit filename and append it to `$GITHUB_PATH`. A reminder that a job without `setup-uv` starts from a barer environment than the others. | Claude | no |
 | P02-1 | Sorted-list order is not exactly preserved under redistribution: near-tied NICRs can swap by up to ~7·10⁻¹⁹ relative (≈ 1/min collateral in wei) through stake/reward rounding. I13 in P03 needs a derived tolerance (spec §6.3.3, App. B). | Claude | at P03 |
 | P02-2 | Resolved at the gate: the human supplied the kit's "Corrections to the blueprint" (13 items, from the kit README). Spec §12.1 checks each one; items 6–10 are data/experiment work and are listed under Carry-forward above. | Claude | no |
+| P07-1 | `BASE_ARCHIVE_RPC` is not visible to `just oracle` (the script sees it unset). Blocks the P07 and P08 live runs; code and tests are ready. | human | yes — P07, P08 |
+| P08-1 | **Aave v3 on Base prices WETH from the SVR ETH/USD feed** (`WETH_ORACLE = 0x9dA00D23465282005DB222a441a663eE7B9dfCc8`, the `eth-usd-svr` secondary proxy), not the standard feed P07 calibrates on. P08 handles it by using the source in force in each window (AaveOracle `AssetSourceUpdated` history). Undecided: which feed the protocol's own oracle model (P24) should mirror. If update timing differs between the two, the liquidation calibration and the oracle calibration describe different oracles. Decide before P24. | human | at P24 |
 | P04-1 | Three threat-register rows have no test yet: `AuctionCallbackActive` on `buy`/`check` (T-14 → P33), a `redeem` called from inside a buyer callback (T-01/T-14 → P16/P33, same gap as P02-4), and the oracle gas-starvation branch (T-03 → P12). Each is marked TBD in `docs/threat-model.md` with its prompt. | Claude | at P12/P16/P33 |
 | P02-4 | No vector exercises `redeem`'s `AuctionCallbackActive` branch (D-27, §6.7.2): it needs a deployment-B buyer callback that calls `redeem`, which the recorder cannot drive. Add it as a Foundry test at P16/P33 and as a model test at P22. | Claude | at P16/P33 |
 | P02-3 | The vector reference implementation is throwaway (scratchpad). Vectors are validated independently from P10 (Foundry) and P22 (Python model); a vector that disagrees with both implementations is a spec question for `/spec-change`. | Claude | at P10/P22 |
@@ -381,5 +437,6 @@ constrain data collection and calibration. Each is checked at its target prompt 
 | 6 | ~~Create the GitHub repository and connect it~~ | Done: `git@github.com:N3BCKN/bagehot`, `main` tracking `origin/main`. |
 | 7 | ~~Resolve the Actions billing block~~ | Done: repository made public, Actions now free and unlimited. See P01-6. |
 | 8 | ~~Record the run URL and close P01~~ | Done: run [39670041216](https://github.com/N3BCKN/bagehot/actions/runs/39670041216) is green. |
+| 11 | Make `BASE_ARCHIVE_RPC` visible to `just` | `just oracle --verify-only` still reports it unset. The dotenv file must sit at the repo root and contain the line `BASE_ARCHIVE_RPC=<url>` — no `export`, no spaces around `=`, not commented out. A check that prints a count, not the URL: `grep -c '^BASE_ARCHIVE_RPC=.'` on that file should print 1. |
 | 10 | Merge PR [#1](https://github.com/N3BCKN/bagehot/pull/1) | Claude has not merged it — merging to `main` is yours to approve. The branch is `ci/p01-verify`. |
 | 9 | ~~`gh auth login`~~ | Done: logged in as `N3BCKN`, scopes `repo`, `read:org`, `gist`, `admin:public_key`. Claude can now read run status and logs for this private repository. |
