@@ -1,0 +1,546 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.28;
+
+import {IOracleAdapter} from "../interfaces/IOracleAdapter.sol";
+import {ISortKeySource} from "../interfaces/ISortKeySource.sol";
+import {ISortedPositions} from "../interfaces/ISortedPositions.sol";
+import {IStableToken} from "../interfaces/IStableToken.sol";
+import {IAuctionHouseViews, IDeficitLedgerViews} from "../interfaces/ISystemViews.sol";
+import {
+    AlreadySettled,
+    InsufficientBalance,
+    InvalidParameter,
+    NotSettled,
+    NotTriggered,
+    PriceUnusable,
+    SystemSettled,
+    SystemShutdown,
+    Unauthorized,
+    ZeroAmount
+} from "../lib/Errors.sol";
+import {Rounding} from "../lib/Rounding.sol";
+import {WiredBase} from "../lib/Wired.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
+
+/// @title VaultManager (part I: positions)
+/// @notice Holds every position's WETH collateral and gas reserve and mints the stablecoin against
+///         it (docs/spec.md §4.2, §5.1). P14 implements positions — open, add / withdraw
+///         collateral, borrow, repay, close — the shutdown hooks and the views. Interest accrual is
+///         the internal hook `_accrue()`, empty until P15 (the index stays at RAY); redistribution
+///         and liquidation arrive in P20, redemption in P16.
+/// @dev State of §4.2 that P15/P20 write (`index`, `lastAccrual`, the accumulators, snapshots and
+///      pending buckets) is declared now because P14's code already reads it, at its initial value;
+///      the redistribution error carries arrive with their writer at P20.
+///      Every operation follows the spec's order: checks (in pseudocode order), fetch price where
+///      required (§7), accrue, apply pending, act, update stake, reinsert, token transfers, events.
+///      One transient lock guards every state-changing external function (§2.5, §5.10).
+///      Every ratio decision is an exact cross-multiplication (§2.2); divisions use `Rounding` with
+///      the direction of the rounding table (§8).
+contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
+    using SafeERC20 for IERC20;
+
+    // ------------------------------------------------------------------ types, errors, events
+
+    enum Status {
+        None,
+        Active,
+        ClosedByOwner,
+        ClosedByRedemption,
+        ClosedByLiquidation,
+        ClosedByShutdown
+    }
+
+    struct Position {
+        address owner;
+        uint256 coll;
+        uint256 normDebt;
+        uint256 stake;
+        uint256 snapLColl;
+        uint256 snapLDebt;
+        Status status;
+    }
+
+    error NotOwner();
+    error PositionNotActive();
+    error DebtBelowMinimum();
+    error IcrBelowMcr();
+    error InsufficientCollateral();
+    error RepayExceedsMaximum();
+    error CollateralTooLarge();
+
+    event PositionOpened(uint256 indexed id, address indexed owner, uint256 debtMinted);
+    event PositionUpdated(
+        uint256 indexed id,
+        uint256 coll,
+        uint256 normDebt,
+        uint256 stake,
+        uint256 snapLColl,
+        uint256 snapLDebt,
+        uint8 status,
+        uint8 op
+    );
+    event RewardsApplied(uint256 indexed id, uint256 collReward, uint256 normReward);
+    event CollateralAdded(uint256 indexed id, address indexed from, uint256 amount);
+    event CollateralWithdrawn(uint256 indexed id, uint256 amount);
+    event Borrowed(uint256 indexed id, uint256 amount, uint256 normDelta);
+    event Repaid(uint256 indexed id, address indexed from, uint256 amount, uint256 normDelta);
+    event PositionClosed(
+        uint256 indexed id, uint256 debtBurned, uint256 collReturned, uint256 gasReserveReturned
+    );
+    event GasReserveReclaimed(uint256 indexed id, address indexed owner, uint256 amount);
+    event VaultShutdown(uint256 index);
+    event VaultSettled(uint256 collToClaimPool, uint256 activePositions);
+
+    // ------------------------------------------------------------------ constants
+
+    uint256 internal constant WAD = 1e18;
+    uint256 internal constant RAY = 1e27;
+    uint256 internal constant BPS = 10_000;
+    /// @notice Precision of the redistribution accumulators (§2.1).
+    uint256 public constant DECIMAL_PRECISION = 1e18;
+    /// @notice Display precision of the `nicr` view only (§2.1).
+    uint256 public constant NICR_PRECISION = 1e20;
+    /// @notice A position's stored collateral never exceeds this (§6.3.1, `CollateralTooLarge`).
+    uint256 public constant COLL_CAP = type(uint128).max;
+    /// @notice Ranges of spec §3.1 / §3.4 checked by the constructor.
+    uint256 public constant MAX_MCR = 2 * WAD;
+    uint256 public constant MIN_MIN_DEBT = 1e18;
+    uint256 public constant MAX_RATE_PER_SECOND = 21_979_553_151_239_153_028; // ANNUAL_RATE = 1.0
+
+    uint8 internal constant OP_OPEN = 1;
+    uint8 internal constant OP_ADD_COLLATERAL = 2;
+    uint8 internal constant OP_WITHDRAW_COLLATERAL = 3;
+    uint8 internal constant OP_BORROW = 4;
+    uint8 internal constant OP_REPAY = 5;
+    uint8 internal constant OP_CLOSE = 6;
+
+    // ------------------------------------------------------------------ immutables
+
+    IERC20 public immutable WETH;
+    IStableToken public immutable token;
+    IOracleAdapter public immutable oracle;
+    uint256 public immutable MCR;
+    uint256 public immutable MIN_DEBT;
+    uint256 public immutable GAS_RESERVE;
+    uint256 public immutable RATE_PER_SECOND;
+    uint256 public immutable POOL_SHARE_BPS;
+
+    // ------------------------------------------------------------------ storage (§4.2)
+
+    mapping(uint256 => Position) internal _positions;
+    uint256 public nextId = 1;
+    uint256 public activeCount;
+    uint256 public index = RAY;
+    uint256 public lastAccrual;
+    uint256 public totalNormDebt;
+    uint256 public totalCollateral;
+    uint256 public totalStakes;
+    uint256 public totalStakesSnapshot;
+    uint256 public totalCollateralSnapshot;
+    uint256 public LColl;
+    uint256 public LDebt;
+    uint256 public pendingColl;
+    uint256 public pendingNormDebt;
+    bool public shutdown;
+    bool public settled;
+
+    // wired (§4.2)
+    ISortedPositions public sorted;
+    address public strategy;
+    address public stabilityPool; // A: = strategy; B: address(0)
+    address public redemptionModule;
+    address public deficitLedger;
+    address public shutdownModule;
+
+    constructor(
+        address weth_,
+        address token_,
+        address oracle_,
+        uint256 mcr,
+        uint256 minDebt,
+        uint256 gasReserve,
+        uint256 ratePerSecond,
+        uint256 poolShareBps
+    ) {
+        if (weth_ == address(0)) revert InvalidParameter(0);
+        if (token_ == address(0)) revert InvalidParameter(1);
+        if (oracle_ == address(0)) revert InvalidParameter(2);
+        if (mcr <= WAD || mcr > MAX_MCR) revert InvalidParameter(3);
+        if (minDebt < MIN_MIN_DEBT) revert InvalidParameter(4);
+        if (gasReserve == 0) revert InvalidParameter(5);
+        if (ratePerSecond > MAX_RATE_PER_SECOND) revert InvalidParameter(6);
+        if (poolShareBps > BPS) revert InvalidParameter(7);
+        WETH = IERC20(weth_);
+        token = IStableToken(token_);
+        oracle = IOracleAdapter(oracle_);
+        MCR = mcr;
+        MIN_DEBT = minDebt;
+        GAS_RESERVE = gasReserve;
+        RATE_PER_SECOND = ratePerSecond;
+        POOL_SHARE_BPS = poolShareBps;
+        lastAccrual = block.timestamp;
+    }
+
+    /// @notice One-shot wiring (§3.4). `stabilityPool` is the strategy in deployment A and
+    ///         `address(0)` in B, where `POOL_SHARE_BPS` must be 0 (§3.3 constraint 3).
+    function wire(
+        address sorted_,
+        address strategy_,
+        address stabilityPool_,
+        address redemptionModule_,
+        address deficitLedger_,
+        address shutdownModule_
+    ) external onlyWiring {
+        _requireNonZero(sorted_, 0);
+        _requireNonZero(strategy_, 1);
+        if (stabilityPool_ != address(0) && stabilityPool_ != strategy_) revert InvalidParameter(2);
+        if (stabilityPool_ == address(0) && POOL_SHARE_BPS != 0) revert InvalidParameter(2);
+        _requireNonZero(redemptionModule_, 3);
+        _requireNonZero(deficitLedger_, 4);
+        _requireNonZero(shutdownModule_, 5);
+        sorted = ISortedPositions(sorted_);
+        strategy = strategy_;
+        stabilityPool = stabilityPool_;
+        redemptionModule = redemptionModule_;
+        deficitLedger = deficitLedger_;
+        shutdownModule = shutdownModule_;
+        address[] memory addresses = new address[](6);
+        (addresses[0], addresses[1], addresses[2]) = (sorted_, strategy_, stabilityPool_);
+        (addresses[3], addresses[4], addresses[5]) = (redemptionModule_, deficitLedger_, shutdownModule_);
+        _markWired(addresses);
+    }
+
+    // ------------------------------------------------------------------ positions (§5.1.1–5.1.6)
+
+    /// @notice Opens a position for the caller: `coll` WETH plus `GAS_RESERVE` in, `debt` minted out.
+    ///         Anyone; normal mode; price required (§5.1.1).
+    /// @dev rounding: normalised debt R2 (up); debt R1 (up).
+    function openPosition(uint256 coll, uint256 debt, uint256 upperHint, uint256 lowerHint)
+        external
+        whenWired
+        nonReentrant
+        returns (uint256 id)
+    {
+        if (shutdown) revert SystemShutdown();
+        if (debt < MIN_DEBT) revert DebtBelowMinimum();
+        if (coll > COLL_CAP) revert CollateralTooLarge();
+        uint256 price = _fetchRequiredPrice();
+        _accrue();
+        uint256 n = Rounding.mulDivUp(debt, RAY, index);
+        if (coll * price < MCR * _debtOf(n)) revert IcrBelowMcr();
+        id = nextId;
+        nextId = id + 1;
+        uint256 stake = _computeStake(coll);
+        _positions[id] = Position(msg.sender, coll, n, stake, LColl, LDebt, Status.Active);
+        totalStakes += stake;
+        totalCollateral += coll;
+        totalNormDebt += n;
+        activeCount += 1;
+        sorted.insert(id, upperHint, lowerHint);
+        WETH.safeTransferFrom(msg.sender, address(this), coll + GAS_RESERVE);
+        token.mint(msg.sender, debt);
+        emit PositionOpened(id, msg.sender, debt);
+        _emitUpdated(id, OP_OPEN);
+    }
+
+    /// @notice Adds collateral to any position, paid by the caller. Anyone; normal or window mode;
+    ///         no price (§5.1.2, I9).
+    function addCollateral(uint256 id, uint256 amount, uint256 upperHint, uint256 lowerHint)
+        external
+        whenWired
+        nonReentrant
+    {
+        if (settled) revert SystemSettled();
+        if (amount == 0) revert ZeroAmount();
+        Position storage p = _positions[id];
+        if (p.status != Status.Active) revert PositionNotActive();
+        _accrue();
+        _applyPending(id);
+        if (p.coll + amount > COLL_CAP) revert CollateralTooLarge();
+        p.coll += amount;
+        totalCollateral += amount;
+        _updateStake(id);
+        sorted.reinsert(id, upperHint, lowerHint);
+        WETH.safeTransferFrom(msg.sender, address(this), amount);
+        emit CollateralAdded(id, msg.sender, amount);
+        _emitUpdated(id, OP_ADD_COLLATERAL);
+    }
+
+    /// @notice Withdraws collateral to the owner, keeping ICR ≥ MCR. Owner; normal mode; price
+    ///         required (§5.1.3).
+    function withdrawCollateral(uint256 id, uint256 amount, uint256 upperHint, uint256 lowerHint)
+        external
+        whenWired
+        nonReentrant
+    {
+        if (shutdown) revert SystemShutdown();
+        if (amount == 0) revert ZeroAmount();
+        Position storage p = _positions[id];
+        if (p.status != Status.Active) revert PositionNotActive();
+        if (msg.sender != p.owner) revert NotOwner();
+        uint256 price = _fetchRequiredPrice();
+        _accrue();
+        _applyPending(id);
+        if (amount > p.coll) revert InsufficientCollateral();
+        if ((p.coll - amount) * price < MCR * _debtOf(p.normDebt)) revert IcrBelowMcr();
+        p.coll -= amount;
+        totalCollateral -= amount;
+        _updateStake(id);
+        sorted.reinsert(id, upperHint, lowerHint);
+        WETH.safeTransfer(p.owner, amount);
+        emit CollateralWithdrawn(id, amount);
+        _emitUpdated(id, OP_WITHDRAW_COLLATERAL);
+    }
+
+    /// @notice Mints `amount` more debt to the owner, keeping ICR ≥ MCR. Owner; normal mode; price
+    ///         required (§5.1.4).
+    /// @dev rounding: normalised debt added R2 (up).
+    function borrow(uint256 id, uint256 amount, uint256 upperHint, uint256 lowerHint)
+        external
+        whenWired
+        nonReentrant
+    {
+        if (shutdown) revert SystemShutdown();
+        if (amount == 0) revert ZeroAmount();
+        Position storage p = _positions[id];
+        if (p.status != Status.Active) revert PositionNotActive();
+        if (msg.sender != p.owner) revert NotOwner();
+        uint256 price = _fetchRequiredPrice();
+        _accrue();
+        _applyPending(id);
+        uint256 dn = Rounding.mulDivUp(amount, RAY, index);
+        if (p.coll * price < MCR * _debtOf(p.normDebt + dn)) revert IcrBelowMcr();
+        p.normDebt += dn;
+        totalNormDebt += dn;
+        _updateStake(id);
+        sorted.reinsert(id, upperHint, lowerHint);
+        token.mint(p.owner, amount);
+        emit Borrowed(id, amount, dn);
+        _emitUpdated(id, OP_BORROW);
+    }
+
+    /// @notice Repays part of any position's debt from the caller's balance, never below
+    ///         `MIN_DEBT` (full repayment is `close`). Anyone; normal or window mode; no price (§5.1.5).
+    /// @dev rounding: normalised debt removed R3 (down) — may be 0 for a tiny amount, which favours
+    ///      the protocol. `amount ≤ debt − MIN_DEBT` keeps `debtOf(normDebt − dn) ≥ MIN_DEBT`.
+    function repay(uint256 id, uint256 amount, uint256 upperHint, uint256 lowerHint)
+        external
+        whenWired
+        nonReentrant
+    {
+        if (settled) revert SystemSettled();
+        if (amount == 0) revert ZeroAmount();
+        Position storage p = _positions[id];
+        if (p.status != Status.Active) revert PositionNotActive();
+        _accrue();
+        _applyPending(id);
+        // no underflow: an active position's debt is ≥ MIN_DEBT
+        if (amount > _debtOf(p.normDebt) - MIN_DEBT) revert RepayExceedsMaximum();
+        if (token.balanceOf(msg.sender) < amount) revert InsufficientBalance();
+        uint256 dn = Rounding.mulDivDown(amount, RAY, index);
+        p.normDebt -= dn;
+        totalNormDebt -= dn;
+        _updateStake(id);
+        sorted.reinsert(id, upperHint, lowerHint);
+        token.burnFrom(msg.sender, amount);
+        emit Repaid(id, msg.sender, amount, dn);
+        _emitUpdated(id, OP_REPAY);
+    }
+
+    /// @notice Repays the whole debt from the owner's balance and returns collateral plus gas
+    ///         reserve. Owner; normal or window mode; no price; allowed at any ICR (§5.1.6).
+    /// @dev rounding: debt burned R1 (up) — exactly `debtOf(normDebt)`, so no dust can remain.
+    function close(uint256 id) external whenWired nonReentrant {
+        if (settled) revert SystemSettled();
+        Position storage p = _positions[id];
+        if (p.status != Status.Active) revert PositionNotActive();
+        if (msg.sender != p.owner) revert NotOwner();
+        _accrue();
+        _applyPending(id);
+        uint256 debt = _debtOf(p.normDebt);
+        if (token.balanceOf(msg.sender) < debt) revert InsufficientBalance();
+        sorted.remove(id);
+        totalStakes -= p.stake;
+        totalCollateral -= p.coll;
+        totalNormDebt -= p.normDebt;
+        activeCount -= 1;
+        uint256 coll = p.coll;
+        p.coll = 0;
+        p.normDebt = 0;
+        p.stake = 0;
+        p.status = Status.ClosedByOwner;
+        token.burnFrom(msg.sender, debt);
+        WETH.safeTransfer(msg.sender, coll + GAS_RESERVE);
+        emit PositionClosed(id, debt, coll, GAS_RESERVE);
+        _emitUpdated(id, OP_CLOSE);
+    }
+
+    /// @notice Returns the gas reserve of a position still active at settlement. Owner; settled
+    ///         mode (§5.1.10).
+    function reclaimGasReserve(uint256 id) external whenWired nonReentrant {
+        if (!settled) revert NotSettled();
+        Position storage p = _positions[id];
+        if (p.status != Status.Active) revert PositionNotActive();
+        if (msg.sender != p.owner) revert NotOwner();
+        p.status = Status.ClosedByShutdown;
+        activeCount -= 1;
+        WETH.safeTransfer(p.owner, GAS_RESERVE);
+        emit GasReserveReclaimed(id, p.owner, GAS_RESERVE);
+        _emitUpdated(id, OP_CLOSE);
+    }
+
+    // ------------------------------------------------------------------ hooks (§5.1.11)
+
+    /// @notice Freezes the vault at the shutdown trigger. ShutdownModule only; it accrued just before.
+    function onShutdown() external whenWired nonReentrant {
+        if (msg.sender != shutdownModule) revert Unauthorized();
+        if (shutdown) revert SystemShutdown();
+        shutdown = true;
+        emit VaultShutdown(index);
+    }
+
+    /// @notice Hands all collateral to the claim pool at settlement. ShutdownModule only. Positions
+    ///         keep their stored fields but are void; only `reclaimGasReserve` remains.
+    function onSettlement() external whenWired nonReentrant returns (uint256 coll) {
+        if (msg.sender != shutdownModule) revert Unauthorized();
+        if (!shutdown) revert NotTriggered();
+        if (settled) revert AlreadySettled();
+        coll = totalCollateral + pendingColl;
+        totalCollateral = 0;
+        pendingColl = 0;
+        settled = true;
+        WETH.safeTransfer(shutdownModule, coll);
+        emit VaultSettled(coll, activeCount);
+    }
+
+    // ------------------------------------------------------------------ views (§5.1.12)
+
+    function positions(uint256 id) external view returns (Position memory) {
+        return _positions[id];
+    }
+
+    /// @notice The index accrued to now, without writing. P14: no accrual yet, so the stored index.
+    function currentIndex() public view returns (uint256) {
+        return index;
+    }
+
+    /// @notice Effective collateral and normalised debt, pending redistribution included (§2.4).
+    function effective(uint256 id) public view returns (uint256 effColl, uint256 effNorm) {
+        Position storage p = _positions[id];
+        effColl = p.coll + _pendingCollOf(p);
+        effNorm = p.normDebt + _pendingNormOf(p);
+    }
+
+    /// @notice The key SortedPositions orders by (§6.3.1).
+    function sortKey(uint256 id) external view returns (uint256 effColl, uint256 effNorm) {
+        return effective(id);
+    }
+
+    /// @notice Effective debt at the current index. rounding: R1 (up).
+    function debtOf(uint256 id) public view returns (uint256) {
+        (, uint256 effNorm) = effective(id);
+        return Rounding.mulDivUp(effNorm, currentIndex(), RAY);
+    }
+
+    /// @notice Display only (R30, down); max when the debt is 0.
+    function icr(uint256 id, uint256 price) external view returns (uint256) {
+        uint256 debt = debtOf(id);
+        if (debt == 0) return type(uint256).max;
+        (uint256 effColl,) = effective(id);
+        return Rounding.mulDivDown(effColl, price, debt);
+    }
+
+    /// @notice Display only (R30, down).
+    function nicr(uint256 id) external view returns (uint256) {
+        (uint256 effColl, uint256 effNorm) = effective(id);
+        return Rounding.mulDivDown(effColl, NICR_PRECISION, effNorm);
+    }
+
+    /// @notice All collateral that would join the claim pool at settlement (§5.1.12).
+    function systemColl() public view returns (uint256 c) {
+        c = totalCollateral + pendingColl + IDeficitLedgerViews(deficitLedger).recoveredColl();
+        if (stabilityPool == address(0)) c += IAuctionHouseViews(strategy).totalLot(); // B
+    }
+
+    /// @notice All debt the stablecoin supply stands for (§5.1.12). rounding: R28 (up).
+    function systemDebt() public view returns (uint256) {
+        IDeficitLedgerViews ledger = IDeficitLedgerViews(deficitLedger);
+        return Rounding.mulDivUp(totalNormDebt, currentIndex(), RAY) + ledger.auctionDebt() + ledger.deficit();
+    }
+
+    /// @notice Display only (R30, down); max when the system has no debt.
+    function tcr(uint256 price) external view returns (uint256) {
+        uint256 d = systemDebt();
+        if (d == 0) return type(uint256).max;
+        return Rounding.mulDivDown(systemColl(), price, d);
+    }
+
+    /// @notice Active and `effColl · price < MCR · debtOf(id)` (exact cross-multiplication).
+    function isLiquidatable(uint256 id, uint256 price) external view returns (bool) {
+        if (_positions[id].status != Status.Active) return false;
+        (uint256 effColl,) = effective(id);
+        return effColl * price < MCR * debtOf(id);
+    }
+
+    // ------------------------------------------------------------------ internal
+
+    function _fetchRequiredPrice() internal returns (uint256 price) {
+        bool usable;
+        (price, usable) = oracle.fetchPrice();
+        if (!usable) revert PriceUnusable();
+    }
+
+    /// @dev Interest accrual (§6.2), implemented at P15. Until then the index stays at RAY.
+    function _accrue() internal {}
+
+    /// @dev rounding: R1 (up).
+    function _debtOf(uint256 n) internal view returns (uint256) {
+        return Rounding.mulDivUp(n, index, RAY);
+    }
+
+    /// @dev §2.4, rounding R8 (down).
+    function _pendingCollOf(Position storage p) internal view returns (uint256) {
+        return Rounding.mulDivDown(p.stake, LColl - p.snapLColl, DECIMAL_PRECISION);
+    }
+
+    function _pendingNormOf(Position storage p) internal view returns (uint256) {
+        return Rounding.mulDivDown(p.stake, LDebt - p.snapLDebt, DECIMAL_PRECISION);
+    }
+
+    /// @dev §6.5.3. With no redistribution yet (P20) the accumulators are 0 and nothing is pending.
+    function _applyPending(uint256 id) internal {
+        Position storage p = _positions[id];
+        uint256 pc = _pendingCollOf(p);
+        uint256 pn = _pendingNormOf(p);
+        if (pc > 0 || pn > 0) {
+            p.coll += pc;
+            p.normDebt += pn;
+            pendingColl -= pc;
+            pendingNormDebt -= pn;
+            totalCollateral += pc; // totalNormDebt unchanged: pending debt was already in it
+            emit RewardsApplied(id, pc, pn);
+        }
+        p.snapLColl = LColl;
+        p.snapLDebt = LDebt;
+    }
+
+    /// @dev §6.5.4, rounding R10 (down). Stake = coll until the first liquidation sets snapshots.
+    function _computeStake(uint256 coll) internal view returns (uint256) {
+        if (totalStakesSnapshot == 0 || totalCollateralSnapshot == 0) return coll;
+        return Rounding.mulDivDown(coll, totalStakesSnapshot, totalCollateralSnapshot);
+    }
+
+    function _updateStake(uint256 id) internal {
+        Position storage p = _positions[id];
+        uint256 newStake = _computeStake(p.coll);
+        totalStakes = totalStakes - p.stake + newStake;
+        p.stake = newStake;
+    }
+
+    function _emitUpdated(uint256 id, uint8 op) internal {
+        Position storage p = _positions[id];
+        emit PositionUpdated(id, p.coll, p.normDebt, p.stake, p.snapLColl, p.snapLDebt, uint8(p.status), op);
+    }
+}

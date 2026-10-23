@@ -11,3 +11,25 @@ error InvalidParameter(uint8 index);
 
 /// @notice The caller is not in the permission matrix for this function (§9).
 error Unauthorized();
+
+/// @notice A required price is not usable (§7).
+error PriceUnusable();
+
+/// @notice The operation is forbidden after the shutdown trigger (§11.2).
+error SystemShutdown();
+
+/// @notice The operation is forbidden after settlement (§11.2).
+error SystemSettled();
+
+/// @notice Settlement is required first (§11.2).
+error NotSettled();
+
+/// @notice An amount argument is 0 (§11.2).
+error ZeroAmount();
+
+/// @notice The caller's stablecoin balance is below the amount to burn or move (§2.5).
+error InsufficientBalance();
+
+/// @notice Settlement preconditions (§11.2): no shutdown triggered yet / already settled.
+error NotTriggered();
+error AlreadySettled();

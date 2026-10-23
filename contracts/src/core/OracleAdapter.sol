@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {AggregatorV3Interface} from "../interfaces/AggregatorV3Interface.sol";
+import {IOracleAdapter} from "../interfaces/IOracleAdapter.sol";
 import {InvalidParameter} from "../lib/Errors.sol";
 import {Rounding} from "../lib/Rounding.sol";
 
@@ -17,7 +18,7 @@ import {Rounding} from "../lib/Rounding.sol";
 ///      immutable feeds, each with gas `ORACLE_GAS`. The single assembly block is the feed read,
 ///      approved by ADR-0029. Nothing else in this contract is privileged or mutable except the
 ///      two informational fields below.
-contract OracleAdapter {
+contract OracleAdapter is IOracleAdapter {
     /// @notice Decision reasons; numeric values are part of the ABI (spec §11.1). `OK` = 0.
     enum Reason {
         OK,

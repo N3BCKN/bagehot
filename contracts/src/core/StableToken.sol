@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
+import {IStableToken} from "../interfaces/IStableToken.sol";
 import {Unauthorized} from "../lib/Errors.sol";
 import {WiredBase} from "../lib/Wired.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
@@ -14,7 +15,7 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 /// @dev The ERC-20 surface (`transfer`, `approve`, `transferFrom`, views) does not require `wired`
 ///      (§2.5). The token makes no external call, so it needs no reentrancy lock. Testnet
 ///      deployments carry `TEST` in name and symbol; the deploy script (P18) sets them.
-contract StableToken is ERC20, WiredBase {
+contract StableToken is ERC20, WiredBase, IStableToken {
     /// @notice Total supply never exceeds this (§2.2 supply cap).
     uint256 public constant SUPPLY_CAP = type(uint128).max;
 

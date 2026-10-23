@@ -18,7 +18,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | P11 | StableToken, wiring pattern and mocks | done | 2026-10-23 | `WiredBase` (src/lib/Wired.sol), shared `Errors.sol`, `StableToken` per spec §5.9; `MockAggregator`, `MockSequencerFeed`, `ReplayAggregator`; 43 new tests, 100% line/branch coverage on core; every custom error triggered. security-reviewer: no code issue; spec-level findings in CHG-003 (proposed) |
 | P12 | OracleAdapter | done | 2026-10-23 | `OracleAdapter` per spec §6.10 with the ADR-0029 fixed-buffer read; Python mirror; 100% line/branch coverage; 20 vectors on both sides; independent-reference fuzz; split gas-griefing sweeps; fork tests on Base's real feeds and real proxy. security-reviewer signed off; its condition (CHG-004: post-failure gas floor `ceil(2·ORACLE_GAS/63)`, cap `ORACLE_GAS`, start 3,175) is approved and applied (ADR-0030) |
 | P13 | SortedPositions and hint helpers | done | 2026-10-23 | `SortedPositions` per spec §6.3; `HintHelpers` (view-only); Python mirror `model/protocol/sorted_list.py`; 100% line/branch coverage; insert gas with exact hints 135,254 at list sizes 10/100/1,000 (O(1)); I13 campaign green (30 seeds) after CHG-005 / ADR-0032 corrected I13's tie clause |
-| P14 | VaultManager I: positions and borrowing | todo | | |
+| P14 | VaultManager I: positions, borrowing, minimum debt, gas reserve | done | 2026-10-23 | Positions, shutdown hooks, views and stakes/pending per spec §5.1 and §6.5.3–4; interest is a hook until P15; Python mirror `model/protocol/vault.py`; 100% coverage; vector position prefixes (23 vectors, 61 steps) on both sides; parity checklist in the P14 log |
 | P15 | VaultManager II: interest accrual and routing | todo | | |
 | P16 | RedemptionModule | todo | | |
 | P17 | Invariant harness and Medusa | todo | | |
@@ -262,6 +262,66 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
   3.12). Hooks are mode 644 — see Human actions.
 
 **Next.** P01, continuous integration.
+
+### 2026-10-23 · P14 · VaultManager I: positions, borrowing, minimum debt, gas reserve
+
+**Changed.**
+- New `src/core/VaultManager.sol`, transcribing spec §5.1.1–§5.1.6 line by line: open, addCollateral, withdrawCollateral, borrow, repay, close.
+- Also from the spec:
+  - `reclaimGasReserve` (§5.1.10) and the shutdown hooks `onShutdown`/`onSettlement` (§5.1.11);
+  - the views of §5.1.12: `currentIndex`, `effective`, `sortKey`, `debtOf`, `icr`, `nicr`, `systemColl`, `systemDebt`, `tcr`, `isLiquidatable`;
+  - §6.5.3 apply-pending and §6.5.4 stakes, implemented exactly (human's choice at the plan gate).
+- Interest is the empty internal hook `_accrue()` until P15; the index stays at RAY and `currentIndex()` returns it.
+- Shared errors moved to `src/lib/Errors.sol`. New interfaces `IOracleAdapter`, `IStableToken` (now `is IERC20`) and `ISystemViews`. StableToken and OracleAdapter declare their interfaces.
+- New Python mirror `model/protocol/vault.py`: the same checks in the same order, the same error names, atomic like a transaction.
+
+**Decisions (human, at the plan gate).**
+- Stakes and pending rewards exact, not stubbed.
+- The shutdown hooks and `reclaimGasReserve` included, so `SystemShutdown`, `SystemSettled` and `NotSettled` can be triggered.
+- The model written now rather than at P22.
+- Spec over prompt on views: `effective` and `systemDebt` replace the prompt's `collOf` and `totalDebt()`.
+- The redistribution error carries (`lastErrorColl`/`lastErrorDebt`) are left out until P20 writes them. There's no proxy, so storage layout needn't be fixed in advance.
+
+**Tests.** 100% line and branch coverage on `VaultManager.sol`.
+- Unit tests on every function and every error, in pseudocode order, with boundaries: ICR exactly at MCR, `MIN_DEBT`, the maximum repay, the 2^128 − 1 collateral cap.
+- Propagated `StaleHint` and `SupplyCapExceeded`.
+- I9 (no oracle read at any ICR); I12 (sequencer down, stale, out of bounds, failed call).
+- 1,024 random operation sequences checking I1, exact I2 at index RAY, the supporting identities and exact list order after every step.
+- Reentrancy: a hostile WETH and token call back into each of the nine mutators, which all revert on the lock.
+- The non-zero pending and stake paths, through a test harness that sets the redistribution state P20 will write.
+- Fuzzed: `close` always works after any repays (the prompt's dust pitfall, which the spec's rules make impossible).
+- **Vectors:** the leading position steps of all 23 system vectors (61 steps), with ids and recorded drift state, on both sides. **Full vector replay** needs P15 (interest), P16, P19–P21 and the P23 harness.
+
+**Review.** `security-reviewer`: no critical or high finding; nothing under "unbacked mint", "frees collateral" or "kills liquidations". Fixed:
+- **V-1, test strength.** No test ran at a non-round index, so wrong rounding directions R1, R2 and R3 were invisible, and R8 was never exercised with a remainder.
+  - New `VaultManagerRoundingTest`, run at index ≈ 1.2346 RAY through `VaultManagerHarness.setIndex`, with mirrors in pytest.
+  - **Mutation check:** eight mutations now fail the suite where all eight used to pass. They are R2 on open, R2 on borrow, R3, R1, R8, settlement without `pendingColl`, close without apply-pending, and borrow without update-stake.
+- **V-2.** The model now uses checked arithmetic and raises `Overflow` where the contract panics `0x11`, not a spec error. Tested on both sides.
+- **V-3.** Settlement with pending collateral is tested.
+- **V-4.** Every operation's apply-pending and update-stake is tested, with a 4 : 5 snapshot ratio so a skipped stake update would show.
+- **V-5.** The hooks check the caller before state, tested where the order matters.
+- **V-8.** A NatSpec line repaired.
+
+V-6 is the human's re-protect of line 10. V-7 notes view edge cases that are consistent with the spec.
+
+**Parity checklist, Solidity ↔ `model/protocol/vault.py`** (P22 extends the model; tick in P23's differential test):
+
+| Item | Contract | Model | Checked by |
+|---|---|---|---|
+| open / add / withdraw / borrow / repay / close: check order and error names | ✓ | ✓ | unit tests on both sides (`test_error_order_matches_the_contract`) |
+| rounding R1 / R2 / R3 / R8 / R10 | ✓ | ✓ | vector prefixes (drift state), pending test |
+| apply pending, stakes, snapshot rule | ✓ | ✓ | `VaultManagerPendingTest`, `test_apply_pending_and_stake_after_a_snapshot` |
+| events (`PositionUpdated` with all 8 fields, …) | ✓ | ✓ (tuples) | unit tests; exact comparison at P23 |
+| shutdown hooks, `reclaimGasReserve` | ✓ | ✓ | unit tests |
+| views `effective`, `sortKey`, `debtOf`, `icr`, `nicr`, `isLiquidatable` | ✓ | ✓ | unit tests |
+| views `systemColl`, `systemDebt`, `tcr` (read ledger and house) | ✓ | **missing**: the model has no ledger or house yet | P22 |
+| atomicity (revert leaves no state) | EVM | ✓ (`_atomic`) | `test_failed_operations_leave_no_trace` |
+| checked arithmetic (Panic 0x11 ↔ `Overflow`) | ✓ | ✓ (`_c`) | `test_overflow_panicsOnAbsurdInputs`, `test_checked_arithmetic_raises_overflow_like_the_contract` |
+| rounding at a non-round index | ✓ | ✓ | `VaultManagerRoundingTest`, `test_rounding_directions_at_a_non_round_index` |
+| `nonReentrant`, `wired`, `Unauthorized` on hooks | ✓ | n/a, or partial (no `wired` flag in the model) | P22 decides whether the model tracks `wired` |
+| interest accrual | P15 | P15 | — |
+
+**Next.** Human: re-protect `docs/invariants.md` (line 10). Then P15.
 
 ### 2026-10-23 · P13 · SortedPositions and hint helpers
 
