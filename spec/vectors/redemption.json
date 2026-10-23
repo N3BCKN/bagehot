@@ -1528,6 +1528,209 @@
           "depositorCount": {}
         }
       }
+    },
+    {
+      "name": "partial_cancelled_below_mcr",
+      "level": "system",
+      "note": "price = MIN_PRICE start value (10 WAD), index 1.2304 after 4.25 years. alice (the tail) sits exactly at MCR with zero slack. An 11-wei redemption would cancel 8 wei of normalised debt (mulDivDown) for 1 wei of collateral, and the remaining debt rounds up, so without the post-check her ICR would end below MCR. The post-check cancels the partial with no state change, nothing is redeemed -> NothingRedeemed. A 1,000-stable redemption of the same position is an ordinary partial: it raises her ICR and goes through (spec 6.7.3, CHG-002)",
+      "inputs": {
+        "variant": "A",
+        "t0": "1000000",
+        "params": {
+          "MCR": "1100000000000000000",
+          "MIN_DEBT": "2000000000000000000000",
+          "GAS_RESERVE": "37500000000000000",
+          "RATE_PER_SECOND": "1547125957863212449",
+          "POOL_SHARE_BPS": "7500",
+          "MAX_HINT_STEPS": "30",
+          "LIQUIDATION_PENALTY": "50000000000000000",
+          "MIN_DEPOSIT": "1000000000000000000",
+          "REDEMPTION_FEE_FLOOR": "5000000000000000",
+          "BETA": "2",
+          "BASE_RATE_DECAY": "999983955055097432543272791",
+          "BUFFER": "1200000000000000000",
+          "CUT": "998845421738030152760841918",
+          "TAIL": "7200",
+          "CUSP": "400000000000000000",
+          "RESET_TIP": "5000000000000000000",
+          "STALENESS": "3600",
+          "GRACE_PERIOD": "3600",
+          "MIN_PRICE": "10000000000000000000",
+          "MAX_PRICE": "1000000000000000000000000",
+          "ORACLE_GAS": "100000",
+          "ORACLE_POST_FAILURE_GAS": "1588",
+          "FEED_DECIMALS": "8",
+          "ORACLE_FAILURE_DURATION": "172800",
+          "CRITICAL_TCR": "1050000000000000000",
+          "DEFICIT_LIMIT_BPS": "500",
+          "REPAYMENT_WINDOW": "604800"
+        },
+        "actors": [
+          "alice",
+          "erin"
+        ],
+        "actorWeth": "1000000000000000000000000000000",
+        "notes": "weth deltas in expected are relative to actorWeth"
+      },
+      "steps": [
+        {
+          "op": "open",
+          "phase": "setup",
+          "t": "1000000",
+          "caller": "erin",
+          "coll": "2000000000000000000000",
+          "debt": "10000000000000000000000",
+          "price": "10000000000000000000",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "result": {
+            "id": "1"
+          }
+        },
+        {
+          "op": "warp",
+          "phase": "setup",
+          "t": "1000000",
+          "dt": "134028000"
+        },
+        {
+          "op": "open",
+          "phase": "setup",
+          "t": "135028000",
+          "caller": "alice",
+          "coll": "6600000000000000000110",
+          "debt": "60000000000000000000999",
+          "price": "10000000000000000000",
+          "upperHint": "1",
+          "lowerHint": "0",
+          "result": {
+            "id": "2"
+          }
+        },
+        {
+          "op": "redeem",
+          "phase": "act",
+          "t": "135028000",
+          "caller": "erin",
+          "amount": "11",
+          "maxIterations": "5",
+          "maxFeeRate": "1000000000000000000",
+          "price": "10000000000000000000",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "revert": "NothingRedeemed"
+        },
+        {
+          "op": "redeem",
+          "phase": "act",
+          "t": "135028000",
+          "caller": "erin",
+          "amount": "1000000000000000000000",
+          "maxIterations": "5",
+          "maxFeeRate": "1000000000000000000",
+          "price": "10000000000000000000",
+          "upperHint": "0",
+          "lowerHint": "0",
+          "result": {
+            "S0": "72304232276499624152415",
+            "decayedBaseRate": "0",
+            "baseRateForFee": "6915224520854368",
+            "feeRate": "11915224520854368",
+            "redeemed": "1000000000000000000000",
+            "collSent": "98808477547914563200",
+            "iterations": "1",
+            "baseRateAfter": "6915224520854368",
+            "trace": [
+              "visit 2: partial redemption d=1000000000000000000000 collToRedeemer=98808477547914563200"
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "vault": {
+          "index": "1230423227649962415141542910",
+          "lastAccrual": "135028000",
+          "totalNormDebt": "57950980340875558756207",
+          "totalCollateral": "8501191522452085436910",
+          "totalStakes": "8501191522452085436910",
+          "totalStakesSnapshot": "0",
+          "totalCollateralSnapshot": "0",
+          "LColl": "0",
+          "LDebt": "0",
+          "lastErrorColl": "0",
+          "lastErrorDebt": "0",
+          "pendingColl": "0",
+          "pendingNormDebt": "0",
+          "activeCount": "2",
+          "sortedOrder": [
+            "1",
+            "2"
+          ]
+        },
+        "positions": {
+          "1": {
+            "owner": "erin",
+            "status": "Active",
+            "coll": "2000000000000000000000",
+            "normDebt": "10000000000000000000000",
+            "stake": "2000000000000000000000",
+            "snapLColl": "0",
+            "snapLDebt": "0",
+            "effColl": "2000000000000000000000",
+            "effNorm": "10000000000000000000000",
+            "debt": "12304232276499624151416"
+          },
+          "2": {
+            "owner": "alice",
+            "status": "Active",
+            "coll": "6501191522452085436910",
+            "normDebt": "47950980340875558756207",
+            "stake": "6501191522452085436910",
+            "snapLColl": "0",
+            "snapLDebt": "0",
+            "effColl": "6501191522452085436910",
+            "effNorm": "47950980340875558756207",
+            "debt": "59000000000000000001001"
+          }
+        },
+        "ledger": {
+          "reserve": "2304232276499624151416",
+          "auctionDebt": "0",
+          "deficit": "0",
+          "recoveredColl": "0"
+        },
+        "redemption": {
+          "baseRate": "6915224520854368",
+          "lastFeeOperationTime": "135028000"
+        },
+        "token": {
+          "totalSupply": "71304232276499624152415",
+          "balances": {
+            "alice": "60000000000000000000999",
+            "erin": "9000000000000000000000",
+            "ledger": "2304232276499624151416"
+          }
+        },
+        "weth": {
+          "alice": "-6600037500000000000110",
+          "erin": "-1901229022452085436800",
+          "vm": "8501266522452085436910"
+        },
+        "pool": {
+          "totalDeposits": "0",
+          "P": "1000000000000000000000000000000000000",
+          "currentScale": "0",
+          "currentEpoch": "0",
+          "S": {},
+          "G": {},
+          "lastCollError": "0",
+          "lastInterestError": "0",
+          "collGainsBalance": "0",
+          "interestGainsBalance": "0",
+          "deposits": {},
+          "depositorCount": {}
+        }
+      }
     }
   ]
 }

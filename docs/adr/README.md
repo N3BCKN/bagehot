@@ -79,9 +79,12 @@ the P03 gate via `/spec-change` CHG-002.
 | [0025](0025-survival-analysis-for-liquidator-latency.md) | Survival analysis for liquidator latency | accepted | P04 |
 | [0026](0026-critical-tcr-redemption-gate.md) | Block redemptions below the critical TCR | accepted | P04 |
 | [0027](0027-cancel-partial-redemption-below-mcr.md) | Cancel a partial redemption that would leave the position below MCR | accepted | P03 / CHG-002 |
+| [0028](0028-document-rpow-error-bound.md) | Document rpow's bracket property and error bound in the specification | proposed | P10 / CHG-001 |
 
 Numbering is continuous and never reused; a later decision takes the next free number, which is
 not a position in the plan. **All 27 were accepted by the human at the P04 gate on 2026-10-23**,
 ADR-0027 with the obligation that P16 lands the targeted test for the 11-wei partial and that it
 passes against the Solidity, not only against the reference generator and the Python model. An
 accepted ADR is never edited; changing one of these decisions means a new ADR that supersedes it.
+ADR-0028 was written after the gate, when CHG-001 was applied, and is `proposed` until the human
+accepts it.

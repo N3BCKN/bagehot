@@ -7,7 +7,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | P00 | Repository bootstrap and toolchain | done | a4e5b1d | `just check` and `just static` green; all toolchains pinned; hooks verified |
 | P01 | Continuous integration | done | c47245f | PR [#1](https://github.com/N3BCKN/bagehot/pull/1), run [39670041216](https://github.com/N3BCKN/bagehot/actions/runs/39670041216) green: 5 jobs pass, `differential (quick)` skipped as designed |
 | P02 | Protocol specification (human gate) | done | a38feab, 6c8f001 | Approved at the gate with one override (D-27, the critical-TCR redemption gate) and nine confirmations; `docs/spec.md` and `spec/vectors/**` protected by the human |
-| P03 | Invariants (human gate) | in progress | | I1–I16 + U1–U4 written; four audit passes, 47 findings all resolved, auditor signs off. Awaiting the human: approve, protect `docs/invariants.md`, and decide CHG-002 |
+| P03 | Invariants (human gate) | done | 2026-10-23 | I1–I16 + U1–U4 approved and protected. CHG-002 (I5's partial-redemption defect) approved and applied to spec §6.7.3 and `redemption.json` (ADR-0027); Solidity at P16 (P04-2) |
 | P04 | ADRs and threat model skeleton | done | 2026-10-23 | 27 ADRs; threat model filled (23 threats, trust assumptions, assets/actors, boundaries). **All 27 accepted by the human at the P04 gate on 2026-10-23**, ADR-0027 with the obligation that P16 lands the targeted test for the 11-wei partial and that it passes against the Solidity. Human action left: add the accepted ADR files to `.claude/protected-paths.txt` |
 | P05 | Preregistration draft | done | | DRAFT: Q1–Q3, H1–H3 with decision rules, primary + 9 secondary metrics defined over a named output schema, risk appetite, S1–S9, parameter grid, analysis plan, exclusions. 14 `TBD-P30` placeholders |
 | P06 | Price data | done | | Coinbase ETH-USD (primary) and Bitstamp ETH/USD (cross-check; Kraken cannot serve history) 1-minute candles 2019-01 → 2026-09; 17,724 requests; re-run sends 0; cards match; 64 tests |
@@ -262,6 +262,28 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
   3.12). Hooks are mode 644 — see Human actions.
 
 **Next.** P01, continuous integration.
+
+### 2026-10-23 · CHG-001 and CHG-002 applied · P03 closed
+
+**Changed.** With `docs/spec.md` and `spec/vectors/**` unlocked by the human, both approved changes
+landed in one step:
+- **CHG-002** — §6.7.3 gains the post-check `(c − out)·price ≥ MCR·debtOf(n − dn)`, which cancels a
+  partial like a stale hint does; it also gains a rules bullet, a §2.2 exact-comparison row,
+  deviation D-28 and an Appendix A row.
+- **`redemption.json`** gains `partial_cancelled_below_mcr`. At the start parameters (index 1.2304)
+  the 11-wei redemption reverts `NothingRedeemed`, then the 1,000-stable redemption raises ICR
+  1.1 → 1.101897.
+- **CHG-001** — §2.3 gains the *Accuracy* paragraph. New ADR-0028 (proposed).
+
+**Re-validation.** The reference generator, with the post-check, regenerated all 12 vector files.
+11 are byte-identical to the committed ones. In `redemption.json` the six existing vectors are
+unchanged and the new vector is the only addition. `/verify` is green.
+
+**Spec-change step 4d.** `just diff-long` and the invariant campaign do not exist yet (P23, P17), so
+they have nothing to run. No experiments have run, so nothing needs re-running.
+
+**Human.** Re-protect `docs/spec.md` and `spec/vectors/**`: un-comment lines 7–8 of
+`.claude/protected-paths.txt`. Review ADR-0028.
 
 ### 2026-10-23 · P11 · StableToken, wiring pattern and mocks
 

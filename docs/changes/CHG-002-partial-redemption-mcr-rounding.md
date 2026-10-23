@@ -1,6 +1,8 @@
 # CHG-002: A tiny partial redemption can leave a boundary position below MCR
 
-- Status: proposed (awaiting human review)
+- Status: **approved 2026-10-23 (option 1, the post-check) and applied** to spec §6.7.3, the
+  reference generator and `redemption.json#partial_cancelled_below_mcr` — ADR-0027. Solidity and
+  its targeted test land at P16 (open issue P04-2); the Python model at P22.
 - Raised: 2026-10-22, P03
 - Affects: `docs/spec.md` §6.7.3 (partial redemption), §3.1 (`MIN_PRICE` range); invariant I5
 

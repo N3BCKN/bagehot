@@ -1,8 +1,10 @@
 # Bagehot protocol specification
 
 Version 1.0-draft (P02). Status: **approved at the P02 human gate** (2026-10-22), with the gate's
-one override (D-27, the critical-TCR gate on redemptions) and its confirmations applied. Awaiting
-protection of this file and `spec/vectors/**`; from then on changes go through `/spec-change`.
+one override (D-27, the critical-TCR gate on redemptions) and its confirmations applied. Protected;
+changes go through `/spec-change`. **Amended by CHG-002 (2026-10-23):** §6.7.3 cancels a partial
+redemption that would leave the position below MCR (ADR-0027, D-28). **Amended by CHG-001
+(2026-10-23):** §2.3 states `rpow`'s bracket property and error bound (documentation only, ADR-0028).
 
 The specification wins over the code: if the Solidity contracts or the Python model disagree with
 this document, they are wrong until a change is approved. Every rule here is written so that two
@@ -118,6 +120,7 @@ Names carry units where ambiguous: `debtWad`, `indexRay`, `priceWad`, `feeRateWa
   | auction below cusp | `price(t) · WAD < CUSP · top` |
   | deficit above limit | `deficit · BPS > DEFICIT_LIMIT_BPS · totalSupply` |
   | sorted-list order | `cA · nB` vs `cB · nA` (§6.3) |
+  | partial redemption keeps the position at or above MCR | `(c − out) · price ≥ MCR · debtOf(n − dn)` (§6.7.3) |
 
   `coll`, `debt` and `price` are the values defined at the point of use (effective collateral
   including pending redistribution, debt rounded up, WAD price). The views `icr()`, `nicr()`,
@@ -154,6 +157,14 @@ Consequence: compounding is not exactly frequency-independent at the last digits
 year and 365 daily accruals of the starting rate differ by 104 RAY units (≈ 10^-25 relative) —
 vector `interest.json#frequency`. The model and the contracts agree bit-for-bit given the same
 sequence of accrual timestamps.
+
+*Accuracy (CHG-001).* For all x and n, `rpow` computed with every product rounded down is ≤ the
+exact x^n / RAY^(n−1) ≤ `rpow` (rounded up): each rounded product is monotone in its arguments.
+The rounded-up result exceeds the exact value by at most n · max(1, exact/RAY) RAY units
+(second-order terms of relative size n/RAY aside) — linear in n, because an early rounding is
+doubled by every later squaring. For a year of interest accrued in one step this is a relative
+error below 4·10^-20. Measured at P10 on 52,000 random inputs (`spec/tools/rpow_error.py`,
+CHG-001); the bound is tight.
 
 ### 2.4 Effective values of a position
 
@@ -1430,6 +1441,7 @@ function redeemCollateral(redeemer, amount, feeRate, price, maxIterations, upper
         if d == 0: break                                  // position at exactly MIN_DEBT
         dn = mulDivDown(d, RAY, index)
         out = mulDivDown(d, WAD − feeRate, price)
+        if (c − out) * price < MCR * debtOf(n − dn): break   // would leave ICR < MCR: partial cancelled, no state change (CHG-002)
         (found, prv, nxt) = sorted.find(c − out, n − dn, cur, cur, upperHint, lowerHint)
         if not found: break                               // stale hint: partial cancelled, no state change
         applyPending(cur)
@@ -1451,6 +1463,13 @@ Rules made explicit:
 - A partial redemption is capped so the position keeps `≥ MIN_DEBT`
   (`debtOf(n − dn) ≥ debt − d ≥ MIN_DEBT`, proof as in §5.1.5). A position at exactly `MIN_DEBT`
   with `remaining < debt` ends the loop.
+- A partial that would leave the position below MCR is cancelled exactly as a stale hint is: no
+  state change, no event, the loop ends (CHG-002, ADR-0027). In exact arithmetic a partial always
+  raises ICR — the bundle removed is worth `d·(1 − feeRate)` against `d` of debt — but `dn` rounds
+  down and `debtOf` rounds up, so up to `index/RAY + 1` wei less debt value can be cancelled than
+  collateral taken, and a position with zero head-room above MCR would end below it. The window
+  `price/WAD ≲ d ≲ 10.5·(index/RAY + 1)` widens as interest accrues, so no parameter floor closes
+  it. `c` and `n` are the effective values read before `applyPending`, which leaves them unchanged.
 - Pending rewards are applied only to positions actually redeemed from.
 
 Vectors: `redemption.json`.
@@ -2105,6 +2124,7 @@ and D-27 were taken by the human at the P02 gate; §12.1 checks the list against
 | D-25 | — | `CollateralTooLarge` cap on stored collateral; `AuctionCallbackActive` guard on `check`; TCR trigger only while something is live and counting `recoveredColl` | Overflow-free comparisons; no shutdown forced from inside a buyer callback or by dust in an empty system |
 | D-26 | — | Exact constructor and `wire` signatures with ordered argument checks (§3.4) | Deterministic `InvalidParameter` indices |
 | D-27 | §8.4, blueprint has no TCR condition on redemption (Liquity v1 blocks below 110%) | `redeem` reverts `TCRBelowCritical()` while `belowCritical(price)` is true (§5.8: `live and systemDebt > 0 and systemColl · price < CRITICAL_TCR · systemDebt`); allowed between `CRITICAL_TCR` and `MCR` | Human decision at the P02 gate: below par a redemption lowers the TCR and becomes a run on the remaining collateral. Same threshold and same quantities as the shutdown trigger (§6.11.1) |
+| D-28 | §8.4: the partial redemption is not re-checked after it is applied | A partial that would leave the position below MCR is cancelled like a stale hint (§6.7.3) | Rounding in `dn` (down) and `debtOf` (up) let a few-wei partial push a position at the MCR boundary below it, at the start parameters and at every index; found at P03, CHG-002, ADR-0027 |
 
 ### 12.1 Against the kit's "Corrections to the blueprint"
 
@@ -2149,7 +2169,7 @@ drive one algorithm from an explicit state.
 | `redistribution.json` | redistribution and snapshot stakes; stakes after the last liquidation (D-24); error carry |
 | `liquidation_pool.json` | A: with / without surplus, underwater, partial absorption, empty pool, no-stakes deficit |
 | `product_sum.json` | deposits, offsets, interest, scale change, epoch change, gains across scales and epochs, dust sweep; a deposit after a long idle period receives none of the idle interest (§5.3) |
-| `redemption.json` | skip / full / partial, `MIN_DEBT` stop, stale-hint cancel, base-rate decay and fee, single-node partial, the critical-TCR gate (blocked below `CRITICAL_TCR`, allowed between `CRITICAL_TCR` and `MCR`) |
+| `redemption.json` | skip / full / partial, `MIN_DEBT` stop, stale-hint cancel, base-rate decay and fee, single-node partial, the critical-TCR gate (blocked below `CRITICAL_TCR`, allowed between `CRITICAL_TCR` and `MCR`), a partial cancelled because it would leave the position below MCR (CHG-002) |
 | `auction.json` | price curve with the cusp crossing at t = 793/794; partial, dust rule, `NoPartialPurchase`, paid tab; reset tip and shortfall |
 | `deficit.json` | shortfall then cover from interest |
 | `shutdown.json` | pro-rata claims, order independence |

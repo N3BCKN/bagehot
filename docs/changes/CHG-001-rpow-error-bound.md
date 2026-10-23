@@ -1,6 +1,6 @@
 # CHG-001: State rpow's error bound and bracket property in spec §2.3
 
-- Status: proposed (awaiting human review)
+- Status: **approved 2026-10-23 (option 1) and applied** — spec §2.3 *Accuracy (CHG-001)*, ADR-0028
 - Raised: 2026-10-22, P10
 - Affects: `docs/spec.md` §2.3 (documentation only — no formula, order or behaviour changes)
 

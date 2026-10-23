@@ -82,7 +82,7 @@ values from the spec formulas.
 | `redistribution.json` | §6.4, §6.5 | liquidation into redistribution with snapshot stake; stakes after the last liquidation (system); error carry (unit) |
 | `liquidation_pool.json` | §6.4, §6.6.4 | with / without surplus, underwater, partial absorption, empty pool, no-stakes deficit (system) |
 | `product_sum.json` | §6.6, §5.3 | deposits, offsets, interest, scale change, epoch change, gains, dust sweep (unit, pool with a test vault); a deposit after a long idle period gets none of the idle interest (system) |
-| `redemption.json` | §6.7 | skip / full / partial, `MIN_DEBT` stop, stale-hint cancel, base-rate decay and fee, single-node partial, the critical-TCR gate (system) |
+| `redemption.json` | §6.7 | skip / full / partial, `MIN_DEBT` stop, stale-hint cancel, base-rate decay and fee, single-node partial, the critical-TCR gate, a partial cancelled because it would leave the position below MCR (system) |
 | `auction.json` | §6.8 | start and price curve with the cusp at t = 793/794; partial + dust rule + `NoPartialPurchase` + paid tab; reset tip and shortfall (system) |
 | `deficit.json` | §6.9 | shortfall then cover from interest (system) |
 | `shutdown.json` | §6.11 | pro-rata claims, order independence (unit) |

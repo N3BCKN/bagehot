@@ -38,7 +38,7 @@ can agree with a buggy contract; an event field cannot.
 | I2 | Stable supply equals system debt within the derived drift bound | derived (§10.2) | both, live + window | §10.2 |
 | I3 | Pool deposits and gains are covered by pool balances; `P` stays in range | 0 (sums), derived (per-depositor) | A | §6.6, §10.3 |
 | I4 | A liquidation's effect on TCR is exactly characterised by the bundle that leaves the system | 0, and 1 wei of debt on a full-absorption liquidation and on an auction start (derived) | both, live | §6.4, §6.6.4, §6.8.2 |
-| I5 | Every position redeemed from ends closed, or at `debt ≥ MIN_DEBT` and `ICR ≥ MCR` | 0 — **open defect, CHG-002** | both, live | §6.7.3 |
+| I5 | Every position redeemed from ends closed, or at `debt ≥ MIN_DEBT` and `ICR ≥ MCR` | 0 | both, live | §6.7.3 (with CHG-002) |
 | I6 | Every liquidation conserves collateral and normalised debt across its buckets | 0 | both, live | §6.4.1, §6.6.4, §6.8.2 |
 | I7 | Liquidation surplus reaches only the owner; the caller receives exactly `GAS_RESERVE` | 0 | both, live | §6.4.1, §6.6.4, §6.8.4 |
 | I8 | No rounding shortfall: every claim is payable, and a full unwind leaves no one short | 0 | both, all phases | §8, §10.3 |
@@ -353,17 +353,19 @@ and: at most one position per call is partially redeemed, and it is the last one
 
 **Tolerance.** Zero.
 
-> **Open defect — CHG-002.** The `ICR ≥ MCR` clause does **not** hold, and not only in exotic
-> configurations. A partial redemption of a few wei against a position with no head-room above MCR
-> can leave it fractionally below, because the debt relief `mulDivDown(d, RAY, index)` and the
-> `mulDivUp` on the remaining debt together cancel up to `index/RAY + 1` wei less debt than the
-> redeemer paid for, while the collateral leaving is floored only once. Reproduced at the **start**
-> parameters (`MIN_PRICE = 10e18`): at `index = 1.23 RAY`, `price = 10 WAD`, `d = 11` wei a
-> boundary position ends ~1.3·10⁻²⁴ below MCR; 57 of 300 index values in `[1.00, 4.00]` admit such
-> a `d`. An earlier reachability claim in this file — that the start configuration was safe — came
-> from an underpowered random search and was wrong; see CHG-002 for the corrected evidence. Until
-> the spec is fixed, the Foundry and model tests assert the full property and
-> `test_redeem_tinyPartialAtMcrBoundary` is **expected to fail**. It must not be weakened to pass.
+> **Resolved by CHG-002 / ADR-0027.** Before the fix this clause did not hold: a partial redemption
+> of a few wei against a position with no head-room above MCR could leave it fractionally below,
+> because the debt relief `mulDivDown(d, RAY, index)` and the `mulDivUp` on the remaining debt
+> together cancel up to `index/RAY + 1` wei less debt than the collateral taken. Reproduced at the
+> **start** parameters (`MIN_PRICE = 10e18`); 57 of 300 index values in `[1.00, 4.00]` admitted a
+> violating `d`. (An earlier claim in this file that the start configuration was safe came from an
+> underpowered random search and was wrong.) §6.7.3 now carries a post-check that cancels such a
+> partial exactly as a stale hint does — no state change, the loop ends — so I5 holds in every
+> configuration and at every index, by construction. The targeted test must show the **affirmative**
+> outcome, not merely the absence of a failure: on
+> `redemption.json#partial_cancelled_below_mcr` the 11-wei call reverts `NothingRedeemed` with every
+> field unchanged, and the 1,000-stable call on the same position succeeds and raises its ICR
+> (1.1 → 1.101897).
 
 **Scope.** Both deployments, live phase.
 
@@ -373,8 +375,10 @@ and: at most one position per call is partially redeemed, and it is the last one
 
 **Breaks if.** The partial cap `d = min(remaining, debt − MIN_DEBT)` computed against stored rather
 than effective debt. Pending rewards applied after rather than before the partial. The below-MCR
-skip omitted. **Targeted sequences:** the CHG-002 case above; redeem exactly `debt − MIN_DEBT` from
-the tail; redeem against a position whose pending rewards change its ICR.
+skip omitted. The CHG-002 post-check omitted, placed after the state change instead of before it,
+or computed with stored rather than effective `c`, `n`. **Targeted sequences:** the CHG-002 vector
+above, both steps; redeem exactly `debt − MIN_DEBT` from the tail; redeem against a position whose
+pending rewards change its ICR.
 
 ---
 
@@ -909,7 +913,7 @@ because it is the single check the indexer monitor runs most often. Zero toleran
 
 | ref | Item | Where |
 |---|---|---|
-| CHG-002 | I5's `ICR ≥ MCR` clause fails for tiny partial redemptions, including at the start parameters. Reproduced; awaiting review. | `docs/changes/CHG-002-partial-redemption-mcr-rounding.md` |
+| CHG-002 | Resolved: §6.7.3's partial-redemption post-check (ADR-0027) makes I5 hold unconditionally; vector `redemption.json#partial_cancelled_below_mcr`. | `docs/changes/CHG-002-partial-redemption-mcr-rounding.md` |
 | CHG-001 | `rpow`'s error bound, to be recorded in spec §2.3. Awaiting review. | `docs/changes/CHG-001-rpow-error-bound.md` |
 | P02-4 | No vector exercises `redeem` from inside an auction buyer callback (I15). | `docs/progress.md` |
 | I13 `k` | `k = 4` is calibrated to the P02 measurement, not derived. P17 re-validates and may tighten it; exceeding it is a `/spec-change`, never a bump. | this file, I13 |
