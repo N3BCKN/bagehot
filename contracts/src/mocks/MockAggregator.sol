@@ -5,15 +5,15 @@ import {AggregatorV3Interface} from "../interfaces/AggregatorV3Interface.sol";
 
 /// @title MockAggregator
 /// @notice TEST ONLY. A Chainlink-shaped price feed whose every field is set directly, with modes
-///         that make a read fail the three ways spec §6.10.1 counts as a failed call: it reverts,
-///         it runs out of the gas the caller forwarded, or it returns fewer than 160 bytes.
+///         that make a read revert or run out of the gas the caller forwarded (spec §6.10.1).
+///         Non-ABI output — fewer than 160 bytes, junk in the `uint80` words, huge return or
+///         revert data — comes from `RawFeed`, which needs no assembly (ADR-0029).
 /// @dev Excluded from coverage, static analysis and invariants. Setters are permissionless.
 contract MockAggregator is AggregatorV3Interface {
     enum Mode {
         Normal, // return the stored round
         Revert, // every read (including `decimals`) reverts MockFeedReverted()
-        BurnGas, // burn `gasToBurn` before returning; more than the forwarded gas = out of gas
-        ShortReturn // round reads return a single word (32 bytes)
+        BurnGas // burn `gasToBurn` before returning; more than the forwarded gas = out of gas
     }
 
     uint8 internal immutable _decimals;
@@ -89,13 +89,11 @@ contract MockAggregator is AggregatorV3Interface {
         Mode m = mode;
         if (m == Mode.Revert) revert MockFeedReverted();
         if (m == Mode.BurnGas) {
-            uint256 stop = gasleft() > gasToBurn ? gasleft() - gasToBurn : 0;
+            // one gasleft() read: two reads could straddle gasToBurn and underflow (a Panic would
+            // turn this "honest but expensive" feed into a fast-reverting one)
+            uint256 g = gasleft();
+            uint256 stop = g > gasToBurn ? g - gasToBurn : 0;
             while (gasleft() > stop) {}
-        } else if (m == Mode.ShortReturn) {
-            assembly ("memory-safe") {
-                mstore(0x00, 1)
-                return(0x00, 0x20)
-            }
         }
         return (roundId, answer, startedAt, updatedAt, roundId);
     }

@@ -27,8 +27,15 @@ fmt-check-py:
 build:
     cd contracts && forge build --sizes
 
+# Fork tests are excluded: they read a live archive RPC, so `just test` (and /verify) behave the
+# same whatever the local dotenv holds. Run them explicitly with `just test-fork`.
 test:
-    cd contracts && forge test
+    cd contracts && forge test --no-match-path "test/fork/*"
+
+# Fork tests at pinned Base blocks; each skips itself when BASE_ARCHIVE_RPC is unset. Never part
+# of /verify — run at the prompts that call for it (P12, P18, P25).
+test-fork:
+    cd contracts && forge test --match-path "test/fork/*" -vv
 
 test-nightly:
     @compgen -G "contracts/test/invariant/*.t.sol" >/dev/null \

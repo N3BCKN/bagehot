@@ -6,8 +6,8 @@ import {MockAggregator} from "./MockAggregator.sol";
 /// @title MockSequencerFeed
 /// @notice TEST ONLY. Chainlink's L2 sequencer uptime feed: `answer` 0 = up, 1 = down, and
 ///         `startedAt` = when the status last changed (spec §6.10.1 rows 1–4). Inherits the
-///         failure modes of MockAggregator, so a sequencer read can also revert, run out of gas
-///         or return short data.
+///         failure modes of MockAggregator, so a sequencer read can also revert or run out of
+///         gas; non-ABI replies come from RawFeed.
 contract MockSequencerFeed is MockAggregator {
     constructor() MockAggregator(0) {}
 

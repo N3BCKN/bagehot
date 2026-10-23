@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {AggregatorV3Interface} from "../../src/interfaces/AggregatorV3Interface.sol";
 import {MockAggregator} from "../../src/mocks/MockAggregator.sol";
 import {MockSequencerFeed} from "../../src/mocks/MockSequencerFeed.sol";
+import {RawFeed} from "../../src/mocks/RawFeed.sol";
 import {ReplayAggregator} from "../../src/mocks/ReplayAggregator.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Test} from "forge-std/Test.sol";
@@ -69,13 +70,6 @@ contract MockAggregatorTest is Test {
         assertFalse(ok);
     }
 
-    function test_shortReturnMode_returns32Bytes() public {
-        feed.setMode(MockAggregator.Mode.ShortReturn);
-        (bool ok, uint256 len) = _read(address(feed), 100_000);
-        assertTrue(ok); // the call succeeds; only its length marks it failed (§6.10.1)
-        assertEq(len, 32);
-    }
-
     /// @dev Burning more than the cap fails the call; burning less succeeds with full data.
     function test_burnGasMode_failsOnlyWhenTheBurnExceedsTheCap() public {
         feed.setMode(MockAggregator.Mode.BurnGas);
@@ -96,6 +90,58 @@ contract MockAggregatorTest is Test {
         uint256 used = before - gasleft();
         assertTrue(ok);
         assertGe(used, 150_000);
+    }
+}
+
+contract RawFeedTest is Test {
+    RawFeed internal raw;
+
+    function setUp() public {
+        raw = new RawFeed();
+    }
+
+    function _call(bytes memory data) internal view returns (bool ok, bytes memory ret) {
+        (ok, ret) = address(raw).staticcall(data);
+    }
+
+    function test_returnsThePayloadUnencodedForAnySelector() public {
+        raw.setPayload(abi.encode(uint256(7)));
+        (bool ok, bytes memory ret) = _call(abi.encodeCall(AggregatorV3Interface.latestRoundData, ()));
+        assertTrue(ok);
+        assertEq(ret.length, 32);
+        assertEq(abi.decode(ret, (uint256)), 7);
+        (ok, ret) = _call(abi.encodeCall(AggregatorV3Interface.decimals, ()));
+        assertTrue(ok);
+        assertEq(ret.length, 32);
+        raw.setPayload(hex"");
+        (ok, ret) = _call(hex"feaf968c");
+        assertTrue(ok);
+        assertEq(ret.length, 0);
+    }
+
+    function test_oddLengthsAndJunkWordsAreReturnedVerbatim() public {
+        raw.setPayload(new bytes(159));
+        (, bytes memory ret) = _call(hex"feaf968c");
+        assertEq(ret.length, 159);
+        bytes memory junk =
+            abi.encode(type(uint256).max, int256(2000e8), uint256(1), uint256(2), type(uint256).max);
+        raw.setPayload(junk);
+        (, ret) = _call(hex"feaf968c");
+        assertEq(keccak256(ret), keccak256(junk));
+    }
+
+    function test_zeroPayloadAndRevertMode() public {
+        raw.setZeroPayload(150_000);
+        assertEq(raw.payload().length, 150_000);
+        (bool ok, bytes memory ret) = _call(hex"feaf968c");
+        assertTrue(ok);
+        assertEq(ret.length, 150_000);
+        raw.setPayload(hex"aa");
+        raw.setReverts(true);
+        assertTrue(raw.reverts());
+        (ok, ret) = _call(hex"feaf968c");
+        assertFalse(ok);
+        assertEq(keccak256(ret), keccak256(abi.encodeWithSelector(RawFeed.RawFeedReverted.selector, hex"aa")));
     }
 }
 
