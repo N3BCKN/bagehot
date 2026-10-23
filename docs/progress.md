@@ -15,7 +15,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | P08 | Liquidation events and liquidatable windows | blocked | | Plan approved (Aave v3 only). Code, config and 23 offline tests ready; needs `eth_getLogs` over wide ranges — same blocker as P07 (P07-2). Finding: Aave reads the SVR ETH/USD feed (P08-1) |
 | P09 | Stress blocks and transaction costs | done | | 31 blocks (20 stress, 10 calm, 2024-08-05); Base costs 930 blocks, L1 crash windows 5,136 sampled blocks; L1 data fee of a liquidation ≈ $0.13–0.19 before blobs → ≈ $0.0001 after |
 | P10 | Math library and shared vectors | done | 2026-10-23 | `Rounding.sol` and `WadRayMath.sol` with the bit-identical Python model, generator and vectors; 25 Foundry + 19 Python tests green; rpow error bound measured; CHG-001 (record it in spec §2.3) approved 2026-10-23, the spec edit is staged and lands when `docs/spec.md` is unlocked. Halmos proofs close with no solver — yices, z3 and bitwuzla 0.8.1 all time out; the evidence is fuzzing + the independent vectors + both-side parity, a recorded deviation from the Halmos acceptance criterion (P10-1) |
-| P11 | StableToken, wiring pattern and mocks | todo | | |
+| P11 | StableToken, wiring pattern and mocks | done | 2026-10-23 | `WiredBase` (src/lib/Wired.sol), shared `Errors.sol`, `StableToken` per spec §5.9; `MockAggregator`, `MockSequencerFeed`, `ReplayAggregator`; 43 new tests, 100% line/branch coverage on core; every custom error triggered. security-reviewer: no code issue; spec-level findings in CHG-003 (proposed) |
 | P12 | OracleAdapter | todo | | |
 | P13 | SortedPositions and hint helpers | todo | | |
 | P14 | VaultManager I: positions and borrowing | todo | | |
@@ -262,6 +262,55 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
   3.12). Hooks are mode 644 — see Human actions.
 
 **Next.** P01, continuous integration.
+
+### 2026-10-23 · P11 · StableToken, wiring pattern and mocks
+
+**Changed.** New in `contracts/src`:
+- `lib/Wired.sol` (`WiredBase`): immutable `deployer`, `wired`, `whenWired`, `onlyWiring`,
+  `_requireNonZero` and `_markWired`. `_markWired` re-checks once-only itself, so a concrete
+  `wire` that forgot the modifier still cannot wire twice.
+- `lib/Errors.sol`: file-level `InvalidParameter(uint8)` and `Unauthorized()`, shared by every core
+  contract.
+- `core/StableToken.sol`.
+- `interfaces/AggregatorV3Interface.sol`: written out, so there is no Chainlink dependency.
+- `mocks/{MockAggregator,MockSequencerFeed,ReplayAggregator}.sol`.
+
+Tests in `test/unit/{Wired,StableToken,Mocks}.t.sol`. `just coverage` now excludes `src/mocks/`,
+`test/` and `script/`.
+
+**Decisions.**
+- **Spec over prompt on token roles.** The prompt lists six contracts that may mint and burn.
+  Spec §3.4/§5.9/§9 is narrower and wins: the VaultManager mints; VaultManager, strategy,
+  DeficitLedger and ShutdownModule burn; only the strategy moves without an allowance; supply is
+  capped at 2^128−1 (`SupplyCapExceeded`). The RedemptionModule is not a burner, because the
+  VaultManager burns the redeemer's tokens.
+- **StableToken has no reentrancy lock.** It makes no external call. The reviewer concurs, and the
+  wording of §2.5 is CHG-003 item 2.
+- **Mock modes beyond the prompt.** `MockAggregator` adds a `ShortReturn` mode, the third kind of
+  failed call in §6.10.1 (< 160 bytes), so P12 can test every row. `MockSequencerFeed` inherits all
+  the failure modes.
+- **ReplayAggregator.** It records a push only on Chainlink's rule (deviation ≥ bps by exact
+  cross-multiplication, or heartbeat elapsed), accepts only positive answers, and stamps rounds
+  with `block.timestamp`; the replay driver warps time.
+- **Base contract named `WiredBase`, not `Wired`,** so it does not shadow the spec's `Wired`
+  event (compiler warning 2519, reviewer F-2).
+
+**Review.** `security-reviewer`: no critical, high or medium finding, and no role bypass. Fixed:
+- F-1 — see the defect below.
+- F-2 — the rename above.
+- F-7 — the `burnFrom` selector clash with ERC20Burnable is now documented in NatSpec.
+- F-8 — four tests added, including the `test_wire_nonDeployerReverts` that I11 cites.
+
+Routed to CHG-003: F-3, F-5, F-6. Routed to P11-1: F-4.
+
+**Defect found in the gate itself.** Slither will not overwrite an existing `--json` report and
+still exits 0 under `--fail-none`. Every local `just static` since P00 therefore re-checked the
+first run's file. A fresh run shows the P10 "0 results" happened to be true. CI was unaffected,
+because it starts from a clean checkout. `just static` now deletes the reports first, and the four
+real slither lows on `StableToken.wire` are triaged (SA-007).
+
+**Next.** Human: review CHG-003. Unlock `docs/spec.md` and `spec/vectors/**` (comment out lines
+7–8 of `.claude/protected-paths.txt`) so CHG-001/CHG-002 can land and P03 can close. Then P12.
 
 ### 2026-10-23 · P03 · Invariants
 
@@ -553,6 +602,8 @@ constrain data collection and calibration. Each is checked at its target prompt 
 | P08-1 | **Aave v3 on Base prices WETH from the SVR ETH/USD feed** (`WETH_ORACLE = 0x9dA00D23465282005DB222a441a663eE7B9dfCc8`, the `eth-usd-svr` secondary proxy), not the standard feed P07 calibrates on. P08 handles it by using the source in force in each window (AaveOracle `AssetSourceUpdated` history). Undecided: which feed the protocol's own oracle model (P24) should mirror. If update timing differs between the two, the liquidation calibration and the oracle calibration describe different oracles. Decide before P24. | human | at P24 |
 | P04-1 | Three threat-register rows have no test yet: `AuctionCallbackActive` on `buy`/`check` (T-14 → P33), a `redeem` called from inside a buyer callback (T-01/T-14 → P16/P33, same gap as P02-4), and the oracle gas-starvation branch (T-03 → P12). Each is marked TBD in `docs/threat-model.md` with its prompt. | Claude | at P12/P16/P33 |
 | P04-2 | **ADR-0027's implementation obligation.** The human accepted ADR-0027 at the P04 gate on the condition that P16 lands the targeted test for the 11-wei partial (`redemption.json#partial_cancelled_below_mcr`: the 11-wei redemption reverts `NothingRedeemed` with state unchanged, the 1,000-stable redemption then succeeds and raises the position's ICR to 1.101897) and that it passes against `VaultManager.redeemCollateral`, not only against the reference generator and the Python model. P16 is not done until it does. | Claude | at P16 |
+| P11-1 | **P18 deployment pitfalls from the P11 review (F-4).** `deployer` is whoever executes CREATE. (i) `new X{salt: s}` inside `forge script` goes through the CREATE2 proxy `0x4e59b44847b379578588920cA78FbF26c0B4956C`, which becomes `deployer` and can never call `wire`: the contract is bricked, permanently NotWired. (ii) A factory that deploys in one call and exposes a separate `wireAll(...)` moves the front-running window from `wire` to the factory. P18 must: deploy and wire inside one factory call that takes no caller-supplied addresses; never use `{salt:}` for wired contracts; assert `deployer() == factory` and `wired()` from the deployment receipt; on Base Sepolia, assert that the price feed is the configured Chainlink address unless the environment is `fork_replay` (`ReplayAggregator` is operator-controlled). Also update the threat-model row "Deployer key": with a factory, the deployer is the factory. | Claude | at P18 |
+| P11-2 | CHG-003 (proposed): §3.3 constraint 8 (the wired peer graph must agree; the deploy script enforces it), StableToken's no-lock sentence in §2.5, and §11.1's StableToken events row. Documentation and a P18 obligation only. Awaiting the human. | human | before P18 |
 | P08-2 | `.gitleaks.toml` gained a value-only allowlist for public EVM addresses (`^0x[0-9a-fA-F]{40}$`): Aave's `a_token`/`v_token` keys in `config/8453.toml` tripped `generic-api-key`. A first version also allowlisted the `config/` path; a probe showed it hid a 64-hex private key there, so it was removed before anything was pushed. Probes confirm a 0x+64-hex key, a `private_key`, and a bare 40-hex token are still caught. The original slip: the scan and the commit were chained with `;`, so the commit ran despite the findings — scans now gate commits with `&&`. | Claude | no |
 | P02-4 | No vector exercises `redeem`'s `AuctionCallbackActive` branch (D-27, §6.7.2): it needs a deployment-B buyer callback that calls `redeem`, which the recorder cannot drive. Add it as a Foundry test at P16/P33 and as a model test at P22. | Claude | at P16/P33 |
 | P02-3 | The vector reference implementation is throwaway (scratchpad). Vectors are validated independently from P10 (Foundry) and P22 (Python model); a vector that disagrees with both implementations is a spec question for `/spec-change`. | Claude | at P10/P22 |

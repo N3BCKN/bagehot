@@ -10,6 +10,12 @@ what is not. A row needs a reason a reviewer can disagree with — "false positi
 | id | tool | detector | location | severity | decision | justification | date |
 |---|---|---|---|---|---|---|---|
 | SA-001 | aderyn | internal-function-used-once | src/lib/WadRayMath.sol:75 | Low | accepted | `rpow(x, n)` is the spec's power function (§2.3, every product rounded up) and the only form protocol code is meant to call; the three-argument `rpow(x, n, rounding)` exists so tests can bracket the exact value with Floor. "Used once" is true only until P15: VaultManager (interest index, R4), RedemptionModule (base-rate decay, R19) and DutchAuctionHouse (price curve, R23) all call it. Re-check at P33, when it should no longer fire. | 2026-10-22 |
+| SA-002 | aderyn | modifier-used-only-once | src/lib/Wired.sol:42 | Low | accepted | `onlyWiring` guards each concrete contract's one `wire(...)` — once per contract by design (ADR-0021). It is a modifier in the shared base so that every core contract gets the `NotDeployer` → `AlreadyWired` order of spec §3.4 from one place. Today only StableToken uses it; from P12–P18 every wired contract does, and the detector should stop firing once there are two. Re-check at P33. | 2026-10-23 |
+| SA-003 | aderyn | state-no-address-check | src/core/StableToken.sol:39 | Low | false-positive | Each address is checked on the line before by `_requireNonZero(arg, index)` (src/lib/Wired.sol), which reverts `InvalidParameter(index)` for zero exactly as spec §3.4 requires; aderyn does not follow the internal call. Tested for every subset of zero arguments: `StableTokenTest.test_wire_zeroArgumentsReportTheFirstIndex`. The helper is kept rather than inlined because all eight wired contracts (P11–P18) use it. | 2026-10-23 |
+| SA-004 | aderyn | state-no-address-check | src/core/StableToken.sol:40 | Low | false-positive | Each address is checked on the line before by `_requireNonZero(arg, index)` (src/lib/Wired.sol), which reverts `InvalidParameter(index)` for zero exactly as spec §3.4 requires; aderyn does not follow the internal call. Tested for every subset of zero arguments: `StableTokenTest.test_wire_zeroArgumentsReportTheFirstIndex`. The helper is kept rather than inlined because all eight wired contracts (P11–P18) use it. | 2026-10-23 |
+| SA-005 | aderyn | state-no-address-check | src/core/StableToken.sol:41 | Low | false-positive | Each address is checked on the line before by `_requireNonZero(arg, index)` (src/lib/Wired.sol), which reverts `InvalidParameter(index)` for zero exactly as spec §3.4 requires; aderyn does not follow the internal call. Tested for every subset of zero arguments: `StableTokenTest.test_wire_zeroArgumentsReportTheFirstIndex`. The helper is kept rather than inlined because all eight wired contracts (P11–P18) use it. | 2026-10-23 |
+| SA-006 | aderyn | state-no-address-check | src/core/StableToken.sol:42 | Low | false-positive | Each address is checked on the line before by `_requireNonZero(arg, index)` (src/lib/Wired.sol), which reverts `InvalidParameter(index)` for zero exactly as spec §3.4 requires; aderyn does not follow the internal call. Tested for every subset of zero arguments: `StableTokenTest.test_wire_zeroArgumentsReportTheFirstIndex`. The helper is kept rather than inlined because all eight wired contracts (P11–P18) use it. | 2026-10-23 |
+| SA-007 | slither | missing-zero-check | src/core/StableToken.sol:31 | Low | false-positive | Covers the four instances slither reports at `wire` (one per argument; the triage check matches by detector + location). Same premise failure as SA-003 … SA-006: each argument is checked by `_requireNonZero(arg, index)` before it is stored, and slither does not follow the internal call. Tested for every subset of zero arguments. | 2026-10-23 |
 
 Decision is one of: `fixed` (with the commit), `accepted` (risk understood and taken),
 `false-positive` (the detector's premise does not hold here, say why).
@@ -24,3 +30,13 @@ Solidity in the repo is `contracts/test/unit/Sanity.t.sol` plus the pinned libra
 **0 results**; aderyn 88 detectors, **1 low** (SA-001, accepted). From P10 aderyn is gated too:
 it writes `reports/static/aderyn.json` and `scripts/check_triage.py --aderyn` fails on any finding
 without a row, exactly as for slither (closes open issue P01-4).
+
+`just static` at P11 (`Wired.sol`, `Errors.sol`, `StableToken.sol`; mocks are excluded): slither
+**4 low** (SA-007), aderyn **5 low** (SA-002 … SA-006), all triaged.
+
+**Stale-report defect, found at P11.** Slither refuses to overwrite an existing `--json` file and
+still exits 0 under `--fail-none`, so from P00 onwards every local `just static` silently re-checked
+the first run's report. The P10 "0 results" above was read from that stale file; a fresh run at P11
+shows the P10 libraries do in fact produce no slither findings, so the conclusion stands. CI was not
+affected (it starts from a clean checkout). `just static` now deletes all three reports before
+running.

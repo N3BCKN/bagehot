@@ -54,6 +54,9 @@ halmos:
 # failing on a finding of ANY severity that has no row in docs/static-analysis-triage.md.
 static:
     mkdir -p reports/static
+    # slither will not overwrite an existing report and still exits 0 under --fail-none, so a
+    # stale file would be checked silently; start every run from no reports.
+    rm -f reports/static/slither.json reports/static/aderyn.json reports/static/aderyn.md
     cd contracts && slither . --config-file slither.config.json --foundry-compile-all \
       --fail-none --json ../reports/static/slither.json
     cd contracts && aderyn . --path-excludes src/mocks --output ../reports/static/aderyn.md
@@ -62,7 +65,7 @@ static:
       --aderyn reports/static/aderyn.json
 
 coverage:
-    cd contracts && forge coverage --report summary --no-match-path "test/fork/*"
+    cd contracts && forge coverage --report summary --no-match-path "test/fork/*" --no-match-coverage "src/mocks/|test/|script/"
 
 gas:
     @test -f contracts/.gas-snapshot \
