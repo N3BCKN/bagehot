@@ -1,6 +1,6 @@
 # ADR-0028: Document rpow's bracket property and error bound in the specification
 
-- Status: proposed
+- Status: accepted 2026-10-23 (human)
 - Date: 2026-10-23
 - Prompt: P10 (measured), applied via `/spec-change` CHG-001
 - Supersedes: —

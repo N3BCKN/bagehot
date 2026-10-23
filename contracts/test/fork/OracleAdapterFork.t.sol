@@ -25,7 +25,7 @@ contract OracleAdapterForkTest is Test {
         address sequencerFeed = vm.parseTomlAddress(cfg, ".oracle.sequencer_uptime.proxy");
 
         OracleAdapter oracle =
-            new OracleAdapter(priceFeed, sequencerFeed, 3600, 3600, 10e18, 1_000_000e18, 100_000, 1588);
+            new OracleAdapter(priceFeed, sequencerFeed, 3600, 3600, 10e18, 1_000_000e18, 100_000, 3175);
         assertEq(oracle.FEED_DECIMALS(), 8, "Base ETH/USD has 8 decimals");
 
         (, int256 seqAnswer, uint256 startedAt,,) = AggregatorV3Interface(sequencerFeed).latestRoundData();

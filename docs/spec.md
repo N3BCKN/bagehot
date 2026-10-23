@@ -4,7 +4,11 @@ Version 1.0-draft (P02). Status: **approved at the P02 human gate** (2026-10-22)
 one override (D-27, the critical-TCR gate on redemptions) and its confirmations applied. Protected;
 changes go through `/spec-change`. **Amended by CHG-002 (2026-10-23):** §6.7.3 cancels a partial
 redemption that would leave the position below MCR (ADR-0027, D-28). **Amended by CHG-001
-(2026-10-23):** §2.3 states `rpow`'s bracket property and error bound (documentation only, ADR-0028).
+(2026-10-23):** §2.3 states `rpow`'s bracket property and error bound (documentation only, ADR-0028). **Amended by
+CHG-004 (2026-10-23):** the post-failure gas floor covers the gas a proxied feed hands back
+(§3.1, §3.3, §3.4, §6.10.3; ADR-0030, D-29). **Amended by CHG-003 (2026-10-23):** the wired peer
+graph must agree, enforced by the deployment script (§3.3 constraint 8); StableToken's missing lock
+and its events stated exactly (§2.5, §11.1; ADR-0031).
 
 The specification wins over the code: if the Solidity contracts or the Python model disagree with
 this document, they are wrong until a change is approved. Every rule here is written so that two
@@ -200,8 +204,9 @@ effDebt(p)     = debtOf(effNorm(p))
   after the mode and argument checks and after `PositionNotActive` — so e.g. a non-owner calling
   `withdrawCollateral(id, 0)` gets `ZeroAmount`, not `NotOwner`. Every contract that holds or moves tokens guards all state-changing
   external functions with one transient reentrancy lock (OZ `ReentrancyGuardTransient`); a
-  reentrant call reverts `ReentrancyGuardReentrantCall()`. §5.10 lists the permitted cross-contract
-  call paths and which entry points are lock-free callbacks.
+  reentrant call reverts `ReentrancyGuardReentrantCall()`. StableToken makes no external call and
+  takes no lock; §5.10 lists no path into it that could re-enter. §5.10 lists the permitted
+  cross-contract call paths and which entry points are lock-free callbacks.
 - Phrases: "**accrue**" inside VaultManager = the internal function `_accrue()` (§6.2; not an
   external self-call, so it does not hit the lock); in any other contract = the external call
   `vaultManager.accrue()`, which runs `_accrue()`; "**apply pending**" = §6.5.3;
@@ -260,7 +265,7 @@ where each one started.
 | `MIN_PRICE` | OracleAdapter | WAD | `≥ 2e18` | `10e18` | H | Sanity lower bound of a usable price. The floor of `2e18` keeps seized collateral below the debt it offsets (`c ≤ T`, §6.6.3) for any penalty ≤ 0.5 |
 | `MAX_PRICE` | OracleAdapter | WAD | `> MIN_PRICE`, `≤ 1e30` | `1_000_000e18` | H | Sanity upper bound |
 | `ORACLE_GAS` | OracleAdapter | gas | `[50_000, 1_000_000]` | `100_000` | E | Gas forwarded to each feed call |
-| `ORACLE_POST_FAILURE_GAS` | OracleAdapter | gas | `≥ ceil(ORACLE_GAS / 63)` | `1_588` | D | Minimum `gasleft()` after a failed feed call (§6.10.3) |
+| `ORACLE_POST_FAILURE_GAS` | OracleAdapter | gas | `ceil(2·ORACLE_GAS / 63) ≤ x ≤ ORACLE_GAS` | `3_175` | D | Minimum `gasleft()` after a failed feed call (§6.10.3); the factor 2 covers gas a proxied feed hands back (CHG-004) |
 | `FEED_DECIMALS` | OracleAdapter | integer | `≤ 18` | read from the feed (8) | — | Decimals of the price feed, read once at construction |
 | `BUFFER` | DutchAuctionHouse | WAD | `[WAD, 2·WAD]` | `1.20e18` | H | Start price = oracle price × buffer (blueprint §8.7) |
 | `AUCTION_HALF_LIFE` | (deployment script) | s | `> 0` | `600` | H | Time for the auction price to halve |
@@ -296,7 +301,7 @@ The deployment script (P18) asserts, and the constructor of each contract checks
 2. `LIQUIDATION_PENALTY` and `MIN_DEBT` are identical across all contracts of one deployment and
    across deployments A and B of one comparison.
 3. `POOL_SHARE_BPS = 0` in deployment B.
-4. `ORACLE_POST_FAILURE_GAS ≥ ceil(ORACLE_GAS / 63)`; `FEED_DECIMALS ≤ 18`.
+4. `ceil(2·ORACLE_GAS / 63) ≤ ORACLE_POST_FAILURE_GAS ≤ ORACLE_GAS`; `FEED_DECIMALS ≤ 18`.
 5. `CRITICAL_TCR ≤ MCR`; `ORACLE_FAILURE_DURATION > STALENESS`.
 6. Every range in §3.1, as far as §3.4 assigns it to a constructor or `wire`.
 7. The `auctionHouse` argument of `ShutdownModule.wire` and of `RedemptionModule.wire` is the
@@ -304,8 +309,16 @@ The deployment script (P18) asserts, and the constructor of each contract checks
    `DeficitLedger.wire`. Nothing on-chain can check this (none of the three contracts knows the
    others' arguments), and a B deployment that passed `address(0)` would silently disable the
    `AuctionCallbackActive` guards of §6.7.2 and §6.11.1.
+8. Every address passed to a `wire` is the contract the factory created for that role, and the graph
+   agrees: each contract's wired peers are the same addresses every other contract was wired with
+   for that role, and every contract's immutable `token`, `weth` and `oracle` are the deployment's.
+   The deployment script asserts this before broadcasting, and the post-deploy smoke test asserts
+   it again together with `deployer() == factory` and `wired()` for every contract in the
+   deployment transaction's receipt. Without it, a token wired to a different strategy than the
+   VaultManager makes every liquidation revert `Unauthorized`, and a role set to an externally
+   owned account is a permanent unbacked-mint key; each `wire` alone rejects only `address(0)`.
 
-Constraints 1, 2, 5, 7 and the `≤ MCR` half of `CRITICAL_TCR` involve parameters or addresses of
+Constraints 1, 2, 5, 7, 8 and the `≤ MCR` half of `CRITICAL_TCR` involve parameters or addresses of
 different contracts and are enforced **only by the deployment script** (it asserts them before broadcasting).
 Constraint 3 is enforced by `VaultManager.wire`. Constraint 4 by the OracleAdapter constructor.
 
@@ -326,7 +339,7 @@ the table says otherwise. `wire` first checks `msg.sender == deployer` (`NotDepl
 | DutchAuctionHouse | `constructor(address weth, address token, address oracle, uint256 LIQUIDATION_PENALTY, uint256 MIN_DEBT, uint256 BUFFER, uint256 CUT, uint256 TAIL, uint256 CUSP, uint256 RESET_TIP)` — 3: `≤ 0.5e18`; 4: `≥ 1e18`; 5: `WAD ≤ x ≤ 2·WAD`; 6: `0 < x < RAY`; 7: `> 0`; 8: `0 < x < WAD`; 9: any · `wire(address vaultManager, address deficitLedger, address shutdownModule)` |
 | RedemptionModule | `constructor(address token, address oracle, uint256 REDEMPTION_FEE_FLOOR, uint256 BETA, uint256 BASE_RATE_DECAY)` — 2: `≤ WAD`; 3: `1 ≤ x ≤ 100`; 4: `0 < x < RAY` · `wire(address vaultManager, address shutdownModule, address auctionHouse)` — 2: may be `address(0)` (deployment A) |
 | DeficitLedger | `constructor(address weth, address token)` · `wire(address vaultManager, address strategy, address auctionHouse, address stabilityPool, address shutdownModule)` — 2: `auctionHouse ∈ {address(0), strategy}`; 3: `stabilityPool ∈ {address(0), strategy}` and exactly one of `auctionHouse`, `stabilityPool` is non-zero |
-| OracleAdapter | `constructor(address priceFeed, address sequencerFeed, uint256 STALENESS, uint256 GRACE_PERIOD, uint256 MIN_PRICE, uint256 MAX_PRICE, uint256 ORACLE_GAS, uint256 ORACLE_POST_FAILURE_GAS)` — 2: `> 0`; 3: any; 4: `≥ 2e18`; 5: `MIN_PRICE < x ≤ 1e30`; 6: `50_000 ≤ x ≤ 1_000_000`; 7: `≥ ceil(ORACLE_GAS / 63)`. After the argument checks it reads `priceFeed.decimals()`; a failing call or a value `> 18` reverts `InvalidFeedDecimals()`. No `wire` |
+| OracleAdapter | `constructor(address priceFeed, address sequencerFeed, uint256 STALENESS, uint256 GRACE_PERIOD, uint256 MIN_PRICE, uint256 MAX_PRICE, uint256 ORACLE_GAS, uint256 ORACLE_POST_FAILURE_GAS)` — 2: `> 0`; 3: any; 4: `≥ 2e18`; 5: `MIN_PRICE < x ≤ 1e30`; 6: `50_000 ≤ x ≤ 1_000_000`; 7: `ceil(2·ORACLE_GAS / 63) ≤ x ≤ ORACLE_GAS`. After the argument checks it reads `priceFeed.decimals()`; a failing call or a value `> 18` reverts `InvalidFeedDecimals()`. No `wire` |
 | ShutdownModule | `constructor(address weth, address token, address oracle, uint256 ORACLE_FAILURE_DURATION, uint256 CRITICAL_TCR, uint256 DEFICIT_LIMIT_BPS, uint256 REPAYMENT_WINDOW)` — 3: `> 0`; 4: `≥ WAD`; 5: `1 ≤ x ≤ 10_000`; 6: `> 0` · `wire(address vaultManager, address deficitLedger, address auctionHouse)` — 2: may be `address(0)` (deployment A) |
 | StableToken | `constructor(string name, string symbol)` · `wire(address vaultManager, address strategy, address deficitLedger, address shutdownModule)` — minter = vaultManager; burners = {vaultManager, strategy, deficitLedger, shutdownModule}; mover = strategy |
 
@@ -1665,8 +1678,30 @@ function fetchPrice():
 #### 6.10.3 Gas rule
 
 After a failed feed call, `require(gasleft() >= ORACLE_POST_FAILURE_GAS, InsufficientGasForOracle)`.
-With the 63/64 rule, a call that failed because the caller supplied too little gas leaves less than
-`ORACLE_GAS / 63` behind, so the transaction reverts instead of recording a fake failure. Vectors:
+
+*Gas model.* Each feed call forwards `F = min(ORACLE_GAS, ⌊63/64 · available⌋)` (EIP-150). A call
+that fails because the caller supplied too little gas — *starved* — leaves the adapter two amounts:
+
+- its own reserve, `available − F`, which is below `F / 63` when the call was starved;
+- whatever the feed hands back. A feed is usually a proxy (Chainlink's `EACAggregatorProxy` makes a
+  high-level call into the aggregator), and when the inner call starves, the proxy reverts and
+  returns the 1/64 of *its* gas that EIP-150 made it keep. A chain of k such bubbling calls returns
+  at most `F/64 + F/64² + … < F/63`.
+
+So after a starved read the adapter holds less than `2F/63 ≤ 2·ORACLE_GAS/63`, for any feed
+structure and any depth, and `ORACLE_POST_FAILURE_GAS ≥ ceil(2·ORACLE_GAS / 63)` turns every starved
+read into a revert instead of a recorded failure. A feed that genuinely fails either reverts early
+(handing back almost all of `F`) or consumes the whole cap while the caller supplied more than
+`ORACLE_GAS · 64/63 + ORACLE_POST_FAILURE_GAS`; both leave at least the floor, so genuine failures
+are recorded. The upper bound `≤ ORACLE_GAS` rules out a floor no caller can meet, which would make
+every genuine failure revert and the ORACLE shutdown (§6.11.1) unreachable.
+
+Measured on Base's real ETH/USD proxy (fork, CHG-004): after a starved read the adapter held at most
+2,816 gas at `ORACLE_GAS = 100_000` (floor 3,175) and 28,734 at `1_000_000` (floor 31,747); the
+single-contract bound `ceil(ORACLE_GAS / 63)` (1,588; 15,874) that this section used before CHG-004
+is crossed in both cases. For an honest caller the floor binds only on a second `fetchPrice` in the
+same transaction with the failure clock already running and a feed that burns its whole cap:
+otherwise `fetchPrice`'s own work after a failed read (two cold storage reads) exceeds it. Vectors:
 `oracle.json` (decision table; the gas rule is tested in Foundry only).
 
 ### 6.11 Shutdown
@@ -2032,7 +2067,7 @@ Enumerations (numeric values are part of the ABI):
 | | `ShutdownTriggered` | `uint8 reason, uint256 timestamp, uint256 price, bool usable, uint256 systemColl, uint256 systemDebt, uint256 deficit, uint256 totalSupply` |
 | | `Settled` | `uint256 claimColl, uint256 claimSupply, uint256 timestamp` |
 | | `Claimed` | `address indexed holder, uint256 amount, uint256 collOut` |
-| StableToken | ERC-20 `Transfer`, plus nothing else | mint/burn appear as `Transfer` from/to `address(0)` |
+| StableToken | ERC-20 `Transfer` and `Approval`, and `Wired` | mint/burn appear as `Transfer` from/to `address(0)` |
 
 Oracle reason codes: `1 SEQUENCER_CALL_FAILED, 2 SEQUENCER_DOWN, 3 SEQUENCER_INVALID,
 4 GRACE_PERIOD, 5 PRICE_CALL_FAILED, 6 NON_POSITIVE, 7 INVALID_TIMESTAMP, 8 STALE, 9 OUT_OF_BOUNDS`.
@@ -2125,6 +2160,7 @@ and D-27 were taken by the human at the P02 gate; §12.1 checks the list against
 | D-26 | — | Exact constructor and `wire` signatures with ordered argument checks (§3.4) | Deterministic `InvalidParameter` indices |
 | D-27 | §8.4, blueprint has no TCR condition on redemption (Liquity v1 blocks below 110%) | `redeem` reverts `TCRBelowCritical()` while `belowCritical(price)` is true (§5.8: `live and systemDebt > 0 and systemColl · price < CRITICAL_TCR · systemDebt`); allowed between `CRITICAL_TCR` and `MCR` | Human decision at the P02 gate: below par a redemption lowers the TCR and becomes a run on the remaining collateral. Same threshold and same quantities as the shutdown trigger (§6.11.1) |
 | D-28 | §8.4: the partial redemption is not re-checked after it is applied | A partial that would leave the position below MCR is cancelled like a stale hint (§6.7.3) | Rounding in `dn` (down) and `debtOf` (up) let a few-wei partial push a position at the MCR boundary below it, at the start parameters and at every index; found at P03, CHG-002, ADR-0027 |
+| D-29 | Kit correction 4 / ADR-0024: post-failure gas floor `ceil(ORACLE_GAS / 63)` | `ceil(2·ORACLE_GAS / 63) ≤ ORACLE_POST_FAILURE_GAS ≤ ORACLE_GAS`; start value 3,175 (§3.1, §6.10.3) | A proxied feed hands back the 1/64 it kept when its inner call starves, so a starved read leaves up to ~2·ORACLE_GAS/63; at `ORACLE_GAS` near 1M any caller could forge a recorded oracle failure (789 of 825 gas limits on Base's real proxy); found at P12 review, CHG-004, ADR-0030 |
 
 ### 12.1 Against the kit's "Corrections to the blueprint"
 

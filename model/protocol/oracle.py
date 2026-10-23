@@ -104,7 +104,9 @@ class OracleAdapter:
             raise InvalidParameter(5)
         if not 50_000 <= oracle_gas <= 1_000_000:
             raise InvalidParameter(6)
-        if oracle_post_failure_gas < -(-oracle_gas // 63):  # ceil(oracle_gas / 63)
+        # ceil(2 * oracle_gas / 63) <= floor <= oracle_gas: a starved proxied read leaves the
+        # adapter its own < gas/63 plus < gas/63 handed back by the proxy chain (§6.10.3, ADR-0030)
+        if not -(-2 * oracle_gas // 63) <= oracle_post_failure_gas <= oracle_gas:
             raise InvalidParameter(7)
         if feed_decimals is None or feed_decimals > 18:
             raise InvalidFeedDecimals()

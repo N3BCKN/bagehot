@@ -85,7 +85,7 @@ contract OracleVectorsTest is Test {
             _u(string.concat(inp, ".params.MIN_PRICE")),
             _u(string.concat(inp, ".params.MAX_PRICE")),
             100_000,
-            1588
+            3175 // ORACLE_POST_FAILURE_GAS (ADR-0030)
         );
         if (vm.keyExistsJson(json, string.concat(inp, ".sequencer.answer"))) {
             seq.setStatus(

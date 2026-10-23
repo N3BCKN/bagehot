@@ -8,6 +8,7 @@ import {MockAggregator} from "../../src/mocks/MockAggregator.sol";
 import {RawFeed} from "../../src/mocks/RawFeed.sol";
 import {OracleAdapterHarness} from "../utils/OracleAdapterHarness.sol";
 import {OracleFixture} from "../utils/OracleFixture.sol";
+import {WarmFetcher} from "../utils/WarmFetcher.sol";
 import {Vm} from "forge-std/Vm.sol";
 
 /// @notice OracleAdapter: constructor checks, every row of the §6.10.1 decision table, malformed
@@ -129,18 +130,25 @@ contract OracleAdapterTest is OracleFixture {
     function test_constructor_rejectsEachArgumentAtItsBoundary() public {
         address f = address(feed);
         address s = address(seq);
-        _deployReverts(_invalid(0), address(0), s, 1, 0, 2e18, 3e18, 50_000, 794);
-        _deployReverts(_invalid(1), f, address(0), 1, 0, 2e18, 3e18, 50_000, 794);
-        _deployReverts(_invalid(2), f, s, 0, 0, 2e18, 3e18, 50_000, 794);
-        _deployReverts(_invalid(4), f, s, 1, 0, 2e18 - 1, 3e18, 50_000, 794);
-        _deployReverts(_invalid(5), f, s, 1, 0, 2e18, 2e18, 50_000, 794); // MAX == MIN
-        _deployReverts(_invalid(5), f, s, 1, 0, 2e18, 1e30 + 1, 50_000, 794);
-        _deployReverts(_invalid(6), f, s, 1, 0, 2e18, 3e18, 49_999, 794);
-        _deployReverts(_invalid(6), f, s, 1, 0, 2e18, 3e18, 1_000_001, 15_874);
-        _deployReverts(_invalid(7), f, s, 1, 0, 2e18, 3e18, 50_000, 793); // ceil(50_000 / 63) = 794
+        _deployReverts(_invalid(0), address(0), s, 1, 0, 2e18, 3e18, 50_000, 1588);
+        _deployReverts(_invalid(1), f, address(0), 1, 0, 2e18, 3e18, 50_000, 1588);
+        _deployReverts(_invalid(2), f, s, 0, 0, 2e18, 3e18, 50_000, 1588);
+        _deployReverts(_invalid(4), f, s, 1, 0, 2e18 - 1, 3e18, 50_000, 1588);
+        _deployReverts(_invalid(5), f, s, 1, 0, 2e18, 2e18, 50_000, 1588); // MAX == MIN
+        _deployReverts(_invalid(5), f, s, 1, 0, 2e18, 1e30 + 1, 50_000, 1588);
+        _deployReverts(_invalid(6), f, s, 1, 0, 2e18, 3e18, 49_999, 1588);
+        _deployReverts(_invalid(6), f, s, 1, 0, 2e18, 3e18, 1_000_001, 31_747);
+        // index 7: ceil(2 · ORACLE_GAS / 63) ≤ x ≤ ORACLE_GAS (ADR-0030)
+        _deployReverts(_invalid(7), f, s, 1, 0, 2e18, 3e18, 50_000, 1587); // ceil(100_000 / 63) = 1588
+        _deployReverts(_invalid(7), f, s, 1, 0, 2e18, 3e18, 1_000_000, 31_746); // ceil(2e6 / 63) = 31_747
+        _deployReverts(_invalid(7), f, s, 1, 0, 2e18, 3e18, 50_000, 50_001); // above ORACLE_GAS
+        _deployReverts(_invalid(7), f, s, 1, 0, 2e18, 3e18, 100_000, 3174); // one below the start value
+        _deployReverts(_invalid(7), f, s, 1, 0, 2e18, 3e18, 100_000, 1588); // the old start value (ADR-0024)
         // every boundary value itself is accepted, and GRACE_PERIOD takes any value
-        new OracleAdapter(f, s, 1, 0, 2e18, 2e18 + 1, 50_000, 794);
-        new OracleAdapter(f, s, 1, type(uint256).max, 2e18, 1e30, 1_000_000, 15_874); // ceil(1e6/63)
+        new OracleAdapter(f, s, 1, 0, 2e18, 2e18 + 1, 50_000, 1588);
+        new OracleAdapter(f, s, 1, 0, 2e18, 3e18, 50_000, 50_000); // floor == ORACLE_GAS
+        new OracleAdapter(f, s, 1, type(uint256).max, 2e18, 1e30, 1_000_000, 31_747);
+        new OracleAdapter(f, s, 1, 0, 2e18, 3e18, 100_000, 3175); // the start value
     }
 
     function test_constructor_firstFailingArgumentWins() public {
@@ -432,7 +440,7 @@ contract OracleAdapterTest is OracleFixture {
     ///      it, and memory allocated after it is usable — for an honest reply, a 100 KB reply, a
     ///      100 KB revert and a feed without code.
     function test_readFeed_isMemorySafe() public {
-        OracleAdapterHarness h = new OracleAdapterHarness(address(feed), address(seq));
+        OracleAdapterHarness h = new OracleAdapterHarness(address(feed), address(seq), ORACLE_GAS, POST_GAS);
         RawFeed raw = new RawFeed();
         raw.setPayload(abi.encode(uint80(1), ANSWER, NOW - 60, NOW - 60, uint80(1)));
         (bool ok, int256 a, bool before, bool afterwards) = h.readFeedKeepsMemory(feed);
@@ -566,5 +574,102 @@ contract OracleAdapterTest is OracleFixture {
         assertFalse(usable);
         assertEq(_reason(r), _reason(OracleAdapter.Reason.PRICE_CALL_FAILED));
         assertEq(oracle.failureStart(), 0);
+    }
+
+    // ------------------------------------------------------------------ honest callers (CHG-004)
+
+    WarmFetcher internal warm;
+    bool internal warmMode;
+
+    /// @dev One fetchPrice at `g` gas, in a reverted snapshot; in warm mode it is the second call of
+    ///      a transaction (WarmFetcher), with the adapter's storage and the feeds already warm.
+    function _probe(OracleAdapter o, uint256 g) internal returns (bool ok, bytes4 err) {
+        uint256 snap = vm.snapshotState();
+        bytes memory ret;
+        if (warmMode) (ok, ret) = warm.run(o, g);
+        else (ok, ret) = address(o).call{gas: g}(abi.encodeCall(OracleAdapter.fetchPrice, ()));
+        vm.revertToState(snap);
+        if (ok) {
+            (, bool usable) = abi.decode(ret, (uint256, bool));
+            assertFalse(usable, "a failing feed is never usable");
+        } else if (ret.length >= 4) {
+            err = bytes4(ret);
+        }
+    }
+
+    /// @dev Smallest caller gas at which fetchPrice returns `unusable` for a genuinely failing feed
+    ///      (bisection: the outcome is monotone in the limit). Below the edge the outcome is always a
+    ///      revert — never a wrong result (asserted for each of the 300 limits just below it).
+    function _minGasForUnusable(OracleAdapter o) internal returns (uint256 edge) {
+        uint256 lo = 10_000;
+        uint256 hi = 200_000;
+        while (lo < hi) {
+            uint256 m = (lo + hi) / 2; // gas limits: plain integer bisection
+            (bool ok,) = _probe(o, m);
+            if (ok) hi = m;
+            else lo = m + 1;
+        }
+        edge = lo;
+        for (uint256 g = edge - 300; g < edge; ++g) {
+            (bool ok,) = _probe(o, g);
+            assertFalse(ok, "monotone: nothing below the edge succeeds");
+        }
+    }
+
+    /// @dev The CHG-004 question compares the floors 1,588 and 3,175. Both are deployable at
+    ///      ORACLE_GAS = 50,000, whose minimum floor is ceil(2 · 50,000 / 63) = 1,588 — so the
+    ///      permanent tests ask exactly that question, on a 50k cap.
+    uint256 internal constant CMP_CAP = 50_000;
+    uint256 internal constant LOW_FLOOR = 1588;
+    uint256 internal constant HIGH_FLOOR = 3175;
+
+    function _floors() internal returns (OracleAdapter oldFloor, OracleAdapter newFloor) {
+        oldFloor = new OracleAdapter(
+            address(feed), address(seq), STALENESS, GRACE, MIN_PRICE, MAX_PRICE, CMP_CAP, LOW_FLOOR
+        );
+        newFloor = new OracleAdapter(
+            address(feed), address(seq), STALENESS, GRACE, MIN_PRICE, MAX_PRICE, CMP_CAP, HIGH_FLOOR
+        );
+    }
+
+    /// @dev Does a higher floor make an honest caller revert where a lower one would have returned
+    ///      `unusable` (the CHG-004 question, 1,588 → 3,175)? A feed that genuinely fails by reverting at
+    /// once hands back almost all the forwarded gas, so the floor never binds: both floors need the same
+    /// caller gas,
+    ///      on the first failure and with the clock running.
+    function test_gasRule_newFloor_fastRevertingFeed_noHonestCallerAffected() public {
+        (OracleAdapter oldFloor, OracleAdapter newFloor) = _floors();
+        feed.setMode(MockAggregator.Mode.Revert); // after deployment: Revert also fails decimals()
+        assertEq(_minGasForUnusable(newFloor), _minGasForUnusable(oldFloor), "first failure");
+        oldFloor.fetchPrice();
+        newFloor.fetchPrice();
+        assertEq(_minGasForUnusable(newFloor), _minGasForUnusable(oldFloor), "clock running");
+    }
+
+    /// @dev A feed that genuinely fails by consuming its whole cap (it needs more than ORACLE_GAS):
+    ///      the adapter keeps only what the caller gave beyond the cap.
+    ///      - Cold storage (the normal case: one fetchPrice per transaction): fetchPrice's own work
+    ///        after the failed read — two cold SLOADs, ~4.2k — exceeds both floors, so both need the
+    ///        same caller gas: the floor never binds, first failure or clock running.
+    ///      - Warm storage (a second fetchPrice in the same transaction, clock running): the 3,175
+    ///        floor asks for exactly 1,587 more gas; at the 1,588 floor's edge the 3,175-floor
+    ///        adapter reverts InsufficientGasForOracle — retryable, never a wrong answer.
+    function test_gasRule_newFloor_outOfGasFeed_bindsOnlyWhenWarm_bandIsTheFloorDifference() public {
+        feed.setMode(MockAggregator.Mode.BurnGas);
+        feed.setGasToBurn(2 * CMP_CAP);
+        (OracleAdapter oldFloor, OracleAdapter newFloor) = _floors();
+        assertEq(_minGasForUnusable(newFloor), _minGasForUnusable(oldFloor), "cold, first failure");
+        oldFloor.fetchPrice();
+        newFloor.fetchPrice();
+        assertEq(_minGasForUnusable(newFloor), _minGasForUnusable(oldFloor), "cold, clock running");
+
+        warm = new WarmFetcher();
+        warmMode = true;
+        uint256 gOld = _minGasForUnusable(oldFloor);
+        uint256 gNew = _minGasForUnusable(newFloor);
+        assertEq(gNew - gOld, HIGH_FLOOR - LOW_FLOOR, "warm, clock running: the band is the floor difference");
+        (bool ok, bytes4 err) = _probe(newFloor, gOld);
+        assertFalse(ok);
+        assertEq(err, OracleAdapter.InsufficientGasForOracle.selector, "in the band: a retryable revert");
     }
 }

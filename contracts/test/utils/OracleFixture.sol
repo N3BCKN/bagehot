@@ -15,7 +15,7 @@ abstract contract OracleFixture is Test {
     uint256 internal constant MIN_PRICE = 10e18;
     uint256 internal constant MAX_PRICE = 1_000_000e18;
     uint256 internal constant ORACLE_GAS = 100_000;
-    uint256 internal constant POST_GAS = 1588;
+    uint256 internal constant POST_GAS = 3175; // ceil(2 * 100_000 / 63), ADR-0030
     int256 internal constant ANSWER = 2000e8;
 
     MockAggregator internal feed;

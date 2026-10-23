@@ -122,4 +122,53 @@ contract OracleAdapterGasTest is OracleFixture {
         assertGt(t.insufficientGas, 0, "the sweep reached the starvation band");
         assertGt(t.usable, 0, "and the usable band");
     }
+
+    function _forged(OracleAdapter o, uint256 from, uint256 to, uint256 step)
+        internal
+        returns (uint256 forged)
+    {
+        for (uint256 g = from; g <= to; g += step) {
+            uint256 snap = vm.snapshotState();
+            (bool ok, bytes memory ret) =
+                address(o).call{gas: g}(abi.encodeCall(OracleAdapter.fetchPrice, ()));
+            vm.revertToState(snap);
+            if (ok) {
+                (, bool usable) = abi.decode(ret, (uint256, bool));
+                if (!usable) ++forged;
+            }
+        }
+    }
+
+    function _proxiedAdapter(uint256 cap, uint256 post, uint256 need) internal returns (OracleAdapter) {
+        feed.setMode(MockAggregator.Mode.BurnGas);
+        feed.setGasToBurn(need);
+        return new OracleAdapter(
+            address(new ProxyFeed(AggregatorV3Interface(address(feed)))),
+            address(seq),
+            STALENESS,
+            GRACE,
+            MIN_PRICE,
+            MAX_PRICE,
+            cap,
+            post
+        );
+    }
+
+    /// @dev Permanent regression for ADR-0030 (the CHG-004 sweep): a proxied feed needing 900k at
+    ///      ORACLE_GAS = 1M, the floor ceil(2·1M/63) = 31,747 — no caller gas limit forges a recorded
+    ///      failure. (At the old floor 15,874 every one of 1,601 limits did; it can no longer be
+    ///      deployed.) The same sweep on Base's real proxy bytecode: OracleGasRuleForkTest.
+    function test_regression_proxiedFeed_cap1M_noForgery() public {
+        OracleAdapter o = _proxiedAdapter(1_000_000, 31_747, 900_000);
+        assertEq(_forged(o, 880_000, 960_000, 97), 0);
+    }
+
+    /// @dev … and at the start parameters (ORACLE_GAS 100k, floor 3,175), feeds needing 50k … 95k.
+    function test_regression_proxiedFeed_startParameters_noForgery() public {
+        uint256 forged;
+        for (uint256 need = 50_000; need <= 95_000; need += 15_000) {
+            forged += _forged(_proxiedAdapter(ORACLE_GAS, POST_GAS, need), 40_000, 140_000, 41);
+        }
+        assertEq(forged, 0);
+    }
 }

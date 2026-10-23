@@ -1,6 +1,8 @@
 # CHG-003: Require the wired peer graph to agree; state StableToken's lock and events exactly
 
-- Status: proposed (awaiting human review)
+- Status: **approved 2026-10-23 (option 1) and applied** to spec §2.5, §3.3 (constraint 8), §11.1 —
+  ADR-0031. Conditions: P18's prompt carries the deploy-script and smoke-test assertions as a named
+  acceptance criterion; findings of this severity get their own message in future.
 - Raised: 2026-10-23, P11 (security-reviewer findings F-3, F-5, F-6)
 - Affects: `docs/spec.md` §3.3 (new constraint 8), §2.5 / §5.10 (one sentence), §11.1 (StableToken
   row). No formula, rounding or algorithm changes; no vector changes.

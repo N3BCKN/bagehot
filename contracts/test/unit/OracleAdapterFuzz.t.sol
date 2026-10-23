@@ -60,7 +60,7 @@ contract OracleAdapterFuzzTest is Test {
         MockAggregator feed = new MockAggregator(c.decimals);
         MockSequencerFeed seq = new MockSequencerFeed();
         OracleAdapter oracle = new OracleAdapter(
-            address(feed), address(seq), c.staleness, c.grace, c.minPrice, c.maxPrice, 100_000, 1588
+            address(feed), address(seq), c.staleness, c.grace, c.minPrice, c.maxPrice, 100_000, 3175
         );
         seq.setStatus(c.seqAnswer, c.startedAt);
         if (c.seqFails) seq.setMode(MockAggregator.Mode.Revert);

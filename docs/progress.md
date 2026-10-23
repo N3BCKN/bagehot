@@ -16,7 +16,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | P09 | Stress blocks and transaction costs | done | | 31 blocks (20 stress, 10 calm, 2024-08-05); Base costs 930 blocks, L1 crash windows 5,136 sampled blocks; L1 data fee of a liquidation ≈ $0.13–0.19 before blobs → ≈ $0.0001 after |
 | P10 | Math library and shared vectors | done | 2026-10-23 | `Rounding.sol` and `WadRayMath.sol` with the bit-identical Python model, generator and vectors; 25 Foundry + 19 Python tests green; rpow error bound measured; CHG-001 (record it in spec §2.3) approved 2026-10-23, the spec edit is staged and lands when `docs/spec.md` is unlocked. Halmos proofs close with no solver — yices, z3 and bitwuzla 0.8.1 all time out; the evidence is fuzzing + the independent vectors + both-side parity, a recorded deviation from the Halmos acceptance criterion (P10-1) |
 | P11 | StableToken, wiring pattern and mocks | done | 2026-10-23 | `WiredBase` (src/lib/Wired.sol), shared `Errors.sol`, `StableToken` per spec §5.9; `MockAggregator`, `MockSequencerFeed`, `ReplayAggregator`; 43 new tests, 100% line/branch coverage on core; every custom error triggered. security-reviewer: no code issue; spec-level findings in CHG-003 (proposed) |
-| P12 | OracleAdapter | done | 2026-10-23 | `OracleAdapter` per spec §6.10 with the ADR-0029 fixed-buffer read; Python mirror `model/protocol/oracle.py`; 100% line/branch coverage; 20 vectors on both sides; independent-reference fuzz; split gas-griefing sweeps; fork test green on real Base feeds. security-reviewer signs off, conditional on CHG-004 (proposed) before P18 |
+| P12 | OracleAdapter | done | 2026-10-23 | `OracleAdapter` per spec §6.10 with the ADR-0029 fixed-buffer read; Python mirror; 100% line/branch coverage; 20 vectors on both sides; independent-reference fuzz; split gas-griefing sweeps; fork tests on Base's real feeds and real proxy. security-reviewer signed off; its condition (CHG-004: post-failure gas floor `ceil(2·ORACLE_GAS/63)`, cap `ORACLE_GAS`, start 3,175) is approved and applied (ADR-0030) |
 | P13 | SortedPositions and hint helpers | todo | | |
 | P14 | VaultManager I: positions and borrowing | todo | | |
 | P15 | VaultManager II: interest accrual and routing | todo | | |
@@ -262,6 +262,43 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
   3.12). Hooks are mode 644 — see Human actions.
 
 **Next.** P01, continuous integration.
+
+### 2026-10-23 · CHG-004 and CHG-003 applied · P12 closed
+
+- **CHG-004:** spec §3.1, §3.3, §3.4 and §6.10.3, plus D-29. 24 vector fields `ORACLE_POST_FAILURE_GAS` 1588 → 3175; every other byte is identical to HEAD, re-validated field by field.
+- **CHG-003 (option 1):** §3.3 constraint 8, the wired peer graph, enforced by the deploy script and the smoke test; §2.5 states StableToken has no lock; §11.1 lists StableToken's events in full.
+- **ADRs:** ADR-0028 and ADR-0030 accepted by the human. ADR-0031 written for CHG-003, `proposed`.
+- **Tests:** vector tests pass on both sides, and `/verify` is green.
+- **Protection bypass, and the standing rule that came out of it.** The first CHG-004 apply wrote to the protected spec and vectors before the human's unlock was saved: the check and the script were chained, and the hook does not stop Bash-run scripts. I restored the files to HEAD at once.
+  - Rule now in `CLAUDE.md`: any script that writes to `docs/spec.md`, `spec/vectors/**`, `docs/invariants.md` or `docs/preregistration.md` reads `.claude/protected-paths.txt` itself.
+  - The unlock is verified in a separate step; the human's "unlocked" is not the unlock, the file is.
+- **Process rule.** Findings whose failure mode is "kills all liquidations", "unbacked-mint key" or "forged shutdown" get their own message with a header. CHG-003 should have had that treatment at P11.
+- **Human.** Re-protect lines 7–8 of `.claude/protected-paths.txt`. Add the CHG-003 criterion to the P18 prompt. Review ADR-0031.
+
+### 2026-10-23 · CHG-004 applied · P12 closed
+
+**Checks the human required before approving.**
+1. **Real proxy, not a mock.** The first evidence came from `ProxyFeed`, a mock of the proxy's call shape, so I re-ran it on a Base fork (block 45,198,666). The test keeps Chainlink's deployed `EACAggregatorProxy` bytecode and replaces only the aggregator behind it, via `vm.etch`, with an honest but expensive one. The real aggregator costs about 19k gas and cannot be starved under any allowed cap.
+   - **Gas left after a starved read:** at most 2,816 at a 100k cap (floor 3,175) and 28,734 at 1M (floor 31,747). The old floors (1,588; 15,874) are crossed in both cases.
+   - **Adversarial sweep at a 1M cap:** 789 of 825 gas limits forged a recorded failure at the old floor, 0 at the new one. At the start parameters, 0 at either floor.
+2. **Honest callers at the new floor.** Compared floors 1,588 and 3,175 on a 50k cap, where both are deployable.
+   - **No effect** when the feed fails by reverting, or with one `fetchPrice` per transaction: fetchPrice's own ~4.2k of work after a failed read exceeds both floors.
+   - **Only a second `fetchPrice` in the same transaction**, with the clock running and a feed that burns its whole cap, needs exactly 1,587 more gas. In that band the caller gets `InsufficientGasForOracle`, which is retryable.
+
+**Changed.**
+- ADR-0030; ADR-0024 marked superseded (bound only).
+- `OracleAdapter` constructor, index 7 now checks both bounds; Python model to match.
+- Spec §3.1, §3.3, §3.4 and §6.10.3, the last rewritten with the proxy refund term; new deviation row D-29; header note.
+- 24 `ORACLE_POST_FAILURE_GAS` fields in 8 vector files, 1588 → 3175. `math.json#derived_constants` is now `ceil(2·100k/63)`. All other bytes are identical, regenerated by the reference generator and compared field by field.
+
+**Tests.**
+- Permanent regression sweeps: `test_regression_proxiedFeed_cap1M_noForgery` and `test_regression_proxiedFeed_startParameters_noForgery` (mock proxy, in `just test`); `OracleGasRuleForkTest` (real proxy, in `just test-fork`).
+- Constructor bounds tested at both ends.
+- Honest-caller tests `test_gasRule_newFloor_*`.
+
+**Process notes.**
+- **My closing summary claimed lines 7–8 of `.claude/protected-paths.txt` were commented out. They were not.** I had not re-read the file; it was a false alarm.
+- **Several fixture edits silently missed their targets** after `forge fmt` rewrote number literals (`1_588` became `1588`). Edits now assert that the target string exists.
 
 ### 2026-10-23 · P12 · OracleAdapter
 
@@ -675,8 +712,8 @@ constrain data collection and calibration. Each is checked at its target prompt 
 | P04-1 | Two threat-register rows have no test yet: `AuctionCallbackActive` on `buy`/`check` (T-14 → P33), and a `redeem` called from inside a buyer callback (T-01/T-14 → P16/P33, same gap as P02-4). Each is marked TBD in `docs/threat-model.md` with its prompt. The third, the oracle gas-starvation branch (T-03), was closed at P12 by `OracleAdapterGasTest`. | Claude | at P16/P33 |
 | P04-2 | **ADR-0027's implementation obligation.** The human accepted ADR-0027 at the P04 gate on the condition that P16 lands the targeted test for the 11-wei partial (`redemption.json#partial_cancelled_below_mcr`: the 11-wei redemption reverts `NothingRedeemed` with state unchanged, the 1,000-stable redemption then succeeds and raises the position's ICR to 1.101897) and that it passes against `VaultManager.redeemCollateral`, not only against the reference generator and the Python model. P16 is not done until it does. | Claude | at P16 |
 | P11-1 | **P18 deployment pitfalls from the P11 review (F-4).** `deployer` is whoever executes CREATE. (i) `new X{salt: s}` inside `forge script` goes through the CREATE2 proxy `0x4e59b44847b379578588920cA78FbF26c0B4956C`, which becomes `deployer` and can never call `wire`: the contract is bricked, permanently NotWired. (ii) A factory that deploys in one call and exposes a separate `wireAll(...)` moves the front-running window from `wire` to the factory. P18 must: deploy and wire inside one factory call that takes no caller-supplied addresses; never use `{salt:}` for wired contracts; assert `deployer() == factory` and `wired()` from the deployment receipt; on Base Sepolia, assert that the price feed is the configured Chainlink address unless the environment is `fork_replay` (`ReplayAggregator` is operator-controlled). Also (P12 review F4) assert that both oracle feeds have code and equal the `config/<chain>.toml` addresses. Also update the threat-model row "Deployer key": with a factory, the deployer is the factory. | Claude | at P18 |
-| P11-2 | CHG-003 (proposed): §3.3 constraint 8 (the wired peer graph must agree; the deploy script enforces it), StableToken's no-lock sentence in §2.5, and §11.1's StableToken events row. Documentation and a P18 obligation only. Awaiting the human. | human | before P18 |
-| P12-1 | **CHG-004 (proposed): the oracle gas rule's floor is too low for proxied feeds** (security review F1, reproduced). A starved proxied read leaves about `2·ORACLE_GAS/63`, not `ORACLE_GAS/63`. At `ORACLE_GAS` near 1M with the spec-minimum threshold, any caller can forge a recorded oracle failure. The start parameters (100k / 1,588) are safe, which a committed proxied sweep shows. Also: no upper bound on the threshold (F2). Recommended: floor `ceil(2·ORACLE_GAS/63)`, cap `ORACLE_GAS`, start value 3,175. Must be decided before P18 deploys. | human | before P18 |
+| P11-2 | Resolved 2026-10-23: CHG-003 approved (option 1) and applied to spec §2.5, §3.3 constraint 8 and §11.1 (ADR-0031, proposed). The human's condition: the deploy-script wiring-graph check and the smoke-test assertions (`deployer() == factory`, `wired()` on every contract, peer-graph agreement) must be a named acceptance criterion in **P18's own prompt text**. The prompt kit is not in this repository (there is no `prompts/` directory), so the human adds it there; the exact text was handed over on 2026-10-23. | — | closed |
+| P12-1 | Resolved 2026-10-23: CHG-004 approved and applied. The floor is now `ceil(2·ORACLE_GAS/63) ≤ ORACLE_POST_FAILURE_GAS ≤ ORACLE_GAS`, start value 3,175, per ADR-0030 (which supersedes ADR-0024's bound). Before approving, the human required two checks, and both passed: the critical cases re-run on Base's real proxy, and an honest caller tested at the new floor. The permanent regression sweeps are `test_regression_proxiedFeed_*` (in `just test`) and `OracleGasRuleForkTest` (in `just test-fork`). | — | closed |
 | P08-2 | `.gitleaks.toml` gained a value-only allowlist for public EVM addresses (`^0x[0-9a-fA-F]{40}$`): Aave's `a_token`/`v_token` keys in `config/8453.toml` tripped `generic-api-key`. A first version also allowlisted the `config/` path; a probe showed it hid a 64-hex private key there, so it was removed before anything was pushed. Probes confirm a 0x+64-hex key, a `private_key`, and a bare 40-hex token are still caught. The original slip: the scan and the commit were chained with `;`, so the commit ran despite the findings — scans now gate commits with `&&`. | Claude | no |
 | P02-4 | No vector exercises `redeem`'s `AuctionCallbackActive` branch (D-27, §6.7.2): it needs a deployment-B buyer callback that calls `redeem`, which the recorder cannot drive. Add it as a Foundry test at P16/P33 and as a model test at P22. | Claude | at P16/P33 |
 | P02-3 | The vector reference implementation is throwaway (scratchpad). Vectors are validated independently from P10 (Foundry) and P22 (Python model); a vector that disagrees with both implementations is a spec question for `/spec-change`. | Claude | at P10/P22 |

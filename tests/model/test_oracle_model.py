@@ -24,7 +24,7 @@ def adapter(**overrides) -> o.OracleAdapter:
         price_feed=1,
         sequencer_feed=2,
         oracle_gas=100_000,
-        oracle_post_failure_gas=1_588,
+        oracle_post_failure_gas=3_175,
         feed_decimals=8,
         **START,
     )
@@ -107,13 +107,29 @@ def test_vector_count() -> None:
         ({"max_price": 10**30 + 1}, 5),
         ({"oracle_gas": 49_999}, 6),
         ({"oracle_gas": 1_000_001}, 6),
-        ({"oracle_gas": 50_000, "oracle_post_failure_gas": 793}, 7),
+        ({"oracle_gas": 50_000, "oracle_post_failure_gas": 1_587}, 7),
+        ({"oracle_gas": 1_000_000, "oracle_post_failure_gas": 31_746}, 7),
+        ({"oracle_gas": 50_000, "oracle_post_failure_gas": 50_001}, 7),
+        (
+            {"oracle_gas": 100_000, "oracle_post_failure_gas": 1_588},
+            7,
+        ),  # the pre-CHG-004 start value
     ],
 )
 def test_constructor_invalid_parameter(overrides: dict, index: int) -> None:
     with pytest.raises(o.InvalidParameter) as e:
         adapter(**overrides)
     assert e.value.index == index
+
+
+def test_constructor_floor_bounds_are_inclusive() -> None:
+    assert (
+        adapter(oracle_gas=50_000, oracle_post_failure_gas=1_588).oracle_post_failure_gas == 1_588
+    )
+    assert (
+        adapter(oracle_gas=50_000, oracle_post_failure_gas=50_000).oracle_post_failure_gas == 50_000
+    )
+    assert adapter(oracle_gas=1_000_000, oracle_post_failure_gas=31_747).oracle_gas == 1_000_000
 
 
 def test_constructor_invalid_feed_decimals() -> None:

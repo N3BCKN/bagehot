@@ -75,17 +75,20 @@ the P03 gate via `/spec-change` CHG-002.
 | [0021](0021-one-shot-wiring.md) | One-shot `wire(...)` by the immutable deployer | accepted | P04 |
 | [0022](0022-exact-integer-model-zero-tolerance.md) | Exact-integer model; zero differential tolerance | accepted | P04 |
 | [0023](0023-penalty-cap-and-surplus-to-owner.md) | Cap the penalty; return the surplus to the owner | accepted | P04 |
-| [0024](0024-oracle-gas-cap-and-post-failure-check.md) | Oracle gas cap and post-failure gas check | accepted | P04 |
+| [0024](0024-oracle-gas-cap-and-post-failure-check.md) | Oracle gas cap and post-failure gas check | superseded by ADR-0030 | P04 |
 | [0025](0025-survival-analysis-for-liquidator-latency.md) | Survival analysis for liquidator latency | accepted | P04 |
 | [0026](0026-critical-tcr-redemption-gate.md) | Block redemptions below the critical TCR | accepted | P04 |
 | [0027](0027-cancel-partial-redemption-below-mcr.md) | Cancel a partial redemption that would leave the position below MCR | accepted | P03 / CHG-002 |
-| [0028](0028-document-rpow-error-bound.md) | Document rpow's bracket property and error bound in the specification | proposed | P10 / CHG-001 |
+| [0028](0028-document-rpow-error-bound.md) | Document rpow's bracket property and error bound in the specification | accepted | P10 / CHG-001 |
 | [0029](0029-assembly-for-bounded-feed-reads.md) | Read the oracle feeds with a fixed-buffer assembly staticcall | accepted | P12 |
+| [0030](0030-post-failure-gas-floor-covers-proxy-refunds.md) | Set the post-failure gas floor to ceil(2·ORACLE_GAS/63), capped at ORACLE_GAS | accepted | P12 / CHG-004 |
+| [0031](0031-deploy-script-enforces-the-wired-peer-graph.md) | The deployment script enforces that the wired peer graph agrees | proposed | P11 / CHG-003 |
 
 Numbering is continuous and never reused; a later decision takes the next free number, which is
 not a position in the plan. **All 27 were accepted by the human at the P04 gate on 2026-10-23**,
 ADR-0027 with the obligation that P16 lands the targeted test for the 11-wei partial and that it
 passes against the Solidity, not only against the reference generator and the Python model. An
 accepted ADR is never edited; changing one of these decisions means a new ADR that supersedes it.
-ADR-0028 (CHG-001) was written after the gate and is `proposed` until the human accepts it.
-ADR-0029 (P12) was accepted by the human at the P12 plan gate.
+ADR-0028 (CHG-001), ADR-0029 (P12) and ADR-0030 (CHG-004, superseding ADR-0024's bound) were
+written after the gate and accepted by the human on 2026-10-23. ADR-0031 (CHG-003) is `proposed`
+until the human accepts it.

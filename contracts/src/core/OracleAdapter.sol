@@ -11,7 +11,8 @@ import {Rounding} from "../lib/Rounding.sol";
 ///         call, sequencer down or restarting, a non-positive, future, stale or out-of-bounds
 ///         answer — reports "unusable", and operations that need a price revert `PriceUnusable`
 ///         in their own contract (§7). A caller cannot fake a failure by starving a feed call of
-///         gas: that reverts `InsufficientGasForOracle` instead (§6.10.3, threat T-03).
+///         gas, even through a proxy: that reverts `InsufficientGasForOracle` instead (§6.10.3,
+///         threat T-03, ADR-0030).
 /// @dev No `wire`, no owner, no lock: the adapter holds no tokens and only `staticcall`s the two
 ///      immutable feeds, each with gas `ORACLE_GAS`. The single assembly block is the feed read,
 ///      approved by ADR-0029. Nothing else in this contract is privileged or mutable except the
@@ -47,8 +48,10 @@ contract OracleAdapter {
     uint256 public constant MAX_ORACLE_GAS = 1_000_000;
     /// @notice A WAD has 18 decimals; a feed may have at most as many (spec §3.3, constraint 4).
     uint256 public constant MAX_FEED_DECIMALS = 18;
-    /// @dev EIP-150: a call forwards at most 63/64 of the gas left, so a call starved by its caller
-    ///      leaves less than ORACLE_GAS / 63 behind (spec §6.10.3).
+    /// @dev EIP-150: a call forwards at most 63/64 of the gas left. A feed call starved by its caller
+    ///      leaves the adapter less than ORACLE_GAS/63 of its own, plus less than ORACLE_GAS/63
+    ///      handed back by any chain of bubbling calls inside the feed (a Chainlink proxy returns the
+    ///      1/64 it kept) — so the floor is ceil(2·ORACLE_GAS/63) (spec §6.10.3, ADR-0030).
     uint256 internal constant CALL_GAS_DIVISOR = 63;
 
     AggregatorV3Interface public immutable priceFeed;
@@ -92,7 +95,12 @@ contract OracleAdapter {
         if (minPrice < MIN_PRICE_FLOOR) revert InvalidParameter(4);
         if (maxPrice <= minPrice || maxPrice > MAX_PRICE_CEILING) revert InvalidParameter(5);
         if (oracleGas < MIN_ORACLE_GAS || oracleGas > MAX_ORACLE_GAS) revert InvalidParameter(6);
-        if (oraclePostFailureGas < Rounding.divUp(oracleGas, CALL_GAS_DIVISOR)) revert InvalidParameter(7);
+        if (
+            oraclePostFailureGas < Rounding.divUp(2 * oracleGas, CALL_GAS_DIVISOR)
+                || oraclePostFailureGas > oracleGas
+        ) {
+            revert InvalidParameter(7);
+        }
 
         (bool ok, bytes memory ret) =
             priceFeed_.staticcall(abi.encodeCall(AggregatorV3Interface.decimals, ()));

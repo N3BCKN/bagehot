@@ -1,6 +1,9 @@
 # CHG-004: Double the post-failure gas floor so proxied feeds cannot be starved into a recorded failure; cap it
 
-- Status: proposed (awaiting human review)
+- Status: **approved 2026-10-23 (option 1) and applied** (spec §3.1, §3.3, §3.4, §6.10.3, D-29;
+  24 vector fields), after two checks the human asked for passed: the
+  critical cases re-run on Base's real proxy bytecode (fork), and an honest caller with a genuinely
+  failing feed tested at the new floor — see "Checks before approval" below. ADR-0030.
 - Raised: 2026-10-23, P12 (security-reviewer findings F1, F2; F1 reproduced independently)
 - Affects: `docs/spec.md` §3.1 (`ORACLE_POST_FAILURE_GAS` range and start value), §3.3 constraint 4,
   §3.4 (OracleAdapter index 7), §6.10.3 (the argument); ADR-0024's rationale; the
@@ -44,6 +47,30 @@ ShutdownModule.check must be designed with this in mind (P-shutdown).
 
 A chain of k nested bubbling calls returns at most `F/64 + F/64² + … < F/63`, so the adapter
 never holds more than `2·ORACLE_GAS/63` after a starved call, at any proxy depth.
+
+## Checks before approval
+
+1. **Real proxy, not a mock.** The evidence table above came from `ProxyFeed`, a mock of the
+   proxy's call shape. Re-run on a Base fork (block 45,198,666) keeping Chainlink's deployed
+   `EACAggregatorProxy` (`0x7104…6Bb70`, 9,571 bytes) and replacing only the aggregator behind it by
+   an honest but expensive one (`vm.etch`; the real aggregator's cold read costs ~19k and cannot be
+   starved at any allowed cap). `OracleGasRuleForkTest`:
+
+   | ORACLE_GAS | max gas left after a starved read | ceil(C/63) | ceil(2C/63) |
+   |---|---|---|---|
+   | 100,000 | 2,816 | 1,588 — crossed | 3,175 — holds (359 to spare) |
+   | 1,000,000 | 28,734 | 15,874 — crossed | 31,747 — holds |
+
+   Adversarial sweep, feed needing 900k at ORACLE_GAS 1M: **789 of 825** limits forged at 15,874,
+   **0** at 31,747; start parameters: 0 at 1,588 and 0 at 3,175. Floors of 3,174 and 3,176 behave
+   identically at 100k: the measured maximum is 2,816; the number is set by the bound, not tuned.
+2. **Honest callers at the new floor** (`test_gasRule_newFloor_*`, floors 1,588 vs 3,175 at a 50k
+   cap where both are deployable): a feed that fails by reverting hands back almost all gas — no
+   difference; with cold storage (one `fetchPrice` per transaction) no difference either, because
+   `fetchPrice`'s own work after a failed read (~4.2k) exceeds both floors. Only a *second*
+   `fetchPrice` in the same transaction, with the clock running and a feed that burns its whole cap,
+   needs exactly 1,587 more gas; in that band the caller gets `InsufficientGasForOracle` — a
+   retryable revert, never a wrong answer.
 
 ## Options
 
