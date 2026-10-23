@@ -756,16 +756,36 @@ large liquidation meets a small `totalStakes`. What is measured: P02 observed in
 re-validate against the invariant campaign and tighten `k` if the margin is larger than needed, or
 escalate through `/spec-change` if the campaign exceeds it — never raise `k` to make a run pass.**
 
-**Ties.** `idA < idB` when `cA·nB == cB·nA` is asserted **only for pairs whose keys have not
-changed since insertion** (the handler tracks this). Two positions inserted in the correct order
-with different keys can drift into exact equality through redistribution, and the resulting id
-order is then an artefact of insertion history, not a property to assert.
+**Ties and the exact regime (CHG-005).** Call a list member *exact* if its key has not changed
+since it was last inserted **and** every member of the list was exact at the moment of that
+insertion. While **every** current member is exact, the list is exactly ordered by §6.3.1: for each
+adjacent pair, `cA·nB > cB·nA`, or `cA·nB == cB·nA` and `idA < idB` — no tolerance. As soon as any
+current member is not exact, every adjacent pair is held only to the tolerance check above, ties
+included. The handler tracks exactness per member.
 
-**Scope.** Both deployments, every phase. Insertion and hint validation are exact, so the tolerance
-applies only to pairs whose keys moved through redistribution.
+Both halves of the definition are needed. A key that changed without a reinsert breaks exactness
+directly. A member inserted while another member was not exact may have been placed against that
+member's changed key; it can then sit on the wrong side of an exact tie with a member whose key
+never changed, and it stays there after the non-exact member has left the list. So "no current
+member has drifted" is **not** sufficient. Counterexample (regression test
+`SortedPositionsTest.test_CHG005_tieReversedThroughADriftedNeighbourThatHasSinceLeft`): B (id 12)
+inserted; D inserted 3 wei above B, then its key lowered by 4 wei; A (id 19), with B's key, is placed
+ahead of D; D removed — A sits directly ahead of B with equal keys, neither changed since insertion,
+and no current member has drifted.
 
-**Checked in.** Foundry `invariant_I13_sortedByNicrWithinTolerance` (one walk, O(size));
-Python `model.invariants.check_I13(state)`; differential: the full list order is in `snapshot()`
+In the protocol a key changes without a reinsert when a redistribution adds pending rewards (§6.5).
+A member becomes exact again when it is reinserted (any position operation) while every other
+member is exact.
+
+**Scope.** Both deployments, every phase. Insertion and hint validation are exact against the keys
+they read, so the list is exactly ordered in the exact regime. Once any key has changed through
+redistribution, the tolerance applies to every adjacent pair — including pairs whose own keys never
+changed, for the reason given under "Ties and the exact regime".
+
+**Checked in.** Foundry `invariant_I13_sortedByNicrWithinTolerance` (one walk, O(size); every run
+must reach both the exact and the tolerance-only regime) and the CHG-005 regression test above;
+Python `model.invariants.check_I13(state)` and `test_chg005_tie_reversed_through_a_drifted_neighbour_that_has_since_left`;
+differential: the full list order is in `snapshot()`
 and compared exactly between the two implementations — the tolerance is about reality, not about
 the two sides disagreeing.
 

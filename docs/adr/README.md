@@ -83,6 +83,7 @@ the P03 gate via `/spec-change` CHG-002.
 | [0029](0029-assembly-for-bounded-feed-reads.md) | Read the oracle feeds with a fixed-buffer assembly staticcall | accepted | P12 |
 | [0030](0030-post-failure-gas-floor-covers-proxy-refunds.md) | Set the post-failure gas floor to ceil(2·ORACLE_GAS/63), capped at ORACLE_GAS | accepted | P12 / CHG-004 |
 | [0031](0031-deploy-script-enforces-the-wired-peer-graph.md) | The deployment script enforces that the wired peer graph agrees | accepted | P11 / CHG-003 |
+| [0032](0032-i13-exact-regime-requires-every-member-exact.md) | I13 asserts exact order only while every list member is exact | accepted | P13 / CHG-005 |
 
 Numbering is continuous and never reused; a later decision takes the next free number, which is
 not a position in the plan. **All 27 were accepted by the human at the P04 gate on 2026-10-23**,
@@ -90,4 +91,5 @@ ADR-0027 with the obligation that P16 lands the targeted test for the 11-wei par
 passes against the Solidity, not only against the reference generator and the Python model. An
 accepted ADR is never edited; changing one of these decisions means a new ADR that supersedes it.
 ADR-0028 (CHG-001), ADR-0029 (P12) and ADR-0030 (CHG-004, superseding ADR-0024's bound) were
-written after the gate and accepted by the human on 2026-10-23, as was ADR-0031 (CHG-003).
+written after the gate and accepted by the human on 2026-10-23, as were ADR-0031 (CHG-003) and
+ADR-0032 (CHG-005).

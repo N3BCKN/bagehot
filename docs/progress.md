@@ -17,7 +17,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | P10 | Math library and shared vectors | done | 2026-10-23 | `Rounding.sol` and `WadRayMath.sol` with the bit-identical Python model, generator and vectors; 25 Foundry + 19 Python tests green; rpow error bound measured; CHG-001 (record it in spec §2.3) approved 2026-10-23, the spec edit is staged and lands when `docs/spec.md` is unlocked. Halmos proofs close with no solver — yices, z3 and bitwuzla 0.8.1 all time out; the evidence is fuzzing + the independent vectors + both-side parity, a recorded deviation from the Halmos acceptance criterion (P10-1) |
 | P11 | StableToken, wiring pattern and mocks | done | 2026-10-23 | `WiredBase` (src/lib/Wired.sol), shared `Errors.sol`, `StableToken` per spec §5.9; `MockAggregator`, `MockSequencerFeed`, `ReplayAggregator`; 43 new tests, 100% line/branch coverage on core; every custom error triggered. security-reviewer: no code issue; spec-level findings in CHG-003 (proposed) |
 | P12 | OracleAdapter | done | 2026-10-23 | `OracleAdapter` per spec §6.10 with the ADR-0029 fixed-buffer read; Python mirror; 100% line/branch coverage; 20 vectors on both sides; independent-reference fuzz; split gas-griefing sweeps; fork tests on Base's real feeds and real proxy. security-reviewer signed off; its condition (CHG-004: post-failure gas floor `ceil(2·ORACLE_GAS/63)`, cap `ORACLE_GAS`, start 3,175) is approved and applied (ADR-0030) |
-| P13 | SortedPositions and hint helpers | todo | | |
+| P13 | SortedPositions and hint helpers | done | 2026-10-23 | `SortedPositions` per spec §6.3; `HintHelpers` (view-only); Python mirror `model/protocol/sorted_list.py`; 100% line/branch coverage; insert gas with exact hints 135,254 at list sizes 10/100/1,000 (O(1)); I13 campaign green (30 seeds) after CHG-005 / ADR-0032 corrected I13's tie clause |
 | P14 | VaultManager I: positions and borrowing | todo | | |
 | P15 | VaultManager II: interest accrual and routing | todo | | |
 | P16 | RedemptionModule | todo | | |
@@ -262,6 +262,40 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
   3.12). Hooks are mode 644 — see Human actions.
 
 **Next.** P01, continuous integration.
+
+### 2026-10-23 · P13 · SortedPositions and hint helpers
+
+**Changed.**
+- New `src/core/SortedPositions.sol`, spec §6.3 transcribed:
+  - keys read from `sortKey` and compared by exact cross-multiplication, with no NICR division;
+  - walks bounded by `MAX_HINT_STEPS`, failing with `StaleHint`;
+  - `find`, a non-reverting probe that evaluates exclusion on the reduced list.
+- New `src/core/HintHelpers.sol`: view-only `getApproxHint`, approved by the human; `getRedemptionHints` deferred to P16.
+- Interfaces `ISortKeySource` and `ISortedPositions`.
+- Python mirror `model/protocol/sorted_list.py`, which also reports walk steps.
+
+**Decisions.**
+- **Spec over prompt.** `insert(id, upperHint, lowerHint)` reads keys itself rather than taking a NICR, and the views follow spec names (`getFirst`, …, `find`); there is no public `findInsertPosition`.
+- **Id 0 is the null link:** inserting it reverts `NodeExists`. This is unreachable through the VaultManager.
+
+**Tests.**
+- Unit tests on every branch and error, plus CHG-005's regression test.
+- Both vectors in Foundry and pytest; the Python step counts match the traces.
+- Fuzz against a sorted-array reference (2 × 1,024 sequences). With `MAX_HINT_STEPS` = 2, every insert lands exactly or reverts `StaleHint` with no side effects.
+- I13 handler: insert, remove, re-key, drift; per-member exactness; both regimes required in every run.
+- Coverage 100%.
+
+**Gas** (storage cold, as in a fresh transaction; includes the mock VaultManager's call):
+- **Insert with exact hints:** 135,254 at list sizes 10, 100 and 1,000, so O(1).
+- **Hint off by k:** 141,112 / 173,065 / 340,820 for k = 1 / 5 / 25, about 8,400 per extra step.
+- **Stale hint at `MAX_HINT_STEPS` = 30:** 285,779, the same however stale the hint.
+
+**Found.** I13's tie clause was false under drift (CHG-005).
+- A deterministic five-operation counterexample. The fix I first proposed ("no current member has drifted") was also false, on 4 of 30 seeds, because the counterexample's own final state satisfies it. I corrected it before applying.
+- The approved wording, ADR-0032, defines a recursive "exact" member: key unchanged since its last insertion, and every member exact at that insertion. The campaign after applying: 30 seeds × 256 runs × 200 calls, 0 failures, both regimes reached in every run.
+- No downstream reliance on strict tie order under drift. Spec §6.3.1's phrase "among equals, highest id first" describes the exact regime; a qualifier there is optional and would need the spec unlocked.
+
+**Next.** Human: re-protect `docs/invariants.md` (line 10). Then P14.
 
 ### 2026-10-23 · CHG-004 and CHG-003 applied · P12 closed
 
@@ -681,6 +715,7 @@ obligations a later prompt must carry that are not in that prompt's text yet (ro
 | 10 | Base transaction cost = L2 execution + L1 data fee, read from the GasPriceOracle predeploy | P09 (measurement), P24 (cost model) |
 | 11 | Shared test vectors in `spec/vectors/*.json` feed both Foundry and pytest | Done at P02; consumed at P10 (Foundry) and P22 (pytest) |
 | CHG-003 | **P18 acceptance criterion: the wiring graph** (spec §3.3 constraint 8, ADR-0031). This must become a named acceptance criterion in P18's own prompt file once the human commits `prompts/`; until then it is recorded here. The criterion:
+| CHG-005 | **P17 must track per-member exactness in its I13 handler, exactly as P13's handler does (ADR-0032).** A member is *exact* if its key has not changed since its last insertion **and** every member was exact at that insertion. I13 asserts exact order (ties included) only while every current member is exact, and the tolerance check otherwise. Every run must reach both regimes. "No current member has drifted" is **not** an acceptable simplification: it fails on 4 of 30 seeds. The reference implementation is `contracts/test/invariant/SortedPositionsInvariant.t.sol`. Flag this when planning P17. | P17 |
   - **Before broadcasting**, the deploy script asserts that every `wire` address is the contract the factory created for that role, that the peer graph agrees, that every immutable `token`/`weth`/`oracle` is the deployment's, and that no role is an EOA.
   - **The post-deploy smoke test** asserts the same, plus `deployer() == factory` and `wired()` on every contract in the deployment receipt.
   - **Tests:** a StableToken wired to a different strategy than the VaultManager fails, and so does an EOA role. | P18 (add to `prompts/P18-*.md` when committed) |
