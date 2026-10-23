@@ -1,6 +1,6 @@
 # ADR-0021: Allow exactly one setter — a one-shot `wire(...)` by the immutable deployer
 
-- Status: proposed
+- Status: accepted 2026-10-23 (P04 human gate)
 - Date: 2026-10-22
 - Prompt: P04
 - Supersedes: —

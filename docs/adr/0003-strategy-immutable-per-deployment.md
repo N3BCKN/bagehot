@@ -1,6 +1,6 @@
 # ADR-0003: Fix the liquidation strategy at deployment, one per deployment
 
-- Status: proposed
+- Status: accepted 2026-10-23 (P04 human gate)
 - Date: 2026-10-22
 - Prompt: P04
 - Supersedes: —

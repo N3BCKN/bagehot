@@ -1,6 +1,6 @@
 # ADR-0025: Calibrate liquidator latency with survival analysis, not with observed means
 
-- Status: proposed
+- Status: accepted 2026-10-23 (P04 human gate)
 - Date: 2026-10-22
 - Prompt: P04
 - Supersedes: —

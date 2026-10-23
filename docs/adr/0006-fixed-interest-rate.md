@@ -1,6 +1,6 @@
 # ADR-0006: Charge one fixed, per-second-compounded interest rate
 
-- Status: proposed
+- Status: accepted 2026-10-23 (P04 human gate)
 - Date: 2026-10-22
 - Prompt: P04
 - Supersedes: —

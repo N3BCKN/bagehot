@@ -1,6 +1,6 @@
 # ADR-0020: Keep raw data out of the repository; make it reproducible from fetchers and cards
 
-- Status: proposed
+- Status: accepted 2026-10-23 (P04 human gate)
 - Date: 2026-10-22
 - Prompt: P04
 - Supersedes: —

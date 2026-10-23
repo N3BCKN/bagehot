@@ -1,6 +1,6 @@
 # ADR-0022: Write the Python model with exact integers and test differentially at zero tolerance
 
-- Status: proposed
+- Status: accepted 2026-10-23 (P04 human gate)
 - Date: 2026-10-22
 - Prompt: P04
 - Supersedes: —

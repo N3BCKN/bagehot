@@ -1,6 +1,6 @@
 # ADR-0023: Cap the liquidation penalty and return the surplus to the position owner
 
-- Status: proposed
+- Status: accepted 2026-10-23 (P04 human gate)
 - Date: 2026-10-22
 - Prompt: P04
 - Supersedes: —

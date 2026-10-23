@@ -1,6 +1,6 @@
 # ADR-0024: Cap the gas forwarded to feed calls and check the gas left after a failure
 
-- Status: proposed
+- Status: accepted 2026-10-23 (P04 human gate)
 - Date: 2026-10-22
 - Prompt: P04
 - Supersedes: —

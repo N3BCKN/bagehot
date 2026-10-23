@@ -24,6 +24,7 @@ records — the pin cannot drift.
 | slither-analyzer | `0.11.6` | Static analysis, `just static`. Findings triaged in `static-analysis-triage.md`. | `uv tool install slither-analyzer==0.11.6` |
 | aderyn | `0.6.8` | Second static analyser, different detector set. | pre-existing on this host (`cyfrinup`) |
 | halmos | `0.3.3` | Symbolic proofs of simple properties, `just halmos`. | `uv tool install halmos==0.3.3` |
+| bitwuzla | `0.8.1` (macOS arm64 sha256 `f603ff433151cb9f3929a9810a41405bfa57ffaa184fa736a38c32b64a3a9021`) | SMT solver for halmos. The two solvers bundled with halmos 0.3.3 (yices, z3) time out on every rounding proof at 128, 64 and 16 bits (P10-1); bitwuzla is halmos's recommended bit-vector solver. Approved by the human at P10 for a timeboxed attempt. Pinned and checksum-verified by halmos itself. | `HALMOS_ALLOW_DOWNLOAD=1 halmos --solver bitwuzla-0.8.1` (downloads once into halmos's cache) |
 | medusa | `1.5.1` | Stateful fuzzing alongside the Foundry invariant runner, `just medusa`. | pinned release binary, see below |
 
 ### medusa

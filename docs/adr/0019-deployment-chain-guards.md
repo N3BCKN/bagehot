@@ -1,6 +1,6 @@
 # ADR-0019: Guard the deployment chain ids and use keystore accounts only
 
-- Status: proposed
+- Status: accepted 2026-10-23 (P04 human gate)
 - Date: 2026-10-22
 - Prompt: P04
 - Supersedes: —

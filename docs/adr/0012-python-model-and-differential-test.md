@@ -1,6 +1,6 @@
 # ADR-0012: Keep a Python model of the protocol and test it differentially
 
-- Status: proposed
+- Status: accepted 2026-10-23 (P04 human gate)
 - Date: 2026-10-22
 - Prompt: P04
 - Supersedes: —

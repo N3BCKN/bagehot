@@ -1,6 +1,6 @@
 # ADR-0014: Write the core from our own specification rather than forking a reference protocol
 
-- Status: proposed
+- Status: accepted 2026-10-23 (P04 human gate)
 - Date: 2026-10-22
 - Prompt: P04
 - Supersedes: —

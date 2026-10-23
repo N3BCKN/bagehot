@@ -1,6 +1,6 @@
 # ADR-0026: Block redemptions below the critical TCR
 
-- Status: proposed
+- Status: accepted 2026-10-23 (P04 human gate)
 - Date: 2026-10-22
 - Prompt: P04
 - Supersedes: —

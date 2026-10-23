@@ -1,6 +1,6 @@
 # ADR-0004: Redistribute what the strategy cannot absorb, before recording a deficit
 
-- Status: proposed
+- Status: accepted 2026-10-23 (P04 human gate)
 - Date: 2026-10-22
 - Prompt: P04
 - Supersedes: —

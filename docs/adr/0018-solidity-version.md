@@ -1,6 +1,6 @@
 # ADR-0018: Pin solc 0.8.28 with `evm_version = cancun` and transient reentrancy guards
 
-- Status: proposed
+- Status: accepted 2026-10-23 (P04 human gate)
 - Date: 2026-10-22
 - Prompt: P04
 - Supersedes: —

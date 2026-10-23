@@ -1,6 +1,6 @@
 # ADR-0008: Read one Chainlink ETH/USD feed plus the L2 sequencer-uptime feed
 
-- Status: proposed
+- Status: accepted 2026-10-23 (P04 human gate)
 - Date: 2026-10-22
 - Prompt: P04
 - Supersedes: —
