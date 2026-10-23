@@ -668,7 +668,8 @@ existing test family.
 ## Carry-forward
 
 Items from the kit's "Corrections to the blueprint" that no specification text can satisfy: they
-constrain data collection and calibration. Each is checked at its target prompt (spec §12.1).
+constrain data collection and calibration. Each is checked at its target prompt (spec §12.1). Also
+obligations a later prompt must carry that are not in that prompt's text yet (rows named by CHG).
 
 | # | Correction | Target |
 |---|---|---|
@@ -679,6 +680,10 @@ constrain data collection and calibration. Each is checked at its target prompt 
 | 9 | Chainlink proxies change aggregators in phases; history extraction must walk the phases, not a single aggregator | P07 |
 | 10 | Base transaction cost = L2 execution + L1 data fee, read from the GasPriceOracle predeploy | P09 (measurement), P24 (cost model) |
 | 11 | Shared test vectors in `spec/vectors/*.json` feed both Foundry and pytest | Done at P02; consumed at P10 (Foundry) and P22 (pytest) |
+| CHG-003 | **P18 acceptance criterion: the wiring graph** (spec §3.3 constraint 8, ADR-0031). This must become a named acceptance criterion in P18's own prompt file once the human commits `prompts/`; until then it is recorded here. The criterion:
+  - **Before broadcasting**, the deploy script asserts that every `wire` address is the contract the factory created for that role, that the peer graph agrees, that every immutable `token`/`weth`/`oracle` is the deployment's, and that no role is an EOA.
+  - **The post-deploy smoke test** asserts the same, plus `deployer() == factory` and `wired()` on every contract in the deployment receipt.
+  - **Tests:** a StableToken wired to a different strategy than the VaultManager fails, and so does an EOA role. | P18 (add to `prompts/P18-*.md` when committed) |
 
 ## Open issues
 

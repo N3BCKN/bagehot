@@ -1,6 +1,6 @@
 # ADR-0031: The deployment script enforces that the wired peer graph agrees
 
-- Status: proposed
+- Status: accepted 2026-10-23 (human)
 - Date: 2026-10-23
 - Prompt: P11 (found by the security review), applied via `/spec-change` CHG-003
 - Supersedes: —
