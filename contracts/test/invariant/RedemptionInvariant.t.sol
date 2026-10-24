@@ -8,6 +8,7 @@ import {VaultManager} from "../../src/core/VaultManager.sol";
 import {MockAggregator} from "../../src/mocks/MockAggregator.sol";
 import {RedemptionModule} from "../../src/redemption/RedemptionModule.sol";
 import {RedemptionFixture} from "../utils/RedemptionFixture.sol";
+import {RedemptionLastVisit} from "../utils/RedemptionLastVisit.sol";
 import {MockShutdownGate} from "../utils/RedemptionMocks.sol";
 import {MockLedgerViews} from "../utils/VaultMocks.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -49,9 +50,13 @@ contract RedemptionHandler is Test {
     uint256 public partials;
     uint256 public fulls;
     uint256 public skipsSeen;
-    /// @notice Successful calls whose last visit was a cancelled partial (CHG-007, pending: the
-    ///         reason check for this visit is added once the human decides).
-    uint256 public lastVisitCancelled;
+    /// @notice Successful calls whose last visit was a cancelled partial, by reason (I5 / CHG-007).
+    uint256 public cancelledAtMinDebt;
+    uint256 public cancelledByChg002;
+    uint256 public cancelledOnStaleHint;
+    /// @notice A last visit neither redeemed from, nor below MCR, nor cancelled for a legitimate
+    ///         reason: an illegitimate early stop. Must stay 0.
+    uint256 public lastVisitWithoutReason;
 
     constructor(
         VaultManager v_,
@@ -80,9 +85,11 @@ contract RedemptionHandler is Test {
         uint256 debtOf =
             Math.mulDiv(Math.mulDiv(debt, RAY, I, Math.Rounding.Ceil), I, RAY, Math.Rounding.Ceil);
         uint256 coll = Math.mulDiv(Math.max(icr, 1.1e18), debtOf, price, Math.Rounding.Ceil) + 1;
+        uint256 n = Math.mulDiv(debt, RAY, I, Math.Rounding.Ceil);
+        (uint256 hint,,) = hints.getApproxHint(coll, n, 15, debtSeed); // before the prank: a call consumes it
         vm.recordLogs();
         vm.prank(who);
-        try v.openPosition(coll, debt, 0, 0) {} catch {}
+        try v.openPosition(coll, debt, hint, hint) {} catch {}
         _countI2(vm.getRecordedLogs());
     }
 
@@ -107,11 +114,32 @@ contract RedemptionHandler is Test {
         bool[] below; // below MCR at the visit (the views read currentIndex = the call's index)
     }
 
-    function redeem(uint256 actorSeed, uint256 amountSeed, uint256 itSeed, bool useHints) external {
+    /// @param hintMode 0: no hints; 1: the hint helper's; 2: the head for both — far from the slot,
+    ///        so with MAX_HINT_STEPS = 4 the partial is often cancelled on a stale hint
+    function redeem(uint256 actorSeed, uint256 amountSeed, uint256 itSeed, uint8 hintMode) external {
         address who = actors[actorSeed % actors.length];
         uint256 bal = token.balanceOf(who);
         if (bal == 0) return;
-        Call memory c = _prepare(bal, amountSeed, itSeed, useHints);
+        uint256 amount = amountSeed % 3 == 0 ? bound(amountSeed, 1, 1e6) : bound(amountSeed, 1, bal);
+        _run(who, _prepare(amount, bound(itSeed, 1, 8), hintMode));
+    }
+
+    /// @notice The tail in full and a small partial on the next node: the shape whose last visit can be
+    ///         a cancelled partial in a successful call (MIN_DEBT cap, stale hint, CHG-002).
+    function redeemAcrossTail(uint256 actorSeed, uint256 extraSeed, uint8 hintMode) external {
+        address who = actors[actorSeed % actors.length];
+        // the first node from the tail the loop would redeem (skipped nodes cost iterations only)
+        uint256 first = sorted.getLast();
+        for (uint256 k; k < 6 && first != 0 && v.isLiquidatable(first, price); ++k) {
+            first = sorted.getPrev(first);
+        }
+        if (first == 0 || v.isLiquidatable(first, price)) return;
+        uint256 amount = v.debtOf(first) + bound(extraSeed, 1, 1000e18);
+        if (token.balanceOf(who) < amount) return;
+        _run(who, _prepare(amount, 8, hintMode));
+    }
+
+    function _run(address who, Call memory c) internal {
         vm.recordLogs();
         vm.prank(who);
         try rm.redeem(c.amount, c.maxIt, 1e18, c.up, c.lo) {
@@ -125,20 +153,18 @@ contract RedemptionHandler is Test {
         }
     }
 
-    function _prepare(uint256 bal, uint256 amountSeed, uint256 itSeed, bool useHints)
-        internal
-        view
-        returns (Call memory c)
-    {
-        c.amount = amountSeed % 3 == 0 ? bound(amountSeed, 1, 1e6) : bound(amountSeed, 1, bal);
-        c.maxIt = bound(itSeed, 1, 8);
+    function _prepare(uint256 amount, uint256 maxIt, uint8 hintMode) internal view returns (Call memory c) {
+        c.amount = amount;
+        c.maxIt = maxIt;
         c.order = _tailFirst(c.maxIt);
         c.below = new bool[](c.order.length);
         for (uint256 k; k < c.order.length; ++k) {
             c.below[k] = v.isLiquidatable(c.order[k], price);
         }
         c.gated = gate.belowCritical(price); // systemDebt reads currentIndex: the post-accrual value
-        if (useHints) (c.up, c.lo) = _hints(c.amount, c.maxIt);
+        hintMode %= 3;
+        if (hintMode == 1) (c.up, c.lo) = _hints(c.amount, c.maxIt);
+        else if (hintMode == 2) (c.up, c.lo) = (sorted.getFirst(), sorted.getFirst());
     }
 
     function _onRevert(bool gated, bytes4 sel) internal {
@@ -153,41 +179,65 @@ contract RedemptionHandler is Test {
 
     // ------------------------------------------------------------------ checks
 
+    /// @dev What the call's events say.
+    struct Parsed {
+        uint256[] redeemed; // ids, in event order
+        uint256 n;
+        uint256 total; // stablecoin redeemed
+        uint256 iterations;
+        uint256 feeRate;
+        bool partialSeen;
+    }
+
     function _checkRedemption(Vm.Log[] memory logs, Call memory c) internal {
-        (uint256[] memory redeemed, uint256 nRedeemed, uint256 iterations, bool partialSeen) = _parse(logs);
-        if (partialSeen && redeemed[nRedeemed - 1] != c.order[iterations - 1]) ++partialOrderViolations;
-        for (uint256 k; k < iterations; ++k) {
-            if (_contains(redeemed, nRedeemed, c.order[k])) continue;
-            if (k == iterations - 1 && !c.below[k]) {
-                ++lastVisitCancelled; // CHG-007 pending
+        Parsed memory e = _parse(logs);
+        if (e.partialSeen && e.redeemed[e.n - 1] != c.order[e.iterations - 1]) ++partialOrderViolations;
+        for (uint256 k; k < e.iterations; ++k) {
+            if (_contains(e.redeemed, e.n, c.order[k])) continue;
+            if (c.below[k]) {
+                ++skipsSeen;
                 continue;
             }
-            ++skipsSeen;
-            if (!c.below[k]) ++skipViolations;
+            if (k < e.iterations - 1) {
+                ++skipViolations; // only the last visit may be anything but redeemed or skipped
+                continue;
+            }
+            _checkLastVisit(c, e, c.order[k]);
         }
     }
 
-    function _parse(Vm.Log[] memory logs)
-        internal
-        returns (uint256[] memory redeemed, uint256 n, uint256 iterations, bool partialSeen)
-    {
-        redeemed = new uint256[](logs.length);
+    /// @dev I5 (CHG-007): the last visit, not redeemed and not below MCR, must be a cancelled partial
+    ///      with a legitimate reason — MIN_DEBT cap, CHG-002 post-check or stale hint, the first that
+    ///      holds in §6.7.3's order.
+    function _checkLastVisit(Call memory c, Parsed memory e, uint256 id) internal {
+        RedemptionLastVisit.Reason r = RedemptionLastVisit.classify(
+            v, sorted, RedemptionLastVisit.Visit(id, c.amount - e.total, e.feeRate, price, c.up, c.lo)
+        );
+        if (r == RedemptionLastVisit.Reason.MinDebtCap) ++cancelledAtMinDebt;
+        else if (r == RedemptionLastVisit.Reason.Chg002PostCheck) ++cancelledByChg002;
+        else if (r == RedemptionLastVisit.Reason.StaleHint) ++cancelledOnStaleHint;
+        else ++lastVisitWithoutReason;
+    }
+
+    function _parse(Vm.Log[] memory logs) internal returns (Parsed memory e) {
+        e.redeemed = new uint256[](logs.length);
         for (uint256 i; i < logs.length; ++i) {
             bytes32 t = logs[i].topics[0];
             if (t == VaultManager.PositionRedeemed.selector) {
                 uint256 id = uint256(logs[i].topics[1]);
-                (,,, bool closed) = abi.decode(logs[i].data, (uint256, uint256, uint256, bool));
-                if (partialSeen) ++partialOrderViolations; // nothing after the partial
+                (uint256 d,,, bool closed) = abi.decode(logs[i].data, (uint256, uint256, uint256, bool));
+                if (e.partialSeen) ++partialOrderViolations; // nothing after the partial
                 if (closed) {
                     ++fulls;
                 } else {
-                    partialSeen = true;
+                    e.partialSeen = true;
                     ++partials;
                 }
-                redeemed[n++] = id;
+                e.redeemed[e.n++] = id;
+                e.total += d;
                 _checkI5(id);
             } else if (t == RedemptionModule.Redeemed.selector) {
-                (,,,, iterations,) =
+                (,,, e.feeRate, e.iterations,) =
                     abi.decode(logs[i].data, (uint256, uint256, uint256, uint256, uint256, uint256));
             }
         }
@@ -251,6 +301,7 @@ contract RedemptionInvariantTest is RedemptionFixture {
     RedemptionHandler internal handler;
 
     function setUp() public override {
+        maxHintSteps = 4; // stale hints happen, so the stale-hint cancellation is exercised
         super.setUp();
         // a healthy base so the system is live and the redeemers hold stablecoin
         // TCR 1.49 at 2,000: price moves down to 1,000 reach the critical-TCR gate
@@ -268,6 +319,9 @@ contract RedemptionInvariantTest is RedemptionFixture {
         assertEq(handler.partialOrderViolations(), 0, "I5: at most one partial, and it is the last visit");
         assertEq(
             handler.skipViolations(), 0, "I5: a visited, unredeemed node before the last was not below MCR"
+        );
+        assertEq(
+            handler.lastVisitWithoutReason(), 0, "I5: the last visit stopped without a legitimate reason"
         );
     }
 
@@ -293,8 +347,8 @@ contract RedemptionInvariantTest is RedemptionFixture {
         emit log_named_uint("full redemptions", handler.fulls());
         emit log_named_uint("partials", handler.partials());
         emit log_named_uint("skips checked", handler.skipsSeen());
-        emit log_named_uint(
-            "successful calls ending on a cancelled partial (CHG-007)", handler.lastVisitCancelled()
-        );
+        emit log_named_uint("last visit cancelled at MIN_DEBT", handler.cancelledAtMinDebt());
+        emit log_named_uint("last visit cancelled by CHG-002", handler.cancelledByChg002());
+        emit log_named_uint("last visit cancelled on a stale hint", handler.cancelledOnStaleHint());
     }
 }
