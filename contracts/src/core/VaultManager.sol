@@ -5,7 +5,12 @@ import {IOracleAdapter} from "../interfaces/IOracleAdapter.sol";
 import {ISortKeySource} from "../interfaces/ISortKeySource.sol";
 import {ISortedPositions} from "../interfaces/ISortedPositions.sol";
 import {IStableToken} from "../interfaces/IStableToken.sol";
-import {IAuctionHouseViews, IDeficitLedgerViews} from "../interfaces/ISystemViews.sol";
+import {
+    IAuctionHouseViews,
+    IDeficitLedgerInterest,
+    IDeficitLedgerViews,
+    IStabilityPoolInterest
+} from "../interfaces/ISystemViews.sol";
 import {
     AlreadySettled,
     InsufficientBalance,
@@ -19,20 +24,21 @@ import {
     ZeroAmount
 } from "../lib/Errors.sol";
 import {Rounding} from "../lib/Rounding.sol";
+import {WadRayMath} from "../lib/WadRayMath.sol";
 import {WiredBase} from "../lib/Wired.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 
-/// @title VaultManager (part I: positions)
+/// @title VaultManager (parts I–II: positions and interest)
 /// @notice Holds every position's WETH collateral and gas reserve and mints the stablecoin against
-///         it (docs/spec.md §4.2, §5.1). P14 implements positions — open, add / withdraw
-///         collateral, borrow, repay, close — the shutdown hooks and the views. Interest accrual is
-///         the internal hook `_accrue()`, empty until P15 (the index stays at RAY); redistribution
-///         and liquidation arrive in P20, redemption in P16.
-/// @dev State of §4.2 that P15/P20 write (`index`, `lastAccrual`, the accumulators, snapshots and
-///      pending buckets) is declared now because P14's code already reads it, at its initial value;
-///      the redistribution error carries arrive with their writer at P20.
+///         it (docs/spec.md §4.2, §5.1). Implemented: positions — open, add / withdraw collateral,
+///         borrow, repay, close (P14); interest accrual and its routing to the pool and the reserve
+///         (P15, §6.2); the shutdown hooks and the views. Redistribution and liquidation arrive in
+///         P20, redemption in P16.
+/// @dev State of §4.2 that P20 writes (the accumulators, snapshots and pending buckets) is declared
+///      now because the code already reads it, at its initial value; the redistribution error
+///      carries arrive with their writer at P20.
 ///      Every operation follows the spec's order: checks (in pseudocode order), fetch price where
 ///      required (§7), accrue, apply pending, act, update stake, reinsert, token transfers, events.
 ///      One transient lock guards every state-changing external function (§2.5, §5.10).
@@ -92,6 +98,9 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
     event GasReserveReclaimed(uint256 indexed id, address indexed owner, uint256 amount);
     event VaultShutdown(uint256 index);
     event VaultSettled(uint256 collToClaimPool, uint256 activePositions);
+    event InterestAccrued(
+        uint256 index, uint256 interest, uint256 toPool, uint256 toReserve, uint256 timestamp
+    );
 
     // ------------------------------------------------------------------ constants
 
@@ -377,6 +386,12 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
         _emitUpdated(id, OP_CLOSE);
     }
 
+    /// @notice Accrues interest to now (§5.1.8, §6.2). Anyone; any mode (a no-op once shut down);
+    ///         no price. The pool and the ledger call it before reading state that interest changes.
+    function accrue() external whenWired nonReentrant {
+        _accrue();
+    }
+
     /// @notice Returns the gas reserve of a position still active at settlement. Owner; settled
     ///         mode (§5.1.10).
     function reclaimGasReserve(uint256 id) external whenWired nonReentrant {
@@ -421,9 +436,14 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
         return _positions[id];
     }
 
-    /// @notice The index accrued to now, without writing. P14: no accrual yet, so the stored index.
+    /// @notice The index accrued to now, without writing (§5.1.12); frozen after shutdown.
+    /// @dev rounding: R33 (as R4, up).
     function currentIndex() public view returns (uint256) {
-        return index;
+        if (shutdown) return index;
+        return
+            Rounding.mulDivUp(
+                index, WadRayMath.rpow(RAY + RATE_PER_SECOND, block.timestamp - lastAccrual), RAY
+            );
     }
 
     /// @notice Effective collateral and normalised debt, pending redistribution included (§2.4).
@@ -492,8 +512,46 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
         if (!usable) revert PriceUnusable();
     }
 
-    /// @dev Interest accrual (§6.2), implemented at P15. Until then the index stays at RAY.
-    function _accrue() internal {}
+    /// @dev Interest accrual (§6.2). Runs at the start of every operation (inside the lock) and from
+    ///      `accrue()`. The index grows even when `totalNormDebt == 0` (interest is then 0); position
+    ///      debts are never written — `debtOf` reads the index. State is written before the mints.
+    ///      rounding: new index R4 (up), interest R6 (up: supply never lags debt growth), pool share
+    ///      R7 (down; the remainder goes to the reserve).
+    ///      Overflow: `rpow(RAY + RATE_PER_SECOND, dt)` and the new index must fit in 256 bits, or the
+    ///      call panics 0x11 (spec §2.2). The limit is on the *cumulative* index growth since
+    ///      deployment — accruing more often does not extend it. From index RAY: 74,509,693,419 s
+    ///      (≈ 2,362.7 years) at the start rate (5 %) and 5,244,687,241 s (≈ 166.3 years) at the
+    ///      maximum RATE_PER_SECOND (ANNUAL_RATE = 1.0), tested at the exact boundary
+    ///      (`VaultManagerInterestTest.test_maxDt_*`). With no debt nothing is minted and that bound
+    ///      is the one that applies; then every operation and the debt views panic. With debt, the
+    ///      minted interest reaches the token's 2^128 − 1 supply cap (`SupplyCapExceeded`, §5.9)
+    ///      sooner — at 100 %/yr about 48 years from a 1M-token supply (38 from 1B), at 5 %/yr about
+    ///      500–640 years. Both are far outside any experiment horizon; the spec accepts them.
+    function _accrue() internal {
+        if (shutdown) return; // index frozen at the trigger
+        uint256 dt = block.timestamp - lastAccrual;
+        if (dt == 0) return;
+        uint256 oldIndex = index;
+        uint256 newIndex = Rounding.mulDivUp(oldIndex, WadRayMath.rpow(RAY + RATE_PER_SECOND, dt), RAY);
+        uint256 interest = Rounding.mulDivUp(totalNormDebt, newIndex - oldIndex, RAY);
+        index = newIndex;
+        lastAccrual = block.timestamp;
+        address pool = stabilityPool;
+        uint256 toPool = 0;
+        if (pool != address(0) && IStabilityPoolInterest(pool).acceptsInterest()) {
+            toPool = Rounding.mulDivDown(interest, POOL_SHARE_BPS, BPS);
+        }
+        uint256 toReserve = interest - toPool;
+        if (toPool > 0) {
+            token.mint(pool, toPool);
+            IStabilityPoolInterest(pool).onInterest(toPool);
+        }
+        if (toReserve > 0) {
+            token.mint(deficitLedger, toReserve);
+            IDeficitLedgerInterest(deficitLedger).onInterest(toReserve);
+        }
+        emit InterestAccrued(newIndex, interest, toPool, toReserve, block.timestamp);
+    }
 
     /// @dev rounding: R1 (up).
     function _debtOf(uint256 n) internal view returns (uint256) {

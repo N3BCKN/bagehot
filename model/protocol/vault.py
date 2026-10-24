@@ -1,9 +1,11 @@
-"""VaultManager part I (P14), bit-for-bit with `contracts/src/core/VaultManager.sol`.
+"""VaultManager parts I–II (P14–P15), bit-for-bit with `contracts/src/core/VaultManager.sol`.
 
-Spec §4.2, §5.1.1–5.1.6, §5.1.10–5.1.12, §6.5.3–6.5.4. Integers only. Covers positions, the
-shutdown hooks and the views; interest accrual (`_accrue`) is a no-op until P15 — the index stays at
-RAY — and redistribution (P20) has not happened, so the accumulators are 0. The P22 model extends
-this module rather than replacing it.
+Spec §4.2, §5.1.1–5.1.12, §6.2, §6.5.3–6.5.4. Integers only. Covers positions, interest accrual
+and its routing (P15), the shutdown hooks and the views; redistribution (P20) has not happened, so
+the accumulators are 0. Time is `now`, set by the caller (block.timestamp). The pool and the ledger
+are stand-ins: balances "pool" / "ledger" in `stable`, the pool's `acceptsInterest` as a callable,
+and the hooks' effects recorded in `pool_interest` / `ledger_reserve`. The P22 model extends this
+module rather than replacing it.
 
 Each operation is atomic like a transaction: on any exception the state is restored, so a failed
 call leaves nothing behind. Exceptions carry the spec's error names (§11.2); a failed WETH transfer
@@ -18,9 +20,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, fields
 from enum import IntEnum
 
-from model.math import RAY, UINT256_MAX, Overflow, mul_div_down, mul_div_up
+from model.math import RAY, UINT256_MAX, Overflow, mul_div_down, mul_div_up, rpow
 from model.protocol.sorted_list import SortedList
 
+BPS = 10_000
 COLL_CAP = 2**128 - 1
 SUPPLY_CAP = 2**128 - 1
 DECIMAL_PRECISION = 10**18
@@ -92,6 +95,14 @@ class Vault:
     max_hint_steps: int
     price_source: Callable[[], tuple[int, bool]]
     shutdown_module: str = "shutdown"
+    rate_per_second: int = 0
+    pool_share_bps: int = 0
+    has_pool: bool = True  # deployment A; B has no stability pool
+    accepts_interest: Callable[[], bool] = lambda: False
+    now: int = 0
+    last_accrual: int = 0
+    pool_interest: int = 0
+    ledger_reserve: int = 0
     positions: dict[int, Position] = field(default_factory=dict)
     next_id: int = 1
     active_count: int = 0
@@ -123,7 +134,7 @@ class Vault:
         saved = {
             f.name: copy.deepcopy(getattr(self, f.name))
             for f in fields(self)
-            if f.name not in ("price_source", "sorted")
+            if f.name not in ("price_source", "sorted", "accepts_interest")
         }
         saved_sorted = (
             copy.deepcopy(self.sorted.nodes),
@@ -163,8 +174,33 @@ class Vault:
             raise PriceUnusable()
         return price
 
-    def _accrue(self) -> None:  # P15
-        pass
+    def _accrue(self) -> None:
+        """§6.2: index R4 (up), interest R6 (up), pool share R7 (down); the index grows even with
+        no debt; frozen after shutdown; state written before the mints."""
+        if self.shutdown:
+            return
+        dt = self.now - self.last_accrual
+        if dt == 0:
+            return
+        old = self.index
+        new = mul_div_up(old, rpow(RAY + self.rate_per_second, dt), RAY)
+        interest = mul_div_up(self.total_norm_debt, new - old, RAY)
+        self.index, self.last_accrual = new, self.now
+        to_pool = 0
+        if self.has_pool and self.accepts_interest():
+            to_pool = mul_div_down(interest, self.pool_share_bps, BPS)
+        to_reserve = interest - to_pool
+        if to_pool > 0:
+            self._mint("pool", to_pool)
+            self.pool_interest += to_pool
+        if to_reserve > 0:
+            self._mint("ledger", to_reserve)
+            self.ledger_reserve += to_reserve
+        self.events.append(("InterestAccrued", new, interest, to_pool, to_reserve, self.now))
+
+    def accrue(self) -> None:
+        """§5.1.8: anyone; any mode (no-op once shut down)."""
+        self._atomic(self._accrue)
 
     def _debt_of(self, n: int) -> int:
         return mul_div_up(n, self.index, RAY)
@@ -435,7 +471,11 @@ class Vault:
         return self.effective(pid)
 
     def current_index(self) -> int:
-        return self.index
+        if self.shutdown:
+            return self.index
+        return mul_div_up(
+            self.index, rpow(RAY + self.rate_per_second, self.now - self.last_accrual), RAY
+        )
 
     def debt_of(self, pid: int) -> int:
         return mul_div_up(self.effective(pid)[1], self.current_index(), RAY)

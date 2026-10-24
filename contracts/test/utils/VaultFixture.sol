@@ -7,7 +7,7 @@ import {StableToken} from "../../src/core/StableToken.sol";
 import {VaultManager} from "../../src/core/VaultManager.sol";
 import {MockAggregator} from "../../src/mocks/MockAggregator.sol";
 import {MockSequencerFeed} from "../../src/mocks/MockSequencerFeed.sol";
-import {MockHouseViews, MockLedgerViews, MockWETH} from "./VaultMocks.sol";
+import {MockHouseViews, MockLedgerViews, MockPool, MockWETH} from "./VaultMocks.sol";
 import {Test} from "forge-std/Test.sol";
 
 /// @notice A VaultManager wired to a real StableToken, SortedPositions and OracleAdapter (with
@@ -31,6 +31,7 @@ abstract contract VaultFixture is Test {
     VaultManager internal vm_;
     MockLedgerViews internal ledger;
     MockHouseViews internal house;
+    MockPool internal pool;
 
     address internal strategy;
     address internal constant REDEMPTION = address(0xDE11);
@@ -54,7 +55,8 @@ abstract contract VaultFixture is Test {
         sorted = new SortedPositions(30);
         ledger = new MockLedgerViews();
         house = new MockHouseViews();
-        strategy = variantB ? address(house) : makeAddr("pool");
+        pool = new MockPool();
+        strategy = variantB ? address(house) : address(pool);
         vm_ = new VaultManager(
             address(weth),
             address(token),

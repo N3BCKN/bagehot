@@ -36,7 +36,7 @@ abstract contract HarnessBase is Test {
         SortedPositions sorted = new SortedPositions(30);
         MockLedgerViews ledger = new MockLedgerViews();
         v = new VaultManagerHarness(
-            address(weth), address(token), address(oracle), 1.1e18, 2000e18, GAS_RESERVE
+            address(weth), address(token), address(oracle), 1.1e18, 2000e18, GAS_RESERVE, 0, 7500
         );
         address pool = makeAddr("pool");
         v.wire(address(sorted), pool, pool, address(0xDE11), address(ledger), SHUTDOWN);

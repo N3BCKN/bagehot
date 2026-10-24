@@ -13,8 +13,18 @@ contract VaultManagerHarness is VaultManager {
         address oracle_,
         uint256 mcr,
         uint256 minDebt,
-        uint256 gasReserve
-    ) VaultManager(weth_, token_, oracle_, mcr, minDebt, gasReserve, 0, 7500) {}
+        uint256 gasReserve,
+        uint256 ratePerSecond,
+        uint256 poolShareBps
+    ) VaultManager(weth_, token_, oracle_, mcr, minDebt, gasReserve, ratePerSecond, poolShareBps) {}
+
+    /// @dev The accrual state an `interest.json` vector starts from (§6.2). `totalNormDebt` set
+    ///      without supply: I2 is not meaningful after this.
+    function setAccrualState(uint256 index_, uint256 lastAccrual_, uint256 totalNormDebt_) external {
+        index = index_;
+        lastAccrual = lastAccrual_;
+        totalNormDebt = totalNormDebt_;
+    }
 
     /// @dev A non-round index, so rounding directions R1 / R2 / R3 become observable (P15 makes the
     ///      index move for real; supply is not adjusted here, so I2 is not meaningful after this).

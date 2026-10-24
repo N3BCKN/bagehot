@@ -19,7 +19,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | P12 | OracleAdapter | done | 2026-10-23 | `OracleAdapter` per spec §6.10 with the ADR-0029 fixed-buffer read; Python mirror; 100% line/branch coverage; 20 vectors on both sides; independent-reference fuzz; split gas-griefing sweeps; fork tests on Base's real feeds and real proxy. security-reviewer signed off; its condition (CHG-004: post-failure gas floor `ceil(2·ORACLE_GAS/63)`, cap `ORACLE_GAS`, start 3,175) is approved and applied (ADR-0030) |
 | P13 | SortedPositions and hint helpers | done | 2026-10-23 | `SortedPositions` per spec §6.3; `HintHelpers` (view-only); Python mirror `model/protocol/sorted_list.py`; 100% line/branch coverage; insert gas with exact hints 135,254 at list sizes 10/100/1,000 (O(1)); I13 campaign green (30 seeds) after CHG-005 / ADR-0032 corrected I13's tie clause |
 | P14 | VaultManager I: positions, borrowing, minimum debt, gas reserve | done | 2026-10-23 | Positions, shutdown hooks, views and stakes/pending per spec §5.1 and §6.5.3–4; interest is a hook until P15; Python mirror `model/protocol/vault.py`; 100% coverage; vector position prefixes (23 vectors, 61 steps) on both sides; parity checklist in the P14 log |
-| P15 | VaultManager II: interest accrual and routing | todo | | |
+| P15 | VaultManager II: interest accrual and routing | done | 2026-10-23 | Accrual per spec §6.2 (R4, R6, R7), routed to the pool or reserve with `onInterest`; public `accrue()`; accruing `currentIndex()`; max dt documented and tested at the boundary; I2 invariant green with interest; interest vectors on both sides |
 | P16 | RedemptionModule | todo | | |
 | P17 | Invariant harness and Medusa | todo | | |
 | P18 | Local deployment, factory and manifest | todo | | |
@@ -262,6 +262,51 @@ CPython 3.12.13. Full table with install commands and the medusa checksum in `de
   3.12). Hooks are mode 644 — see Human actions.
 
 **Next.** P01, continuous integration.
+
+### 2026-10-23 · P15 · VaultManager II: interest accrual and routing
+
+**Changed.**
+- `VaultManager._accrue()` per spec §6.2: new index R4 (up), interest R6 (up), pool share R7 (down).
+  - Minted to the stability pool only when it `acceptsInterest()` (deployment A), the rest to the DeficitLedger reserve; each is notified through `onInterest`.
+  - `InterestAccrued` emitted; state written before the mints.
+- A public `accrue()`: anyone, `wired` required, a no-op once shut down, under the lock.
+- `currentIndex()` now accrues in the view without writing. `debtOf`, `systemDebt` and `tcr` use it.
+- New interfaces `IStabilityPoolInterest` and `IDeficitLedgerInterest`.
+- The Python mirror gained the same accrual, `accrue()` and `current_index()`.
+
+**Decisions (spec over prompt).**
+- **The index still grows when `totalNormDebt == 0`** (§6.2: "interest = 0"). It is not frozen with only the timestamp moving, as the prompt said.
+- **No custom `Overflow()` error.** §11.2 has none; the arithmetic panics `0x11` (spec §2.2), which the model names `Overflow`.
+- **Maximum `dt`, documented in `_accrue`'s NatSpec and tested at the exact boundary** (from index RAY, one accrual):
+  - 74,509,693,419 s (≈ 2,362.7 years) at the start rate;
+  - 5,244,687,241 s (≈ 166.3 years) at the maximum rate;
+  - in practice the 2^128 supply cap stops interest minting long before.
+
+**Tests.**
+- `interest.json` on both sides: the pool share, the pool below `MIN_DEPOSIT`, deployment B, yearly vs 365 daily accruals (a 104-wei difference), and the R1–R3 conversions at index ≈ 1.05.
+- **The accrual rules:** a second accrual in the same block is a no-op; the index grows without debt; shutdown freezes it; views accrue without writing; operations accrue first; routing.
+- **A long-horizon fuzz** (waits from 1 s to ≈ 3 years) checking I2 with event-counted N, X and Y, and the sum-of-ceilings bound after every step.
+- **The I2 invariant campaign** (`VaultI2InvariantTest`, the acceptance criterion): open, add, withdraw, borrow, repay, close, accrue and time warps.
+  - Green, alongside I1 and the bound Σ debtOf(nᵢ) − n·I/RAY ∈ [0, one wei per position).
+  - **Rerun with reverts failing the run:** it surfaced two handler bugs of the same kind, not contract bugs.
+    - The handler sized `open` collateral for the nominal debt, and capped `borrow` at `cap − debt − 1`.
+    - Above index RAY, opening or borrowing `a` adds up to I/RAY wei more than `a` to the debt (R2 then R1), so the contract's `IcrBelowMcr` was correct both times.
+    - The handler now accounts for that margin.
+- **Reentrancy:** `accrue` added to the guarded targets, now ten mutators.
+
+**Review.** `security-reviewer`: nothing that mints unbacked supply, under-mints, double-accrues or moves the index after the trigger. Fixed:
+- **F1, a test gap.** Removing `_accrue()` from open, add, withdraw or close passed the whole suite, because the I2 handler pre-accrued before those operations.
+  - Each of the six operations now has a test that it accrues first: the index the view predicted, `lastAccrual` stamped, and `InterestAccrued` logged before the operation's own events. Close burns the accrued debt, and in the window nothing accrues.
+  - The handler now sizes inputs from the views.
+  - **Mutation check:** all six removals caught, where four survived.
+- **F2, F3.** The reentrancy triage rows were rewritten. New tests: hostile pool and ledger `onInterest` hooks re-entering each of the ten mutators.
+- **F5.** The overflow NatSpec now states the cumulative-growth limit, says it's reachable with no debt, and gives the time to the supply cap by rate.
+- **F6.** R7's floor tested with a remainder (Python).
+- **F7.** E reads `A` and `F`.
+
+**Raised to the human:** F4, open issue P15-1 and threat T-24. Deferred: F7's B/window coverage (P15-2) and F8 (P15-3).
+
+**Next.** Human: decide P15-1. Then P16.
 
 ### 2026-10-23 · P14 · VaultManager I: positions, borrowing, minimum debt, gas reserve
 
@@ -814,6 +859,9 @@ obligations a later prompt must carry that are not in that prompt's text yet (ro
 | P11-1 | **P18 deployment pitfalls from the P11 review (F-4).** `deployer` is whoever executes CREATE. (i) `new X{salt: s}` inside `forge script` goes through the CREATE2 proxy `0x4e59b44847b379578588920cA78FbF26c0B4956C`, which becomes `deployer` and can never call `wire`: the contract is bricked, permanently NotWired. (ii) A factory that deploys in one call and exposes a separate `wireAll(...)` moves the front-running window from `wire` to the factory. P18 must: deploy and wire inside one factory call that takes no caller-supplied addresses; never use `{salt:}` for wired contracts; assert `deployer() == factory` and `wired()` from the deployment receipt; on Base Sepolia, assert that the price feed is the configured Chainlink address unless the environment is `fork_replay` (`ReplayAggregator` is operator-controlled). Also (P12 review F4) assert that both oracle feeds have code and equal the `config/<chain>.toml` addresses. Also update the threat-model row "Deployer key": with a factory, the deployer is the factory. | Claude | at P18 |
 | P11-2 | Resolved 2026-10-23: CHG-003 approved (option 1) and applied to spec §2.5, §3.3 constraint 8 and §11.1 (ADR-0031, proposed). The human's condition: the deploy-script wiring-graph check and the smoke-test assertions (`deployer() == factory`, `wired()` on every contract, peer-graph agreement) must be a named acceptance criterion in **P18's own prompt text**. The prompt kit is not in this repository (there is no `prompts/` directory), so the human adds it there; the exact text was handed over on 2026-10-23. | — | closed |
 | P12-1 | Resolved 2026-10-23: CHG-004 approved and applied. The floor is now `ceil(2·ORACLE_GAS/63) ≤ ORACLE_POST_FAILURE_GAS ≤ ORACLE_GAS`, start value 3,175, per ADR-0030 (which supersedes ADR-0024's bound). Before approving, the human required two checks, and both passed: the critical cases re-run on Base's real proxy, and an honest caller tested at the new floor. The permanent regression sweeps are `test_regression_proxiedFeed_*` (in `just test`) and `OracleGasRuleForkTest` (in `just test-fork`). | — | closed |
+| P15-1 | **Decision needed — interest hooks can brick every operation, including the shutdown trigger** (P15 review F4; threat T-24). Every normal-mode operation and `ShutdownModule.check` accrue, and accrual calls the pool and ledger hooks and `token.mint`. One revert there — the pool `G` overflow spec §6.6.3 *accepts* after ≥ 338 adversarial events, or the supply cap — blocks repay, close, addCollateral, liquidation **and** `check()`, so the window that would restore the rescue paths can never be reached. Options are being put to the human (spec change vs. obligations on P19 and the ledger). | human | before P19 |
+| P15-2 | The I2 campaign (`VaultI2InvariantTest`) covers deployment A in the live phase with the pool always accepting. P17 must extend it to deployment B, the shutdown window and toggling pool deposits, and should use the name `invariant_I2_supplyDriftBound` that I2 cites (P15 review F7). `A` and `F` are already read from the ledger in E. | Claude | at P17 |
+| P15-3 | Freezing at the right index depends on `ShutdownModule.check` accruing immediately before `onShutdown` (§5.1.11). The ShutdownModule prompt must test that the index right after a trigger equals `currentIndex()` just before it (P15 review F8). | Claude | at the ShutdownModule prompt |
 | P08-2 | `.gitleaks.toml` gained a value-only allowlist for public EVM addresses (`^0x[0-9a-fA-F]{40}$`): Aave's `a_token`/`v_token` keys in `config/8453.toml` tripped `generic-api-key`. A first version also allowlisted the `config/` path; a probe showed it hid a 64-hex private key there, so it was removed before anything was pushed. Probes confirm a 0x+64-hex key, a `private_key`, and a bare 40-hex token are still caught. The original slip: the scan and the commit were chained with `;`, so the commit ran despite the findings — scans now gate commits with `&&`. | Claude | no |
 | P02-4 | No vector exercises `redeem`'s `AuctionCallbackActive` branch (D-27, §6.7.2): it needs a deployment-B buyer callback that calls `redeem`, which the recorder cannot drive. Add it as a Foundry test at P16/P33 and as a model test at P22. | Claude | at P16/P33 |
 | P02-3 | The vector reference implementation is throwaway (scratchpad). Vectors are validated independently from P10 (Foundry) and P22 (Python model); a vector that disagrees with both implementations is a spec question for `/spec-change`. | Claude | at P10/P22 |

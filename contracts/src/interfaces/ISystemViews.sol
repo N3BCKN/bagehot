@@ -12,3 +12,15 @@ interface IDeficitLedgerViews {
 interface IAuctionHouseViews {
     function totalLot() external view returns (uint256);
 }
+
+/// @notice What accrual calls on the stability pool (deployment A): whether it takes its interest
+///         share (`totalDeposits ≥ MIN_DEPOSIT`, §6.6.5) and the lock-free notification (§5.10).
+interface IStabilityPoolInterest {
+    function acceptsInterest() external view returns (bool);
+    function onInterest(uint256 amount) external;
+}
+
+/// @notice What accrual calls on the DeficitLedger: the reserve share (§5.6).
+interface IDeficitLedgerInterest {
+    function onInterest(uint256 amount) external;
+}
