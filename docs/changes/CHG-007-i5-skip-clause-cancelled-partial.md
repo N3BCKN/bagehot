@@ -1,7 +1,8 @@
 # CHG-007: I5's "skipped nodes" clause is false for a call that ends on a cancelled partial
 
-- Status: **approved in principle 2026-10-24 (item 1 option 1, item 2)**; the human asked for the exact
-  wording and a negative test before unlocking `docs/invariants.md` — both below
+- Status: **approved 2026-10-24 (item 1 option 1 with the exact wording below; item 2) and applied** to
+  I5 ("Formula", "Checked in", "Breaks if") and I15 ("Breaks if"), after the human reviewed the
+  wording and the negative tests.
 - Raised: 2026-10-24, P16 (while writing the I5 invariant handler)
 - Affects: `docs/invariants.md` I5 ("Formula", second block); also I15 "Breaks if" (item 2 below,
   independent, same file). No spec, vector, contract or model change.

@@ -343,11 +343,33 @@ for each id with PositionRedeemed(id, …):
       or  ( debtOf(id) ≥ MIN_DEBT  and  effColl(id)·price ≥ MCR·debtOf(id) )
 ```
 
-Separately, about the nodes the loop **skipped** (no `PositionRedeemed` emitted for them):
+Separately, about the nodes the loop visited **without** redeeming from them. Let `v₁ … v_k` be the
+nodes the call visited, in visit order (`k` = `iterations`), and `remaining_j` the amount not yet
+redeemed when `v_j` was visited:
 
 ```
-for each id visited and not redeemed from:  effColl(id)·price < MCR·debtOf(id)   held at the visit
+for each j < k with no PositionRedeemed(v_j, …):
+    effColl(v_j)·price < MCR·debtOf(v_j)                                    held at the visit (skipped)
+
+if there is no PositionRedeemed(v_k, …), exactly one of (a), (b) holds at the visit:
+  (a) effColl(v_k)·price < MCR·debtOf(v_k)                                                    skipped
+  (b) effColl(v_k)·price ≥ MCR·debtOf(v_k), remaining_k < debtOf(v_k), nothing about v_k changed,
+      and v_k is a cancelled partial for exactly one reason — the first of 1–3 that is true,
+      tested in §6.7.3's order:
+        1. d == 0                                                                    MIN_DEBT cap
+        2. (effColl(v_k) − out)·price < MCR·⌈(effNorm(v_k) − dn)·index/RAY⌉     CHG-002 post-check
+        3. find(effColl(v_k) − out, effNorm(v_k) − dn, v_k, v_k, upperHint, lowerHint)
+           reports no slot                                                              stale hint
+      where d = min(remaining_k, debtOf(v_k) − MIN_DEBT), dn = ⌊d·RAY/index⌋,
+      out = ⌊d·(WAD − feeRate)/price⌋, and upperHint, lowerHint are the call's hints.
+
+a last visit that is neither (a) nor (b) — above MCR with remaining_k ≥ debtOf(v_k), or above MCR
+with none of 1–3 true — is an illegitimate early stop and violates I5.
 ```
+
+The last visit is the only place a visited node may be left both unredeemed and at or above MCR,
+and only for one of those three reasons. This is not a relaxation of the old clause for any other
+node: every visit before the last must still have been below MCR (CHG-007).
 
 and: at most one position per call is partially redeemed, and it is the last one visited.
 
@@ -372,13 +394,19 @@ and: at most one position per call is partially redeemed, and it is the last one
 **Checked in.** Foundry `invariant_I5_redemptionLeavesHealthyPositions` plus targeted
 `test_redeem_tinyPartialAtMcrBoundary`; Medusa `property_I5_redemptionHealthy`; Python
 `model.invariants.check_I5(events, after)`; differential: position state compared per step.
+`RedemptionLastVisitTest` — each of the three reasons recognised on a real redemption, and
+`test_lastVisit_illegitimateStopIsRejected`: the contract stops on the last node with no legitimate
+reason, and the check reports it.
 
 **Breaks if.** The partial cap `d = min(remaining, debt − MIN_DEBT)` computed against stored rather
 than effective debt. Pending rewards applied after rather than before the partial. The below-MCR
 skip omitted. The CHG-002 post-check omitted, placed after the state change instead of before it,
-or computed with stored rather than effective `c`, `n`. **Targeted sequences:** the CHG-002 vector
-above, both steps; redeem exactly `debt − MIN_DEBT` from the tail; redeem against a position whose
-pending rewards change its ICR.
+or computed with stored rather than effective `c`, `n`. A redemption that ends on its last node
+without one of the three reasons — e.g. one that cancels the partial whenever an earlier position was
+redeemed in full, or treats a small `d` as zero. **Targeted sequences:** the CHG-002 vector above,
+both steps; redeem exactly `debt − MIN_DEBT` from the tail; redeem against a position whose pending
+rewards change its ICR; a full redemption followed by a cancelled partial on a position at exactly
+`MIN_DEBT`, and the same with a stale hint.
 
 ---
 
@@ -860,10 +888,12 @@ that asymmetry is deliberate and is *not* part of this invariant.
 `redemption.json#tcr_guard`.
 
 **Breaks if.** The gate reads `tcr()` (the rounded display view) instead of cross-multiplying. The
-gate placed before `accrue()`, so `D` misses the current block's interest. `check()` called inside
-`redeem`, which the revert would roll back. **Targeted sequences:** TCR exactly at `CRITICAL_TCR`
-(must *not* revert — the condition is strict `<`); TCR between `CRITICAL_TCR` and MCR (must
-succeed); redemption from inside an auction callback.
+gate's `belowCritical` reading the stored `index` instead of `currentIndex()` (§5.8), so `D` misses
+the interest since the last accrual. (Placing the gate before `accrue()` is harmless: the view
+already reads `currentIndex()`.) `check()` called inside `redeem`, which the revert would roll back.
+**Targeted sequences:** TCR exactly at `CRITICAL_TCR` (must *not* revert — the condition is strict
+`<`); TCR between `CRITICAL_TCR` and MCR (must succeed); redemption from inside an auction callback;
+`dt > 0` since the last accrual, the gate evaluated as a view without accruing first (CHG-007).
 
 ---
 

@@ -1,6 +1,6 @@
 # ADR-0033: A failing stability pool cannot stop accrual; its interest share falls back to the reserve
 
-- Status: proposed
+- Status: accepted 2026-10-24 (human)
 - Date: 2026-10-24
 - Prompt: P15 (found by the security review, F4), decided by the human 2026-10-24 (open issue P15-1,
   option 1), applied at P19 via `/spec-change` CHG-006
