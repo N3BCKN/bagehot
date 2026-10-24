@@ -33,3 +33,7 @@ error InsufficientBalance();
 /// @notice Settlement preconditions (§11.2): no shutdown triggered yet / already settled.
 error NotTriggered();
 error AlreadySettled();
+
+/// @notice `check` or `redeem` was called while the auction house is inside a buyer callback
+///         (§6.7.2, §6.11.1).
+error AuctionCallbackActive();

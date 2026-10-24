@@ -1,11 +1,13 @@
-"""VaultManager parts I–II (P14–P15), bit-for-bit with `contracts/src/core/VaultManager.sol`.
+"""VaultManager parts I–III (P14–P16), bit-for-bit with `contracts/src/core/VaultManager.sol`.
 
-Spec §4.2, §5.1.1–5.1.12, §6.2, §6.5.3–6.5.4. Integers only. Covers positions, interest accrual
-and its routing (P15), the shutdown hooks and the views; redistribution (P20) has not happened, so
-the accumulators are 0. Time is `now`, set by the caller (block.timestamp). The pool and the ledger
-are stand-ins: balances "pool" / "ledger" in `stable`, the pool's `acceptsInterest` as a callable,
-and the hooks' effects recorded in `pool_interest` / `ledger_reserve`. The P22 model extends this
-module rather than replacing it.
+Spec §4.2, §5.1.1–5.1.12, §6.2, §6.5.3–6.5.4, §6.7.3. Integers only. Covers positions, interest
+accrual and its routing (P15), the redemption loop (P16), the shutdown hooks and the views;
+redistribution (P20) has not happened, so the accumulators are 0. Time is `now`, set by the caller
+(block.timestamp). The pool and the ledger are stand-ins: balances "pool" / "ledger" in `stable`,
+the pool's `acceptsInterest` as a callable, the hooks' effects recorded in `pool_interest` /
+`ledger_reserve`, and the ledger and auction-house views that `systemColl` / `systemDebt` read as
+plain fields (`ledger_recovered_coll`, …). The P22 model extends this module rather than replacing
+it.
 
 Each operation is atomic like a transaction: on any exception the state is restored, so a failed
 call leaves nothing behind. Exceptions carry the spec's error names (§11.2); a failed WETH transfer
@@ -20,7 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, fields
 from enum import IntEnum
 
-from model.math import RAY, UINT256_MAX, Overflow, mul_div_down, mul_div_up, rpow
+from model.math import RAY, UINT256_MAX, WAD, Overflow, mul_div_down, mul_div_up, rpow
 from model.protocol.sorted_list import SortedList
 
 BPS = 10_000
@@ -29,6 +31,7 @@ SUPPLY_CAP = 2**128 - 1
 DECIMAL_PRECISION = 10**18
 NICR_PRECISION = 10**20
 OP_OPEN, OP_ADD_COLLATERAL, OP_WITHDRAW_COLLATERAL, OP_BORROW, OP_REPAY, OP_CLOSE = 1, 2, 3, 4, 5, 6
+OP_REDEEM = 7
 
 
 class Status(IntEnum):
@@ -74,6 +77,7 @@ NotTriggered = _error("NotTriggered")
 AlreadySettled = _error("AlreadySettled")
 SupplyCapExceeded = _error("SupplyCapExceeded")
 WethTransferFailed = _error("WethTransferFailed")
+ERC20InsufficientBalance = _error("ERC20InsufficientBalance")
 
 
 @dataclass
@@ -95,6 +99,7 @@ class Vault:
     max_hint_steps: int
     price_source: Callable[[], tuple[int, bool]]
     shutdown_module: str = "shutdown"
+    redemption_module: str = "redemption"
     rate_per_second: int = 0
     pool_share_bps: int = 0
     has_pool: bool = True  # deployment A; B has no stability pool
@@ -103,6 +108,10 @@ class Vault:
     last_accrual: int = 0
     pool_interest: int = 0
     ledger_reserve: int = 0
+    ledger_recovered_coll: int = 0
+    ledger_auction_debt: int = 0
+    ledger_deficit: int = 0
+    house_total_lot: int = 0
     positions: dict[int, Position] = field(default_factory=dict)
     next_id: int = 1
     active_count: int = 0
@@ -164,7 +173,9 @@ class Vault:
         self.total_supply += amount
 
     def _burn(self, frm: str, amount: int) -> None:
-        self.stable[frm] -= amount
+        if self.stable.get(frm, 0) < amount:
+            raise ERC20InsufficientBalance()
+        self.stable[frm] = self.stable.get(frm, 0) - amount
         self.total_supply -= amount
 
     # ---- internals ----
@@ -414,6 +425,86 @@ class Vault:
 
         self._atomic(run)
 
+    # ---- §5.1.9 / §6.7.3 ----
+    def redeem_collateral(
+        self,
+        caller: str,
+        redeemer: str,
+        amount: int,
+        fee_rate: int,
+        price: int,
+        max_iterations: int,
+        upper: int,
+        lower: int,
+    ) -> tuple[int, int, int]:
+        """§6.7.3: RedemptionModule only; no price fetch, no accrual (the module did both). Returns
+        (redeemed, coll_sent, iterations). Collateral to the redeemer R18 (down), normalised debt
+        removed by the partial R3 (down). A partial at exactly MIN_DEBT, below MCR after rounding
+        (CHG-002) or with stale hints is cancelled with no state change and ends the loop."""
+
+        def run() -> tuple[int, int, int]:
+            if caller != self.redemption_module:
+                raise Unauthorized()
+            remaining, burned, coll_out, it = amount, 0, 0, 0
+            cur = self.sorted.tail
+            while remaining > 0 and cur != 0 and it < max_iterations:
+                it += 1
+                prev_id = self.sorted.nodes[cur][0]
+                c, n = self.effective(cur)
+                debt = self._debt_of(n)
+                if _c(c * price) < _c(self.mcr * debt):  # below MCR: liquidate, don't redeem
+                    cur = prev_id
+                    continue
+                if remaining >= debt:
+                    out = self._redeem_full(cur, debt, fee_rate, price)
+                    burned, coll_out, remaining = burned + debt, coll_out + out, remaining - debt
+                    cur = prev_id
+                    continue
+                d = min(remaining, debt - self.min_debt)
+                if d == 0:  # position at exactly MIN_DEBT
+                    break
+                dn = mul_div_down(d, RAY, self.index)
+                out = mul_div_down(d, WAD - fee_rate, price)
+                if _c((c - out) * price) < _c(self.mcr * self._debt_of(n - dn)):  # CHG-002
+                    break
+                found, prv, nxt, _ = self.sorted.find((c - out, n - dn), cur, cur, upper, lower)
+                if not found:  # stale hint
+                    break
+                self._apply_pending(cur)
+                p = self.positions[cur]
+                p.coll -= out
+                p.norm_debt -= dn
+                self.total_collateral -= out
+                self.total_norm_debt -= dn
+                self._update_stake(cur)
+                self.sorted.reinsert(cur, prv, nxt)
+                burned, coll_out = burned + d, coll_out + out
+                self.events.append(("PositionRedeemed", cur, d, out, 0, False))
+                self._updated(cur, OP_REDEEM)
+                break  # a partial is always the last step
+            self._burn(redeemer, burned)
+            self._weth_move("vault", redeemer, coll_out)
+            return burned, coll_out, it
+
+        return self._atomic(run)  # type: ignore[return-value]
+
+    def _redeem_full(self, pid: int, debt: int, fee_rate: int, price: int) -> int:
+        self._apply_pending(pid)
+        p = self.positions[pid]
+        out = mul_div_down(debt, WAD - fee_rate, price)
+        surplus = p.coll - out
+        self.sorted.remove(pid)
+        self.total_stakes -= p.stake
+        self.total_collateral -= p.coll
+        self.total_norm_debt -= p.norm_debt
+        self.active_count -= 1
+        p.coll = p.norm_debt = p.stake = 0
+        p.status = Status.CLOSED_BY_REDEMPTION
+        self._weth_move("vault", p.owner, surplus + self.gas_reserve)
+        self.events.append(("PositionRedeemed", pid, debt, out, surplus, True))
+        self._updated(pid, OP_REDEEM)
+        return out
+
     # ---- §5.1.10–5.1.11 ----
     def reclaim_gas_reserve(self, caller: str, pid: int) -> None:
         def run() -> None:
@@ -487,6 +578,19 @@ class Vault:
     def nicr(self, pid: int) -> int:
         c, n = self.effective(pid)
         return mul_div_down(c, NICR_PRECISION, n)
+
+    def system_coll(self) -> int:
+        """§5.1.12: collateral that would join the claim pool; B adds the auction house's lots."""
+        c = self.total_collateral + self.pending_coll + self.ledger_recovered_coll
+        return c if self.has_pool else c + self.house_total_lot
+
+    def system_debt(self) -> int:
+        """§5.1.12, R28 (up)."""
+        return (
+            mul_div_up(self.total_norm_debt, self.current_index(), RAY)
+            + self.ledger_auction_debt
+            + self.ledger_deficit
+        )
 
     def is_liquidatable(self, pid: int, price: int) -> bool:
         p = self.positions.get(pid)

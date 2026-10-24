@@ -29,13 +29,14 @@ import {WiredBase} from "../lib/Wired.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
-/// @title VaultManager (parts I–II: positions and interest)
+/// @title VaultManager (parts I–III: positions, interest and redemption)
 /// @notice Holds every position's WETH collateral and gas reserve and mints the stablecoin against
 ///         it (docs/spec.md §4.2, §5.1). Implemented: positions — open, add / withdraw collateral,
 ///         borrow, repay, close (P14); interest accrual and its routing to the pool and the reserve
-///         (P15, §6.2); the shutdown hooks and the views. Redistribution and liquidation arrive in
-///         P20, redemption in P16.
+///         (P15, §6.2); the redemption loop (P16, §6.7.3); the shutdown hooks and the views.
+///         Redistribution and liquidation arrive in P20.
 /// @dev State of §4.2 that P20 writes (the accumulators, snapshots and pending buckets) is declared
 ///      now because the code already reads it, at its initial value; the redistribution error
 ///      carries arrive with their writer at P20.
@@ -56,6 +57,16 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
         ClosedByRedemption,
         ClosedByLiquidation,
         ClosedByShutdown
+    }
+
+    /// @dev The arguments of one `redeemCollateral` call, kept together to bound the stack.
+    struct Redemption {
+        uint256 amount;
+        uint256 feeRate;
+        uint256 price;
+        uint256 maxIterations;
+        uint256 upperHint;
+        uint256 lowerHint;
     }
 
     struct Position {
@@ -95,6 +106,9 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
     event PositionClosed(
         uint256 indexed id, uint256 debtBurned, uint256 collReturned, uint256 gasReserveReturned
     );
+    event PositionRedeemed(
+        uint256 indexed id, uint256 debtRedeemed, uint256 collToRedeemer, uint256 surplusToOwner, bool closed
+    );
     event GasReserveReclaimed(uint256 indexed id, address indexed owner, uint256 amount);
     event VaultShutdown(uint256 index);
     event VaultSettled(uint256 collToClaimPool, uint256 activePositions);
@@ -124,6 +138,7 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
     uint8 internal constant OP_BORROW = 4;
     uint8 internal constant OP_REPAY = 5;
     uint8 internal constant OP_CLOSE = 6;
+    uint8 internal constant OP_REDEEM = 7;
 
     // ------------------------------------------------------------------ immutables
 
@@ -392,6 +407,38 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
         _accrue();
     }
 
+    /// @notice The redemption loop (§5.1.9, §6.7.3): walks from the tail, skips positions below MCR,
+    ///         redeems whole positions while `amount` covers them (closing each and pushing its surplus
+    ///         plus gas reserve to its owner), and ends with at most one partial. Burns what was
+    ///         redeemed from `redeemer` and sends the collateral bought to it. RedemptionModule only,
+    ///         which has fetched the price, accrued, applied the gate and checked the balance (§6.7.2);
+    ///         no price is fetched and nothing accrues here.
+    /// @dev rounding: collateral to the redeemer R18 (down: the fee's share and the rounding stay in
+    ///      the position); normalised debt removed by a partial R3 (down). Every visited node counts as
+    ///      an iteration. A partial that would leave ICR < MCR (CHG-002) or whose hints are stale is
+    ///      cancelled with no state change and ends the loop.
+    /// @param redeemer the RedemptionModule's `msg.sender` (§2.5); its stablecoin is burned
+    /// @param amount the most stablecoin to redeem
+    /// @param feeRate WAD, `≤ WAD`, computed by the RedemptionModule (§6.7.1)
+    /// @param price the price the RedemptionModule fetched (WAD)
+    /// @param maxIterations the most list nodes to visit; bounds the loop
+    /// @return redeemed stablecoin burned; collSent WETH sent to `redeemer`; iterations nodes visited
+    function redeemCollateral(
+        address redeemer,
+        uint256 amount,
+        uint256 feeRate,
+        uint256 price,
+        uint256 maxIterations,
+        uint256 upperHint,
+        uint256 lowerHint
+    ) external whenWired nonReentrant returns (uint256 redeemed, uint256 collSent, uint256 iterations) {
+        if (msg.sender != redemptionModule) revert Unauthorized();
+        (redeemed, collSent, iterations) =
+            _redeemLoop(Redemption(amount, feeRate, price, maxIterations, upperHint, lowerHint));
+        token.burnFrom(redeemer, redeemed);
+        WETH.safeTransfer(redeemer, collSent);
+    }
+
     /// @notice Returns the gas reserve of a position still active at settlement. Owner; settled
     ///         mode (§5.1.10).
     function reclaimGasReserve(uint256 id) external whenWired nonReentrant {
@@ -551,6 +598,118 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
             IDeficitLedgerInterest(deficitLedger).onInterest(toReserve);
         }
         emit InterestAccrued(newIndex, interest, toPool, toReserve, block.timestamp);
+    }
+
+    /// @dev The loop of §6.7.3. The node's predecessor is read before the node is touched.
+    function _redeemLoop(Redemption memory r)
+        internal
+        returns (uint256 redeemed, uint256 collSent, uint256 iterations)
+    {
+        uint256 remaining = r.amount;
+        uint256 cur = sorted.getLast();
+        while (remaining > 0 && cur != 0 && iterations < r.maxIterations) {
+            ++iterations;
+            uint256 prevId = sorted.getPrev(cur);
+            (uint256 d, uint256 out, bool last) = _redeemOne(cur, remaining, r);
+            redeemed += d;
+            collSent += out;
+            remaining -= d;
+            if (last) break; // a partial — done or cancelled — is always the last step
+            cur = prevId;
+        }
+    }
+
+    /// @dev One visited node: skip below MCR, full redemption, or the (last) partial.
+    function _redeemOne(uint256 id, uint256 remaining, Redemption memory r)
+        internal
+        returns (uint256 d, uint256 out, bool last)
+    {
+        (uint256 c, uint256 n) = effective(id);
+        uint256 debt = _debtOf(n);
+        if (c * r.price < MCR * debt) return (0, 0, false); // below MCR: liquidate, don't redeem
+        if (remaining >= debt) return (debt, _redeemFull(id, debt, r.feeRate, r.price), false);
+        (d, out) = _redeemPartial(id, c, n, debt, remaining, r);
+        last = true;
+    }
+
+    /// @dev A full redemption (§6.7.3): closes `id`, pushes surplus plus gas reserve to its owner.
+    ///      `out < coll`: ICR ≥ MCR > 1 gives `coll · price > debt · WAD ≥ debt · (WAD − feeRate)`.
+    ///      rounding: R18 (down).
+    function _redeemFull(uint256 id, uint256 debt, uint256 feeRate, uint256 price)
+        internal
+        returns (uint256 out)
+    {
+        _applyPending(id);
+        Position storage p = _positions[id];
+        out = Rounding.mulDivDown(debt, WAD - feeRate, price);
+        uint256 surplus = p.coll - out;
+        sorted.remove(id);
+        totalStakes -= p.stake;
+        totalCollateral -= p.coll;
+        totalNormDebt -= p.normDebt;
+        activeCount -= 1;
+        p.coll = 0;
+        p.normDebt = 0;
+        p.stake = 0;
+        p.status = Status.ClosedByRedemption;
+        WETH.safeTransfer(p.owner, surplus + GAS_RESERVE);
+        emit PositionRedeemed(id, debt, out, surplus, true);
+        _emitUpdated(id, OP_REDEEM);
+    }
+
+    /// @dev The partial step (§6.7.3), on the effective `(c, n)` read before `_applyPending` (which
+    ///      leaves them unchanged). Returns `(0, 0)` without changing state when the position sits at
+    ///      exactly `MIN_DEBT`, when the remainder would fall below MCR (CHG-002, ADR-0027), or when
+    ///      the hints are stale.
+    function _redeemPartial(
+        uint256 id,
+        uint256 c,
+        uint256 n,
+        uint256 debt,
+        uint256 remaining,
+        Redemption memory r
+    ) internal returns (uint256 d, uint256 out) {
+        uint256 dn;
+        (d, dn, out) = _partialAmounts(c, n, debt, remaining, r);
+        if (d == 0) return (0, 0);
+        (bool found, uint256 prv, uint256 nxt) = _partialSlot(id, c - out, n - dn, r);
+        if (!found) return (0, 0); // stale hint: cancelled, no state change
+        _applyPending(id);
+        Position storage p = _positions[id];
+        p.coll -= out;
+        p.normDebt -= dn;
+        totalCollateral -= out;
+        totalNormDebt -= dn;
+        _updateStake(id);
+        sorted.reinsert(id, prv, nxt); // exact hints: succeeds without walking
+        emit PositionRedeemed(id, d, out, 0, false);
+        _emitUpdated(id, OP_REDEEM);
+    }
+
+    /// @dev The partial's amounts, or `d = 0` when it is cancelled before the list is probed.
+    ///      `d ≤ debt − MIN_DEBT` keeps `debtOf(n − dn) ≥ MIN_DEBT` (as in `repay`); `dn ≤ n`
+    ///      because `d < debt`, and `out < c` as in `_redeemFull`.
+    ///      rounding: normalised debt removed R3 (down), collateral to the redeemer R18 (down).
+    function _partialAmounts(uint256 c, uint256 n, uint256 debt, uint256 remaining, Redemption memory r)
+        internal
+        view
+        returns (uint256 d, uint256 dn, uint256 out)
+    {
+        d = Math.min(remaining, debt - MIN_DEBT);
+        if (d == 0) return (0, 0, 0); // position at exactly MIN_DEBT
+        dn = Rounding.mulDivDown(d, RAY, index);
+        out = Rounding.mulDivDown(d, WAD - r.feeRate, r.price);
+        // CHG-002: dn rounds down and the remaining debt up, which can leave ICR < MCR — cancel
+        if ((c - out) * r.price < MCR * _debtOf(n - dn)) return (0, 0, 0);
+    }
+
+    /// @dev Where the partial's new key goes, with the node itself treated as absent (§6.3.2).
+    function _partialSlot(uint256 id, uint256 newColl, uint256 newNorm, Redemption memory r)
+        internal
+        view
+        returns (bool, uint256, uint256)
+    {
+        return sorted.find(newColl, newNorm, id, id, r.upperHint, r.lowerHint);
     }
 
     /// @dev rounding: R1 (up).

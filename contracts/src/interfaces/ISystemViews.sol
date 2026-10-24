@@ -24,3 +24,14 @@ interface IStabilityPoolInterest {
 interface IDeficitLedgerInterest {
     function onInterest(uint256 amount) external;
 }
+
+/// @notice The DutchAuctionHouse flag `redeem` and `check` read: true while a buyer callback runs
+///         (deployment B, §6.8.4, §6.7.2).
+interface IAuctionHousePurchaseState {
+    function inPurchase() external view returns (bool);
+}
+
+/// @notice The ShutdownModule view the RedemptionModule's critical-TCR gate reads (§5.8, §6.7.2).
+interface IShutdownGate {
+    function belowCritical(uint256 price) external view returns (bool);
+}

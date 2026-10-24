@@ -9,7 +9,7 @@ import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/Reentrancy
 import {Test} from "forge-std/Test.sol";
 
 /// @notice The transient lock is on every state-changing external function (spec §2.5): each of the
-///         ten mutators, called from inside another operation's token callback, reverts
+///         eleven mutators, called from inside another operation's token callback, reverts
 ///         ReentrancyGuardReentrantCall. The lock is checked before the caller check, so even the
 ///         restricted hooks revert with it.
 contract VaultManagerReentrancyTest is Test {
@@ -45,9 +45,9 @@ contract VaultManagerReentrancyTest is Test {
         v.openPosition(10e18, 4000e18, 0, 0); // position 1
     }
 
-    /// @dev The ten state-changing externals, as re-entry targets.
+    /// @dev The eleven state-changing externals, as re-entry targets.
     function _targets() internal pure returns (bytes[] memory t) {
-        t = new bytes[](10);
+        t = new bytes[](11);
         t[0] = abi.encodeCall(VaultManager.openPosition, (4e18, 2000e18, 0, 0));
         t[1] = abi.encodeCall(VaultManager.addCollateral, (1, 1, 0, 0));
         t[2] = abi.encodeCall(VaultManager.withdrawCollateral, (1, 1, 0, 0));
@@ -58,6 +58,7 @@ contract VaultManagerReentrancyTest is Test {
         t[7] = abi.encodeCall(VaultManager.onShutdown, ());
         t[8] = abi.encodeCall(VaultManager.onSettlement, ());
         t[9] = abi.encodeCall(VaultManager.accrue, ());
+        t[10] = abi.encodeCall(VaultManager.redeemCollateral, (address(0xA11CE), 1, 0, 2000e18, 1, 0, 0));
     }
 
     function _assertReentryBlocked(ReentryHook hook) internal view {
