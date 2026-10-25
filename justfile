@@ -214,3 +214,32 @@ smoke rpc variant="A":
       || { echo "DEPLOYER_ADDRESS is not set — copy env.example to .env and fill it in"; exit 1; }
     cd contracts && forge script script/SmokeTest.s.sol:SmokeTest --sig "runVariant(string)" {{variant}} \
       --rpc-url {{rpc}} --sender "$sender"
+
+# P18-1: read-only probe of Base Sepolia's block gas limit and whether the node rejects a transaction
+# above EIP-7825's per-transaction cap (2^24 gas). No key, no broadcast; the RPC is never printed.
+sepolia-gas-cap:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    test -n "${BASE_SEPOLIA_RPC:-}" \
+      || { echo "BASE_SEPOLIA_RPC is not set — copy env.example and fill it in"; exit 1; }
+    cd contracts
+    echo "chain id:        $(cast chain-id --rpc-url base_sepolia 2>&1)"
+    echo "latest block:    $(cast block-number --rpc-url base_sepolia 2>&1)"
+    echo "block gas limit: $(cast block latest -f gasLimit --rpc-url base_sepolia 2>&1)"
+    for g in 16777216 16777217 30000000; do
+      out="$(cast call 0x000000000000000000000000000000000000dEaD --gas-limit "$g" --rpc-url base_sepolia 2>&1 | tr '\n' ' ')"
+      echo "eth_call gas=$g: ${out:-ok (empty return)}"
+    done
+    # Consensus evidence: the largest gas limit among transactions actually included in recent blocks.
+    # Any value above 16777216 means the cap is not enforced on this chain.
+    latest="$(cast block-number --rpc-url base_sepolia)"
+    max=0; at=""
+    for ((b = latest; b > latest - ${SCAN_BLOCKS:-200}; b--)); do
+      m=0
+      for hex in $(cast rpc eth_getBlockByNumber "$(cast to-hex "$b")" true --rpc-url base_sepolia \
+                     | jq -r '.transactions[].gas'); do
+        if [ "$((hex))" -gt "$m" ]; then m="$((hex))"; fi
+      done
+      if [ "$m" -gt "$max" ]; then max="$m"; at="$b"; fi
+    done
+    echo "largest tx gas limit in last ${SCAN_BLOCKS:-200} blocks: $max (block $at)"
