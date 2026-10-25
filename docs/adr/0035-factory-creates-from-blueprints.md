@@ -1,6 +1,6 @@
 # ADR-0035: The factory creates every contract from pre-deployed blueprints, still in one transaction
 
-- Status: proposed (direction approved by the human 2026-10-26; text awaiting acceptance)
+- Status: accepted 2026-10-26 (human)
 - Date: 2026-10-26
 - Prompt: P18 (open issue P18-1), before P19
 - Supersedes: —

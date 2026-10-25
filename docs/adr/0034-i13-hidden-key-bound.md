@@ -1,6 +1,6 @@
 # ADR-0034: I13's tolerance comes from hidden ideal keys, with allowances fixed at insertion
 
-- Status: proposed
+- Status: accepted 2026-10-26 (human)
 - Date: 2026-10-24, rewritten 2026-10-25 (before acceptance) for CHG-009
 - Prompt: P17, via `/spec-change` CHG-008 (superseded formula) and CHG-009
 - Supersedes: —
