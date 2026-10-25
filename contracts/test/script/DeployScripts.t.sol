@@ -324,4 +324,32 @@ contract DeployScriptsTest is Test {
         assertEq(address(rb), address(fb), "B read back, A kept");
         vm.removeFile(path);
     }
+
+    // ------------------------------------------------------------------ manifest provenance (P18-3)
+
+    function test_provenance_localDirtyTreeAllowed() public view {
+        deployer.checkProvenance(31_337, "30799172bbbd-dirty", "0.8.28");
+        deployer.checkProvenance(31_337, "unknown", "0.8.28");
+    }
+
+    function test_provenance_sepoliaDirtyTree_refused() public {
+        vm.expectRevert(abi.encodeWithSelector(Deploy.ProvenanceRefused.selector, "working tree is dirty"));
+        deployer.checkProvenance(84_532, "30799172bbbd-dirty", "0.8.28");
+    }
+
+    function test_provenance_sepoliaUnknownCommit_refused() public {
+        vm.expectRevert(abi.encodeWithSelector(Deploy.ProvenanceRefused.selector, "GIT_COMMIT not set"));
+        deployer.checkProvenance(84_532, "unknown", "0.8.28");
+    }
+
+    function test_provenance_sepoliaCleanTree_allowed() public view {
+        deployer.checkProvenance(84_532, "30799172bbbd", "0.8.28");
+    }
+
+    function test_provenance_solcMismatch_refusedEverywhere() public {
+        vm.expectRevert(
+            abi.encodeWithSelector(Deploy.ProvenanceRefused.selector, "solc differs from foundry.toml")
+        );
+        deployer.checkProvenance(31_337, "30799172bbbd", "0.8.29");
+    }
 }

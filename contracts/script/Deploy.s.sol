@@ -27,6 +27,7 @@ contract Deploy is ConfigLoader {
     error ChainNotAllowed(uint256 chainId);
     error StandInsAreLocalOnly(uint256 chainId);
     error VariantInvalid(string variant);
+    error ProvenanceRefused(string why);
 
     /// @notice Reverts unless `chainId` may be deployed to.
     function checkChain(uint256 chainId) public {
@@ -76,11 +77,36 @@ contract Deploy is ConfigLoader {
 
     function _run(DeployConfig memory c) internal returns (BagehotFactory f) {
         checkChain(block.chainid);
+        checkProvenance(
+            block.chainid, vm.envOr("GIT_COMMIT", string("unknown")), vm.envOr("BAGEHOT_SOLC", SOLC)
+        );
         (f, c) = deploy(c);
         // a dry run deploys nothing, so it must not overwrite a real manifest
         if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) {
             writeManifest(f, c, string.concat("../deployments/", vm.toString(block.chainid), ".json"));
         }
+    }
+
+    /// @notice P18-3: what the manifest records must describe the deployed code. Off chain 31337 the
+    ///         commit must be known and the tree clean (`git describe --dirty` adds "-dirty"); on every
+    ///         chain the compiler foundry.toml pins (passed by the recipe) must be the one recorded.
+    function checkProvenance(uint256 chainId, string memory commit, string memory solc) public pure {
+        if (keccak256(bytes(solc)) != keccak256(bytes(SOLC))) {
+            revert ProvenanceRefused("solc differs from foundry.toml");
+        }
+        if (chainId == ANVIL) return;
+        if (keccak256(bytes(commit)) == keccak256("unknown")) revert ProvenanceRefused("GIT_COMMIT not set");
+        if (_endsWith(commit, "-dirty")) revert ProvenanceRefused("working tree is dirty");
+    }
+
+    function _endsWith(string memory s, string memory suffix) internal pure returns (bool) {
+        bytes memory a = bytes(s);
+        bytes memory b = bytes(suffix);
+        if (a.length < b.length) return false;
+        for (uint256 i; i < b.length; ++i) {
+            if (a[a.length - b.length + i] != b[i]) return false;
+        }
+        return true;
     }
 
     /// @notice Deploys mocks (31337 only), then the factory; asserts §3.3. Writes nothing to disk.
@@ -136,7 +162,7 @@ contract Deploy is ConfigLoader {
         vm.serializeString(m, "variant", c.variantB ? "B" : "A");
         vm.serializeUint(m, "block", block.number);
         vm.serializeString(m, "gitCommit", vm.envOr("GIT_COMMIT", string("unknown")));
-        vm.serializeString(m, "solc", SOLC);
+        vm.serializeString(m, "solc", vm.envOr("BAGEHOT_SOLC", SOLC));
         vm.serializeBool(m, "standIns", true);
         vm.serializeString(m, "params", onChain);
         vm.serializeString(m, "configOnlyParams", configOnly);

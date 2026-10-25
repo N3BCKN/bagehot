@@ -167,16 +167,24 @@ fork block:
       || { echo "BASE_ARCHIVE_RPC is not set — copy env.example to .env and fill it in"; exit 1; }
     anvil --fork-url "$BASE_ARCHIVE_RPC" --fork-block-number {{block}} --chain-id 8453 --port 8546
 
-deploy-local:
+# Manifest provenance (P18-3): the commit with a "-dirty" suffix when tracked files differ from it
+# (Deploy.s.sol refuses a dirty tree on every chain but 31337), and the compiler foundry.toml pins
+# (Deploy.s.sol reverts if it differs from the version the script records).
+GIT_DESCRIBE := `git describe --always --dirty --abbrev=12`
+SOLC_VERSION := `sed -n 's/^solc_version *= *"\(.*\)"/\1/p' contracts/foundry.toml`
+
+# variant: "A" (stability pool) or "B" (Dutch auction), recorded side by side in the manifest
+deploy-local variant="A":
     @test -f contracts/script/Deploy.s.sol \
       || { echo "contracts/script/Deploy.s.sol missing — added at P18"; exit 1; }
-    cd contracts && GIT_COMMIT=$(git rev-parse --short HEAD) forge script script/Deploy.s.sol:Deploy \
+    cd contracts && GIT_COMMIT={{GIT_DESCRIBE}} BAGEHOT_SOLC={{SOLC_VERSION}} forge script \
+      script/Deploy.s.sol:Deploy --sig "runVariant(string)" {{variant}} \
       --rpc-url http://127.0.0.1:8545 --private-key {{ANVIL_KEY0}} --broadcast
 
 deploy-fork:
     @test -f contracts/script/DeployFork.s.sol \
       || { echo "contracts/script/DeployFork.s.sol missing — added at P39"; exit 1; }
-    cd contracts && BAGEHOT_FORK=true GIT_COMMIT=$(git rev-parse --short HEAD) forge script \
+    cd contracts && BAGEHOT_FORK=true GIT_COMMIT={{GIT_DESCRIBE}} BAGEHOT_SOLC={{SOLC_VERSION}} forge script \
       script/DeployFork.s.sol:DeployFork --rpc-url http://127.0.0.1:8546 --private-key {{ANVIL_KEY0}} --broadcast
 
 # Simulation only: no keystore unlock, no broadcast. The human runs the real broadcast (see /deploy).
@@ -185,13 +193,13 @@ deploy-sepolia-dry:
       || { echo "contracts/script/Deploy.s.sol missing — added at P18"; exit 1; }
     @test -n "${DEPLOYER_ADDRESS:-}" \
       || { echo "DEPLOYER_ADDRESS is not set — copy env.example to .env and fill it in"; exit 1; }
-    cd contracts && GIT_COMMIT=$(git rev-parse --short HEAD) forge script script/Deploy.s.sol:Deploy \
-      --rpc-url base_sepolia --sender "$DEPLOYER_ADDRESS"
+    cd contracts && GIT_COMMIT={{GIT_DESCRIBE}} BAGEHOT_SOLC={{SOLC_VERSION}} forge script \
+      script/Deploy.s.sol:Deploy --rpc-url base_sepolia --sender "$DEPLOYER_ADDRESS"
 
 # Public anvil account 0 (an address, not a key): the smoke test's default sender on a localhost RPC.
 ANVIL_ADDR0 := "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 
-smoke rpc:
+smoke rpc variant="A":
     #!/usr/bin/env bash
     set -euo pipefail
     test -f contracts/script/SmokeTest.s.sol \
@@ -204,4 +212,5 @@ smoke rpc:
     esac
     test -n "$sender" \
       || { echo "DEPLOYER_ADDRESS is not set — copy env.example to .env and fill it in"; exit 1; }
-    cd contracts && forge script script/SmokeTest.s.sol:SmokeTest --rpc-url {{rpc}} --sender "$sender"
+    cd contracts && forge script script/SmokeTest.s.sol:SmokeTest --sig "runVariant(string)" {{variant}} \
+      --rpc-url {{rpc}} --sender "$sender"
