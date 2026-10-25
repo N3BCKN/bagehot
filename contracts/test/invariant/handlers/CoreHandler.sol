@@ -13,11 +13,13 @@ import {MockAggregator} from "../../../src/mocks/MockAggregator.sol";
 import {MockSequencerFeed} from "../../../src/mocks/MockSequencerFeed.sol";
 import {RedemptionModule} from "../../../src/redemption/RedemptionModule.sol";
 import {CountingOracle} from "../../utils/CountingOracle.sol";
+import {I13HiddenKeys} from "../../utils/I13HiddenKeys.sol";
 import {RedemptionLastVisit} from "../../utils/RedemptionLastVisit.sol";
 import {MockPurchaseHouse, MockShutdownGate} from "../../utils/RedemptionMocks.sol";
 import {VaultManagerHarness} from "../../utils/VaultManagerHarness.sol";
 import {MockLedgerViews, MockPool, MockWETH} from "../../utils/VaultMocks.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 
@@ -109,6 +111,14 @@ contract CoreHandler is Test {
     // CHG-008: m(p) = redistributions since p's last insertion
     uint256 public redistributions;
     mapping(uint256 => uint256) internal redistAtPlacement;
+    // I13 hidden-key bound (CHG-009, proposed): h interval and ι per member, fixed at insertion
+    mapping(uint256 => I13HiddenKeys.Rat) internal hOf;
+    mapping(uint256 => int256) internal iotaOf;
+    uint256 public insertionViolations; // an insertion not exact against its neighbours' keys (§6.3.1)
+    uint256 public insertionsWithIota; // insertions that inherited a non-zero ι (docs/fuzzing.md)
+    uint256 public maxIotaRelE18; // largest ι / (h + LDebt) at insertion, WAD-scaled (docs/fuzzing.md)
+    uint256 public maxPairTolRelE18; // largest observed-key pair tolerance, relative (docs/fuzzing.md)
+    uint256 public maxChg008PairRelE18; // CHG-008's pair tolerance on the same pairs, relative (comparison)
     uint256 public maxRelativeSlackE18; // max over members of max(kc/c, kn/n), WAD-scaled
     uint256 public minMemberStake = type(uint256).max;
     uint256 public eRedistributions; // HarnessRedistributed events (Foundry)
@@ -738,8 +748,13 @@ contract CoreHandler is Test {
         _refreshExactness();
         if (nonExact != 0) ++stepsNonExact;
         else if (sorted.getSize() >= 2) ++stepsAllExact; // an exact order needs a pair to order
-        _measureK();
-        _measureSlack();
+        // measurements for docs/fuzzing.md only: Foundry runs them; Medusa skips them, since their
+        // per-pair external calls would push long lists past its 12.5M transaction gas limit and the
+        // dropped calls would cut its reach (the checks themselves run in both)
+        if (eventsAvailable) {
+            _measureK();
+            _measureSlack();
+        }
     }
 
     /// @dev Records the largest relative slack the derived bound grants and the smallest stake, for
@@ -752,7 +767,27 @@ contract CoreHandler is Test {
             (uint256 cB, uint256 nB) = v.sortKey(b);
             _slack(a, cA, nA);
             _slack(b, cB, nB);
+            _pairTolerances(a, b, cA, nA, cB, nB);
         }
+    }
+
+    /// @dev The tolerance each bound grants this pair on the observed keys, relative to the key.
+    ///      Hidden-key (CHG-009): h_obs,A − h_obs,B ≤ (d_A − d_B) + ι_A + ι_B with d = h_obs − h,
+    /// over
+    ///      h_obs,B + LDebt. CHG-008: kc_A/c_A + kn_B/n_B (its cross-product form, to first order).
+    function _pairTolerances(uint256 a, uint256 b, uint256 cA, uint256 nA, uint256 cB, uint256 nB) internal {
+        (uint256 l, uint256 ld) = (v.LColl(), v.LDebt());
+        int256 tol = I13HiddenKeys.ceilDiff(I13HiddenKeys.hObs(cA, nA, l, ld), hOf[a])
+            + I13HiddenKeys.ceilDiff(hOf[b], I13HiddenKeys.hObs(cB, nB, l, ld)) + iotaOf[a] + iotaOf[b];
+        if (tol > 0) {
+            uint256 rel = Math.mulDiv(
+                uint256(tol), 1e18, Math.max(1, Math.mulDiv(nB, 1e18 + l, cB)), Math.Rounding.Ceil
+            );
+            if (rel > maxPairTolRelE18) maxPairTolRelE18 = rel;
+        }
+        uint256 old = Math.mulDiv(_kColl(a), 1e18, cA, Math.Rounding.Ceil)
+            + Math.mulDiv(_kNorm(b), 1e18, nB, Math.Rounding.Ceil);
+        if (old > maxChg008PairRelE18) maxChg008PairRelE18 = old;
     }
 
     function _slack(uint256 id, uint256 c, uint256 n) internal {
@@ -908,9 +943,52 @@ contract CoreHandler is Test {
         exact[id] = false;
         (keyColl[id], keyNorm[id]) = v.sortKey(id);
         redistAtPlacement[id] = redistributions;
+        _placeHidden(id);
         bool clean = nonExact == 0;
         exact[id] = clean;
         if (!clean) ++nonExact;
+    }
+
+    /// @dev CHG-009: the member's h (constant while it stays in the list) and its ι, the most its
+    ///      place can sit off the hidden order given its neighbours' deviation now. Also checks that
+    ///      the insertion is exact against the neighbours' keys (§6.3.1 `precedes`).
+    function _placeHidden(uint256 id) internal {
+        VaultManager.Position memory p = v.positions(id);
+        hOf[id] = I13HiddenKeys.h(p.coll, p.normDebt, p.snapLColl, p.snapLDebt);
+        uint256 prev = sorted.getPrev(id);
+        uint256 nxt = sorted.getNext(id);
+        iotaOf[id] = I13HiddenKeys.iota(_hiddenSide(prev), _hiddenSide(nxt));
+        if (iotaOf[id] > 0) {
+            ++insertionsWithIota;
+            uint256 rel = Math.mulDiv(SafeCast.toUint256(iotaOf[id]), 1e18, _hScale(id), Math.Rounding.Ceil);
+            if (rel > maxIotaRelE18) maxIotaRelE18 = rel;
+        }
+        if (prev != 0 && !_precedes(prev, id)) ++insertionViolations;
+        if (nxt != 0 && !_precedes(id, nxt)) ++insertionViolations;
+        // §6.5.4: every insertion recomputes the stake from the current snapshots (R10, down). The
+        // hidden-key bound holds whatever the stakes, so a wrong stake is checked here, exactly.
+        (uint256 S, uint256 C) = (v.totalStakesSnapshot(), v.totalCollateralSnapshot());
+        if (p.stake != (S == 0 || C == 0 ? p.coll : Math.mulDiv(p.coll, S, C))) ++insertionViolations;
+    }
+
+    function _hiddenSide(uint256 id) internal view returns (I13HiddenKeys.Side memory s) {
+        if (id == 0) return s;
+        (uint256 c, uint256 n) = v.sortKey(id);
+        s.obs = I13HiddenKeys.hObs(c, n, v.LColl(), v.LDebt());
+        (s.h, s.iota, s.present) = (hOf[id], iotaOf[id], true);
+    }
+
+    /// @dev h + LDebt = DP · (hidden normalised debt per unit of ideal stake), the key's own scale:
+    ///      a relative change in it is a relative change in the hidden NICR. Floor, at least 1.
+    function _hScale(uint256 id) internal view returns (uint256) {
+        I13HiddenKeys.Rat memory r = hOf[id];
+        return Math.max(1, Math.mulDiv(r.x, r.y, r.den) + v.LDebt() - r.off);
+    }
+
+    function _precedes(uint256 a, uint256 b) internal view returns (bool) {
+        (uint256 cA, uint256 nA) = v.sortKey(a);
+        (uint256 cB, uint256 nB) = v.sortKey(b);
+        return cA * nB > cB * nA || (cA * nB == cB * nA && a < b);
     }
 
     function _forget(uint256 id) internal {
@@ -1051,14 +1129,23 @@ contract CoreHandler is Test {
                 : (false, "I12: a price-required operation ran on an unusable price");
     }
 
-    /// @dev I13: exact order while every member is exact (CHG-005); otherwise the derived per-member
-    ///      bound (cA + kc(A))·(nB + kn(B)) ≥ cB·nA (CHG-008). The bound is sound but weak once
-    ///      stakes collapse (P17-1); _measureSlack reports how weak.
+    /// @dev I13: exact order while every member is exact (CHG-005). In every regime: the key identity,
+    ///      exact insertions (neighbours and stake) and the hidden-key pair condition (CHG-009,
+    ///      proposed). CHG-008's per-member bound is still asserted, as the approved text, until CHG-009
+    ///      is decided — `I13BoundCounterexampleTest` shows a correct VaultManager can break it.
     function checkI13() public view returns (bool, string memory) {
+        if (insertionViolations != 0) {
+            return (false, "I13: an insertion was not exact (neighbours' keys or the stake of 6.5.4)");
+        }
         uint256 a = sorted.getFirst();
         if (a == 0) return (true, "");
+        if (!_keyIsSpec(a)) return (false, "I13: sortKey differs from the spec formula");
         bool exactRegime = nonExact == 0;
         for (uint256 b = sorted.getNext(a); b != 0; (a, b) = (b, sorted.getNext(b))) {
+            if (!_keyIsSpec(b)) return (false, "I13: sortKey differs from the spec formula");
+            if (!I13HiddenKeys.pairHolds(hOf[a], iotaOf[a], hOf[b], iotaOf[b])) {
+                return (false, "I13: order beyond the hidden-key bound (CHG-009)");
+            }
             (uint256 cA, uint256 nA) = v.sortKey(a);
             (uint256 cB, uint256 nB) = v.sortKey(b);
             if (exactRegime) {
@@ -1070,6 +1157,14 @@ contract CoreHandler is Test {
             }
         }
         return (true, "");
+    }
+
+    /// @dev §5.1.12 / §6.5.3: the effective key is the stored value plus the floored pending reward.
+    function _keyIsSpec(uint256 id) internal view returns (bool) {
+        VaultManager.Position memory p = v.positions(id);
+        (uint256 c, uint256 n) = v.sortKey(id);
+        return c == p.coll + Math.mulDiv(p.stake, v.LColl() - p.snapLColl, 1e18)
+            && n == p.normDebt + Math.mulDiv(p.stake, v.LDebt() - p.snapLDebt, 1e18);
     }
 
     function checkNoUnexpectedReverts() public view returns (bool, string memory) {

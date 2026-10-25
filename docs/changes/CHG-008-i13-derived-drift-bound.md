@@ -1,7 +1,9 @@
 # CHG-008: I13's constant k = 4 is exceeded after repeated redistributions; replace it with a derived per-member bound
 
-- Status: **approved 2026-10-24 (option 1, without the slack ceiling first proposed); exact wording
-  approved and applied to `docs/invariants.md` I13 on 2026-10-24** (ADR-0034, proposed)
+- Status: **approved 2026-10-24 (option 1, without the slack ceiling first proposed); applied to
+  `docs/invariants.md` I13 on 2026-10-24. Its formula is unsound — a correct VaultManager breaks it
+  (`I13BoundCounterexampleTest`) — and CHG-009 (proposed) replaces it.** The problem statement below
+  (`k = 4` exceeded) stands.
 - Raised: 2026-10-24, P17 (the core invariant campaign, deployment A)
 - Affects: `docs/invariants.md` I13 ("Formula", "Derivation of the form", "The constant k = 4 is
   calibrated, not proven", "Checked in"); possibly one sentence of spec §6.3.3. No contract, vector or

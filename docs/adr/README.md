@@ -85,7 +85,7 @@ the P03 gate via `/spec-change` CHG-002.
 | [0031](0031-deploy-script-enforces-the-wired-peer-graph.md) | The deployment script enforces that the wired peer graph agrees | accepted | P11 / CHG-003 |
 | [0032](0032-i13-exact-regime-requires-every-member-exact.md) | I13 asserts exact order only while every list member is exact | accepted | P13 / CHG-005 |
 | [0033](0033-non-fatal-pool-interest-hook.md) | A failing stability pool cannot stop accrual; its interest share falls back to the reserve | accepted | P15 / CHG-006 |
-| [0034](0034-i13-derived-per-member-drift-bound.md) | I13's tolerance is a per-member bound derived from each member's rounding | proposed | P17 / CHG-008 |
+| [0034](0034-i13-hidden-key-bound.md) | I13's tolerance comes from hidden ideal keys, with allowances fixed at insertion | proposed | P17 / CHG-008, CHG-009 |
 
 Numbering is continuous and never reused; a later decision takes the next free number, which is
 not a position in the plan. **All 27 were accepted by the human at the P04 gate on 2026-10-23**,

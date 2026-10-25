@@ -101,6 +101,10 @@ contract CoreInvariantsTest is Test {
         );
         emit log_named_uint("I13: max relative slack granted (WAD)", handler.maxRelativeSlackE18());
         emit log_named_uint("smallest member stake seen", handler.minMemberStake());
+        emit log_named_uint(
+            "I13 hidden-key: insertions with a non-zero allowance", handler.insertionsWithIota()
+        );
+        emit log_named_uint("I13 hidden-key: largest allowance / key scale (WAD)", handler.maxIotaRelE18());
         emit log_named_uint("steps in the exact regime", handler.stepsAllExact());
         emit log_named_uint("steps in the tolerance regime", handler.stepsNonExact());
         string[12] memory names = [

@@ -57,7 +57,7 @@ B = `CoreInvariantsBTest`):
 | I9 | `invariant_I9_rescuePathsLive` |
 | I11 | `invariant_I11_parametersImmutable` |
 | I12 | `invariant_I12_noOperationOnUnusablePrice` |
-| I13 (CHG-005 exact regime, CHG-008 derived bound) | `invariant_I13_sortedByNicrWithinTolerance` |
+| I13: CHG-005 exact regime; CHG-008 bound (approved text) and CHG-009 hidden-key bound with its exact key, insertion and stake checks (proposed) | `invariant_I13_sortedByNicrWithinTolerance` |
 | handler state rebuilt from events matches the state | `invariant_stateReconstructionMatchesEvents` |
 | no unexpected revert | `invariant_noUnexpectedReverts` |
 
@@ -104,27 +104,28 @@ before those fixes (Medusa ≈ 1,270 calls/s), are superseded.
 ### Foundry, nightly profile
 
 `just test-nightly`, 4,096 runs × 500 calls = 2,048,000 calls per invariant contract, default seed,
-all six suites in parallel (37 min wall time). Every invariant passed, with 0 reverts.
+all six suites in parallel (42 min wall time), with the CHG-009 checks. Every invariant passed, with
+0 reverts.
 
 | suite | wall time |
 |---|---|
-| `CoreInvariantsTest` (A), 11 invariants | 1,240 s |
-| `CoreInvariantsBTest` (B), 11 invariants | 1,232 s |
-| `VaultI2InvariantTest` (P15) | 2,212 s |
-| `RedemptionInvariantTest` (P16) | 1,207 s |
-| `SortedPositionsInvariantTest` (P13, list only) | 526 s |
+| `CoreInvariantsTest` (A), 11 invariants | 1,680 s |
+| `CoreInvariantsBTest` (B), 11 invariants | 1,714 s |
+| `VaultI2InvariantTest` (P15) | 2,538 s |
+| `RedemptionInvariantTest` (P16) | 1,488 s |
+| `SortedPositionsInvariantTest` (P13, list only) | 659 s |
 | `I13CheckTest` | < 1 s |
 
 ### Medusa, 30 minutes
 
 | | value |
 |---|---|
-| elapsed | 29 min 59 s (timeout 1,800 s) |
-| calls | 2,723,141 |
-| calls/s | **≈ 1,510 average** (≈ 1,040–1,600 instantaneous) |
-| sequences | 27,310 |
-| branches covered | 4,358 |
-| corpus | 84 sequences |
+| elapsed | 29 min 57 s (timeout 1,800 s) |
+| calls | 2,511,988 |
+| calls/s | **≈ 1,400 average** (≈ 1,040–1,600 instantaneous) |
+| sequences | 25,207 |
+| branches covered | 4,521 |
+| corpus | 82 sequences |
 | result | 10/10 properties passed, 0 failures |
 
 Medusa has no `afterInvariant`, so reach is read from its lcov report
@@ -133,15 +134,52 @@ these means the campaign stopped exercising that path:
 
 | path | hits |
 |---|---|
-| `redistribute` call | 125,377 |
-| successful redemption | 110,550 |
-| inferred partial (I5) | 94,989 |
-| last-visit reason check (CHG-007) | 9,865 |
-| `onShutdown` call | 12,477 |
-| `onSettlement` call | 5,119 |
-| `reclaimGasReserve` call | 4,416 |
+| `redistribute` call | 115,476 |
+| successful redemption | 88,451 |
+| inferred partial (I5) | 86,538 |
+| last-visit reason check (CHG-007) | 84 |
+| `onShutdown` call | 12,106 |
+| `onSettlement` call | 5,013 |
+| `reclaimGasReserve` call | 4,400 |
 
-### I13 tolerance in deployment A (CHG-008 weak regime, P17-1)
+**The last-visit check is rare and varies between campaigns:** 84 here, 9,865 in the previous
+baseline. It needs a redemption that leaves stablecoin over, has no partial, and stops before
+`maxIterations`. In this run 1,913 calls left stablecoin over, and all but 84 of them had used up
+their iterations. The path is also pinned deterministically by
+`test_regression_I5_lastVisitReason`.
+
+The handler's measurements for this file (`_measureK`, `_measureSlack`) run in Foundry only. Under
+Medusa's 12.5M transaction gas limit their per-pair calls dropped long-list actions: 1,038 calls/s
+and 73,028 redemptions before they were gated, 1,400 calls/s and 88,451 after.
+
+### I13 hidden-key tolerance in deployment A (CHG-009, proposed)
+
+Measured on 2026-10-25 with the final, exact handler, deployment A, 8 seeds × 256 runs × 200 calls;
+every run recorded through a temporary probe, removed afterwards. Each run also logs its own figures
+from `afterInvariant` (`forge test -vv`).
+
+| | value |
+|---|---|
+| violations of the pair condition, the key identity, insertion exactness or the stake rule | 0 |
+| insertions that inherited a non-zero allowance ι | 4,764, in 1,055 of 2,056 runs |
+| largest single ι at insertion, relative to its key | 1.3·10⁻² |
+
+Per-pair tolerance on the observed keys, relative to the NICR, against CHG-008's on the same pairs,
+by the smallest stake the run reached:
+
+| smallest stake in the run | runs | hidden-key | CHG-008 |
+|---|---|---|---|
+| below 1,000 wei | 27 | 4.4·10⁻³ | 4.8·10⁻¹ |
+| 10³ – 10⁵ | 21 | 1.5·10⁻⁶ | 1.3·10⁻³ |
+| 10⁵ – 10⁹ | 95 | 2.0·10⁻⁶ | 6.5·10⁻⁶ |
+| 10⁹ – 10¹³ | 289 | 3.4·10⁻¹¹ | 6.8·10⁻¹⁰ |
+| 10¹³ and more | 1,624 | 1.7·10⁻¹⁴ | 6.4·10⁻¹⁴ |
+
+These are observations, not a bound: no a-priori limit exists, and the tolerance is vacuous in
+reachable zero-stake states (CHG-009). The §6.5.4 reset branch is not reachable through this harness.
+Model search behind the counterexample: `python3 scripts/analysis/i13_bound_search.py`.
+
+### CHG-008's tolerance (superseded by CHG-009 if approved)
 
 Measured on 2026-10-24, before the review's harness fixes (which do not change what
 `redistribute` does), over 8 seeds × 256 runs × 200 calls, every list member after every step. The derived
@@ -181,8 +219,9 @@ that fails before its fix.
 | `test_regression_eventsAgree_withdrawAfterWarp` | 1, events | handler: Foundry records events of calls that later revert | recorded logs discarded on every caught revert |
 | `test_regression_I13_toleranceAfterRedistributions` | 3, I13 | **spec**: `k = 4` exceeded (needed ≈ 8,125) | CHG-008, a derived per-member bound (ADR-0034) |
 | `test_regression_I13_derivedBound_stakeCollapse` | 1, I13 | **spec**: the proposed 10⁻⁹ slack ceiling fails under stake collapse | ceiling withdrawn; weak regime stated; P17-1 opened |
+| `I13BoundCounterexampleTest` (unit, deterministic) | — , I13 | **spec**: CHG-008's bound is broken by a correct VaultManager on a protocol-valid sequence (review F3) | CHG-009, the hidden-key bound (proposed) |
 
-No contract bug was found. Every failure was a handler bug or a spec problem routed through `/spec-change`.
+No contract bug was found. Every failure was a handler bug or a spec problem routed through `/spec-change`. The counterexample test is not a shrunk campaign failure: the campaign never produced the shape, and an exact-arithmetic model search found it.
 
 Related unit tests:
 - `RescuePathsUnusableOracle.t.sol` (I9 ∩ I12): repay, add-collateral and close succeed with no
@@ -205,8 +244,10 @@ the default-profile campaign of A and B, then restored:
 | M13 | harness `redistribute` reverts when the position has pending rewards | both I13 regressions; `noUnexpectedReverts`, A (B never redistributes) |
 | M14 | `redeem` always reverts `TCRBelowCritical` | three regressions; `noUnexpectedReverts`, A and B |
 | M15 | the redemption loop never redeems | three regressions; `noUnexpectedReverts`, A and B |
+| M7 | `_computeStake` ignores the snapshot (stake = collateral) | I13 condition 3 (stake at insertion), seed 1; the counterexample regression's model state |
+| — | `sortKey` returns stored instead of effective values | I13 condition 1 (key identity), seed 1; the counterexample regression's model state |
 
-Before the review's fixes, all five passed the entire P17 suite and Medusa.
+Before the review's fixes, M11–M15 passed the entire P17 suite and Medusa. M7 was caught before only by CHG-008's slack, at the default campaign size; the last two rows are checked against the CHG-009 conditions.
 
 The campaign size matters: the reviewer's mutant M7 (a stake that ignores the snapshot) survives
 32 runs × 150 calls and is caught at 256 × 200. PR CI must not run fewer than the default profile.
