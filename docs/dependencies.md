@@ -26,6 +26,7 @@ records — the pin cannot drift.
 | halmos | `0.3.3` | Symbolic proofs of simple properties, `just halmos`. | `uv tool install halmos==0.3.3` |
 | bitwuzla | `0.8.1` (macOS arm64 sha256 `f603ff433151cb9f3929a9810a41405bfa57ffaa184fa736a38c32b64a3a9021`) | SMT solver for halmos. The two solvers bundled with halmos 0.3.3 (yices, z3) time out on every rounding proof at 128, 64 and 16 bits (P10-1); bitwuzla is halmos's recommended bit-vector solver. Approved by the human at P10 for a timeboxed attempt. Pinned and checksum-verified by halmos itself. | `HALMOS_ALLOW_DOWNLOAD=1 halmos --solver bitwuzla-0.8.1` (downloads once into halmos's cache) |
 | medusa | `1.5.1` | Stateful fuzzing alongside the Foundry invariant runner, `just medusa`. | pinned release binary, see below |
+| crytic-compile | `0.4.2` — **sourced from slither-analyzer 0.11.6**, not installed separately | medusa compiles the Foundry project through it (P17). Approved by the human at P17 on the condition that the version is pinned here explicitly and checked: `just crytic-compile-check` fails if the crytic-compile resolved on medusa's PATH is anything but 0.4.2, and runs in the PR workflow (static job) and before every `just medusa`. | comes with `uv tool install slither-analyzer==0.11.6`; `just medusa` puts `$(uv tool dir)/slither-analyzer/bin` on PATH |
 
 ### medusa
 
@@ -42,6 +43,13 @@ tar -xzf medusa-mac-arm64.tar.gz -C .tools medusa && chmod +x .tools/medusa
 
 `.tools/` is git-ignored: the binary is platform-specific, so each machine re-runs the snippet
 above. Reproducing on another platform means the matching asset from the same `v1.5.1` tag.
+
+medusa needs crytic-compile. Rather than install a second copy, `just medusa` uses the one inside
+slither-analyzer's uv tool environment (an exact transitive pin of slither-analyzer 0.11.6). Because
+that is someone else's dependency, its version is pinned here and enforced: upgrading
+slither-analyzer to a release that changes crytic-compile fails `just crytic-compile-check` (and so
+CI and `just medusa`) until this table and `CRYTIC_COMPILE_VERSION` in the `justfile` are updated
+deliberately.
 
 ## Python
 

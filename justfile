@@ -6,6 +6,10 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 ANVIL_KEY0 := "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"  # public anvil test key
 MEDUSA := justfile_directory() / ".tools/medusa"  # pinned binary, see docs/dependencies.md
+# medusa compiles through crytic-compile, which is not installed on its own: it is the version pinned
+# inside slither-analyzer's uv tool environment (docs/dependencies.md). `crytic-compile-check` fails
+# if the version on that PATH ever changes silently.
+CRYTIC_COMPILE_VERSION := "0.4.2"
 
 default: check
 
@@ -47,7 +51,24 @@ medusa:
       || { echo "contracts/medusa.json missing — added at P17"; exit 1; }
     @test -x "{{MEDUSA}}" \
       || { echo "medusa not found at {{MEDUSA}} — see docs/dependencies.md"; exit 1; }
-    cd contracts && "{{MEDUSA}}" fuzz --config medusa.json
+    @just crytic-compile-check
+    cd contracts && PATH="$(uv tool dir)/slither-analyzer/bin:$PATH" "{{MEDUSA}}" fuzz --config medusa.json
+
+# The crytic-compile medusa resolves on its PATH (slither-analyzer's tool environment) must be
+# exactly CRYTIC_COMPILE_VERSION. Run by `just medusa` and by CI on every PR.
+crytic-compile-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH="$(uv tool dir)/slither-analyzer/bin:$PATH"
+    resolved="$(command -v crytic-compile || true)"
+    if [ -z "$resolved" ]; then
+      echo "crytic-compile not found — install slither-analyzer (docs/dependencies.md)"; exit 1
+    fi
+    got="$(crytic-compile --version 2>&1 | tr -d '[:space:]')"
+    if [ "$got" != "{{CRYTIC_COMPILE_VERSION}}" ]; then
+      echo "crytic-compile at $resolved is '$got', pinned {{CRYTIC_COMPILE_VERSION}} — update docs/dependencies.md and the justfile deliberately"; exit 1
+    fi
+    echo "crytic-compile {{CRYTIC_COMPILE_VERSION}} ($resolved)"
 
 halmos:
     @compgen -G "contracts/test/symbolic/*.sol" >/dev/null \

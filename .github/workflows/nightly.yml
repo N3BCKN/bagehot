@@ -33,6 +33,8 @@ env:
   JUST_VERSION: "1.59.0"
   HALMOS_VERSION: "0.3.3"
   MEDUSA_VERSION: "1.5.1"
+  # medusa compiles through the crytic-compile pinned inside slither-analyzer (docs/dependencies.md)
+  SLITHER_VERSION: "0.11.6"
   MEDUSA_SHA256: ddfe1517ae9028ef9fc331b00f5a6a9d5406f3fcd11a715d60c6b6fb3e4546d3
   # Wall-clock ceiling for the medusa campaign, in seconds. The job timeout sits above it so a
   # campaign that overruns is killed by `timeout` with a readable message, not by the runner.
@@ -124,8 +126,10 @@ jobs:
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: ${{ env.UV_VERSION }}
-      - name: install just
-        run: uv tool install "rust-just==${JUST_VERSION}"
+      - name: install just and slither (for its pinned crytic-compile)
+        run: |
+          uv tool install "rust-just==${JUST_VERSION}"
+          uv tool install "slither-analyzer==${SLITHER_VERSION}"
 
       # Same pinned release the justfile expects at .tools/medusa, so the local and nightly
       # campaigns are the same binary.

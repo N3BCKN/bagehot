@@ -24,6 +24,10 @@ __pycache__/
 .ruff_cache/
 .hypothesis/
 
+# Medusa corpus and crytic-compile output (the nightly job uploads the corpus as an artifact)
+contracts/medusa-corpus/
+contracts/crytic-export/
+
 # Pinned local tool binaries (see docs/dependencies.md)
 .tools/
 

@@ -152,6 +152,10 @@ jobs:
           uv tool install "rust-just==${JUST_VERSION}"
           uv tool install "slither-analyzer==${SLITHER_VERSION}"
 
+      # medusa uses the crytic-compile pinned inside slither-analyzer; fail if it moves silently
+      - name: crytic-compile version pin
+        run: just crytic-compile-check
+
       - name: install aderyn
         if: needs.detect.outputs.src == 'true'
         run: |
