@@ -1,0 +1,49 @@
+# Local anvil (chain id 31337) — mocks only. `just deploy-local`, then `just smoke http://127.0.0.1:8545`.
+#
+# Values are the spec §3.1 start values (configuration, not frozen: any value inside its §3.1 range
+# that keeps §3.3 holds; D values are re-derived, never chosen). Integers that do not fit TOML's
+# 64-bit integers, and every WAD/RAY value for uniformity, are strings parsed exactly by
+# script/Config.s.sol.
+
+chain_id = 31337
+name = "anvil"
+# "A" (stability pool) or "B" (Dutch auction), spec §1.2
+variant = "A"
+
+[mocks]
+# LocalWETH, MockAggregator and MockSequencerFeed are deployed by the script on this chain only.
+price_feed_decimals = 8
+initial_price = "2000000000000000000000"          # 2,000 USD per WETH (WAD)
+sequencer_up_since_s = 100000                      # sequencer reported up this many seconds before deployment
+
+[token]
+name = "Bagehot USD (local)"
+symbol = "bUSD"
+
+[params]
+# VaultManager
+mcr = "1100000000000000000"                       # 1.10
+min_debt = "2000000000000000000000"               # 2,000
+gas_reserve = "37500000000000000"                 # 0.0375 WETH
+annual_rate = "0.05"                               # documentation only; rate_per_second is its D value
+rate_per_second = "1547125957863212449"           # RAY, round_half_even(((1.05)^(1/31_536_000) − 1)·RAY), math.json#derived_constants
+pool_share_bps_a = 7500
+pool_share_bps_b = 0
+# SortedPositions
+max_hint_steps = 30
+# Liquidation strategy (StabilityPool / DutchAuctionHouse; checked by §3.3 constraint 1 already)
+liquidation_penalty = "50000000000000000"         # 0.05
+# RedemptionModule
+redemption_fee_floor = "5000000000000000"         # 0.005
+beta = 2
+base_rate_decay = "999983955055097432543272791"   # RAY, 12-hour half-life, math.json#derived_constants
+# OracleAdapter
+staleness_s = 3600
+grace_period_s = 3600
+min_price = "10000000000000000000"                # 10
+max_price = "1000000000000000000000000"           # 1,000,000
+oracle_gas = 100000
+oracle_post_failure_gas = 3175
+# ShutdownModule (a stand-in until its prompt; only CRITICAL_TCR is used) and §3.3 constraint 5
+critical_tcr = "1050000000000000000"              # 1.05
+oracle_failure_duration_s = 172800

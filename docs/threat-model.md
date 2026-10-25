@@ -26,7 +26,7 @@ Blueprint §17.1. The left column is what we rely on; the right is what we expli
 | Base sequencer | That it usually runs | Its availability, or neutrality of ordering: no mechanism depends on transaction order within a block |
 | L1/L2 bridge, Base chain | That it behaves as documented | Nothing is staked on reorg resistance beyond the chain's own |
 | Contract author | **Nothing** — there is no admin role (ADR-0009) and no upgrade path | That the code is free of defects; this is the main residual risk |
-| Deployer key | That the human controls it for exactly one `wire(...)` call per contract (ADR-0021) | That it stays secret forever — after wiring it has no power at all |
+| Deployer key | That the human's key sends the one transaction that creates `BagehotFactory`; the factory's constructor deploys every contract and makes every `wire(...)` call, so each wired contract's `deployer` is the factory, and the factory has no function left that could wire anything again (P18, ADR-0021, P11-1) | That it stays secret forever — once the factory's constructor has run, neither the key nor the factory has any power at all. Deploying outside the scripted factory voids this (ADR-0031): the deploy script and smoke test assert `deployer() == factory`, `wired()` and the full peer graph |
 
 Out of the model: a malicious or compromised privileged insider, because the design has no
 privileged role to compromise. The one-shot `wire` is the only exception and it is spent at

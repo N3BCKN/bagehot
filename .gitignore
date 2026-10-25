@@ -36,3 +36,6 @@ docs/handoff.md
 
 # OS
 .DS_Store
+
+# Local anvil manifests: addresses die with the chain (P18). Sepolia manifests are committed.
+deployments/31337.json

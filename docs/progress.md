@@ -22,7 +22,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | P15 | VaultManager II: interest accrual and routing | done | 2026-10-23 | Accrual per spec §6.2 (R4, R6, R7), routed to the pool or reserve with `onInterest`; public `accrue()`; accruing `currentIndex()`; max dt documented and tested at the boundary; I2 invariant green with interest; interest vectors on both sides |
 | P16 | RedemptionModule | done | 2026-10-24 | `RedemptionModule` (fee, gate, guard, lock), `VaultManager.redeemCollateral` (push model, CHG-002 post-check), `HintHelpers.getRedemptionHints`; Python mirror; all 7 `redemption.json` vectors end to end on both sides; P04-2 closed; I5/I15/I2 campaign green; rounding mutations 8/8; security-reviewer: no critical/high. CHG-007 raised (P16-1) |
 | P17 | Invariant harness and Medusa | done | 2026-10-25 | `CoreHandler` over the whole system in A and B; I1, I2, I5, I8, I9, I11, I12, I13 and no unexpected revert; Medusa 30 min green; nightly green; I9∩I12 test; crytic-compile pinned with a CI check. CHG-008 applied to I13 (ADR-0034, proposed). security-reviewer: 5 surviving mutants found and now caught. **Open for the human: P17-1 (stake collapse, before P20) and P17-2 (I13 derivation)** |
-| P18 | Local deployment, factory and manifest | todo | | |
+| P18 | Local deployment, factory and manifest | done | 2026-10-25 | `BagehotFactory` deploys and wires a whole variant in one transaction (local-only stand-ins for the modules P19–P33 build); `config/31337.toml` + `script/Config.s.sol`; `Deploy.s.sol` (chain guard, §3.3 + CREATE-provenance assertions before broadcast, variant-keyed manifest written only on broadcast); `SmokeTest.s.sol`. **Fresh anvil → `just deploy-local` → `just smoke http://127.0.0.1:8545` passes**; deploy on 1 / 8453 reverts (tested). security-reviewer: nothing critical; M/L findings fixed. Open: P18-1 (initcode, ADR before P19), P18-2, P18-3 |
 | P19 | StabilityPool (product-sum) | todo | | |
 | P20 | Liquidation via pool and redistribution | todo | | |
 | P21 | DeficitLedger and invariant extension | todo | | |
@@ -54,6 +54,120 @@ Claude updates this file at the end of every session. Status: todo · in progres
 ## Session log
 
 <!-- newest first: date · prompt · what changed · decisions · next -->
+
+### 2026-10-25 · P18 · Local deployment, factory and manifest
+
+**Changed.**
+- **`src/deploy/BagehotFactory.sol`:** its constructor deploys every contract of one variant and
+  calls every `wire`. That is one transaction with no un-wired window and no caller-supplied role
+  addresses, and it uses no `{salt:}`. Every wired contract's `deployer` is the factory.
+  - It exposes each address as an immutable, plus `deployBlock`, and emits `Deployed`.
+  - Variant A: `stabilityPool == strategy` and no auction house. Variant B: the reverse, with
+    `POOL_SHARE_BPS = 0`.
+- **Local-only stand-ins** in `src/mocks/` fill the roles whose contracts do not exist yet:
+  - `StandInStrategy`, for the pool and the auction house: an empty pool that takes no interest; an
+    auction house with no lot, no auction and no callback;
+  - `StandInDeficitLedger`, for the ledger: a zero deficit view and the reserve recorded from the
+    VaultManager only;
+  - `StandInShutdownModule`, for the shutdown module: §5.8's `belowCritical` exactly, and no way to
+    trigger anything.
+  - `LocalWETH`, a mintable WETH for local use.
+- **Config:** `config/31337.toml` holds the §3.1 start values; large values are strings, parsed
+  exactly. `script/Config.s.sol` loads it with `vm.readFile` and `stdToml`.
+- **`script/Deploy.s.sol`:**
+  - **Chain guard:** 31337 and 84532 are allowed; 8453 only with `BAGEHOT_FORK=true`; everything
+    else reverts.
+  - **Stand-ins:** refused anywhere but 31337.
+  - **Deployment:** local mocks, then the factory, then `DeploymentChecks` before anything is
+    broadcast.
+  - **Manifest:** `deployments/<chainId>.json` with the addresses, block, `GIT_COMMIT`, solc version
+    and parameters.
+- **`script/DeploymentChecks.sol` (§3.3):**
+  - constraint 8 in full: every peer, every immutable, and `deployer() == factory` with `wired()`;
+  - the feeds have code and equal the config;
+  - every parameter equals the config;
+  - constraints 1, 3, 4, 5 and 7. Constraint 2 waits for the strategy contracts, which carry the
+    penalty.
+- **`script/SmokeTest.s.sol`:** reads the manifest, checks it against the factory and re-runs every
+  check on the live chain. It then simulates, without broadcasting:
+  1. open a position;
+  2. a day passes, then accrue;
+  3. a small redemption.
+
+  After each step it checks the events and view-based invariants: I1 holder balances and sums, I2
+  exact with counters taken from the events, list size, TCR.
+- **`justfile`:** `smoke` defaults its sender to anvil's public account 0 for localhost RPCs only,
+  since it only simulates. The fork recipe now sets `BAGEHOT_FORK=true`, which matches the guard's
+  documented value; `1` is also read as true, so this changes behaviour only in clarity.
+- **Static analysis:** slither's `filter_paths` now excludes `script/`, as `test/` already was;
+  scripts are not deployed. Factory findings are triaged as SA-127 to SA-130. The factory now
+  assigns its immutables before the wiring calls, which fixes aderyn's reentrancy findings.
+- **Threat model:** the "Deployer key" row now names the factory as the deployer.
+
+**Tests.** `test/script/DeployScripts.t.sol`, 21 tests:
+- the chain guard on 1, 8453 with and without the flag, 84532, 31337 and four other chains, including
+  `run()` itself on 1 and 8453;
+- the stand-in refusal on Base Sepolia;
+- full A and B deployments passing every check and the functional smoke;
+- each check family rejecting a bad deployment: an impostor factory, a token wired to another
+  strategy, an auction house in A, and a wrong WETH, feed, parameter, constraint 1 or constraint 5.
+
+`test/unit/StandIns.t.sol` covers each stand-in and its custom errors.
+
+**Review.** `security-reviewer` found nothing in the critical categories on the deployed path. Fixed:
+- **M-1:** `just smoke` would always have failed on the project's own anvil (`--block-time 2`): it
+  counted accrual events in absolute terms, and `openPosition` accrues whenever time has passed. The
+  smoke test now measures every step as a change, including I2 within the step's own bound (the bound
+  is additive per sub-effect). New tests smoke after blocks have passed, in A and B, and smoke twice.
+- **M-2:** 8453 now needs `BAGEHOT_FORK=true` *and* an RPC that answers `anvil_nodeInfo`, as ADR-0019
+  requires ("only when the RPC endpoint is localhost"), not the flag alone.
+- **M-3:** the manifest is written only when broadcasting, so a dry run cannot overwrite it. It is
+  keyed by variant in `deployments/<chainId>.json`, so A and B coexist; `runVariant("A")` and
+  `runVariant("B")` select the variant. Covered by a dry-run test and a two-variant round trip.
+- **L-1:** off chain 31337 the smoke test requires the manifest's feeds and WETH to equal the config.
+- **L-2:** the factory and every stand-in revert off chain 31337, so "local-only" is enforced
+  on-chain, not only by the script. The shutdown stand-in requires `CRITICAL_TCR ≥ WAD`, as the real
+  constructor does.
+- **L-3, L-4:** `DeploymentChecks` adds CREATE provenance: every role, including contracts without
+  `deployer()`, is the factory's creation at its index, and the factory's nonce shows nothing else was
+  created. It also checks that FEED_DECIMALS is what the feed reports. More negative tests: a second
+  ledger, an unwired token, the sequencer feed, CRITICAL_TCR above MCR, and the factory off-chain.
+- **L-6:** I2 reads A and F from the ledger; I1 covers the strategy's and the ledger's WETH.
+- **I-4:** the manifest separates config-only parameters.
+- **D-1:** a CI guard asserts the factory's initcode and deployment gas against EIP-3860 and
+  EIP-7825.
+
+Not fixed here:
+- **L-5:** `gitCommit` does not flag a dirty tree, and solc is a constant. This needs an edit to the
+  `deploy-local` recipe line, which holds the anvil key that I do not open (P18-3).
+- **I-2:** see P18-2.
+- **I-5:** the permissionless local mocks can be griefed on a shared anvil. Accepted, local only.
+
+**Decisions.**
+- **Stand-ins rather than waiting:** P18 comes before the modules it would deploy. They are named
+  `StandIn*`, are local-only, and are replaced by P19, P21, the ShutdownModule prompt and P33.
+- **No Base Sepolia config yet:** a Sepolia deployment waits for the real modules.
+- **Manifest block:** `block` records the block the run simulated against; the factory's
+  `deployBlock` is exact, and the smoke test checks the two are consistent.
+- **Entry points:** `runVariant(string)` rather than a `run(string)` overload, because forge script
+  cannot choose between overloads when the recipes give no `--sig`.
+- **Local manifest:** `deployments/31337.json` is git-ignored, since local addresses die with the
+  chain. Sepolia manifests will be committed.
+
+**Acceptance (2026-10-25).**
+- On a fresh anvil (account 0's nonce was 0), `just deploy-local` deployed and wired everything in
+  one transaction ("ONCHAIN EXECUTION COMPLETE & SUCCESSFUL") and wrote `deployments/31337.json`:
+  variant A under key `A`, B's slot empty, git commit, solc and parameters.
+- `just smoke http://127.0.0.1:8545` passed against the live chain, with blocks elapsing between
+  deploy and smoke.
+- The deploy refusing to run on chain 1 or 8453 is tested in `DeployScriptsTest`.
+
+**Next.** Human:
+- decide CHG-009 (P17-2), ADR-0034 and P17-1;
+- write the P18-1 ADR, the factory design for real modules, before P19;
+- optionally, P18-3.
+
+Then P19.
 
 ### 2026-10-24/25 · P17 · Invariant harness and Medusa
 
@@ -1001,7 +1115,7 @@ obligations a later prompt must carry that are not in that prompt's text yet (ro
 | P08-1 | **Aave v3 on Base prices WETH from the SVR ETH/USD feed** (`WETH_ORACLE = 0x9dA00D23465282005DB222a441a663eE7B9dfCc8`, the `eth-usd-svr` secondary proxy), not the standard feed P07 calibrates on. P08 handles it by using the source in force in each window (AaveOracle `AssetSourceUpdated` history). Undecided: which feed the protocol's own oracle model (P24) should mirror. If update timing differs between the two, the liquidation calibration and the oracle calibration describe different oracles. Decide before P24. | human | at P24 |
 | P04-1 | Two threat-register rows have no test yet: `AuctionCallbackActive` on `buy`/`check` (T-14 → P33), and a `redeem` called from inside a buyer callback (T-01/T-14 → P16/P33, same gap as P02-4). Each is marked TBD in `docs/threat-model.md` with its prompt. The third, the oracle gas-starvation branch (T-03), was closed at P12 by `OracleAdapterGasTest`. **Updated 2026-10-24:** the `redeem`-from-a-buyer-callback row (T-01/T-14) now has a Foundry test against a mock house (`RedemptionAuctionCallbackTest`); the real house and `AuctionCallbackActive` on `buy`/`check` remain for P33. | Claude | at P33 |
 | P04-2 | **Closed 2026-10-24 (P16).** ADR-0027's obligation is met against `VaultManager.redeemCollateral` itself: `RedemptionBoundaryTest.test_redeem_tinyPartialAtMcrBoundary` rules out every other exit from the state (not skipped: exactly at MCR; not the MIN_DEBT stop; `find` would succeed), then calls `redeemCollateral` as the module and asserts it visits alice once, never calls `find`, returns (0, 0, 1) and changes nothing — the CHG-002 post-check is the only branch that does that. `…_throughTheModule`: the 11-wei call reverts `NothingRedeemed` with every field unchanged; the 1,000-stable partial raises her ICR 1.1 → 1.101897. Removing the post-check fails both, the vector and the hint-agreement test. Passed on first implementation. | Claude | closed |
-| P11-1 | **P18 deployment pitfalls from the P11 review (F-4).** `deployer` is whoever executes CREATE. (i) `new X{salt: s}` inside `forge script` goes through the CREATE2 proxy `0x4e59b44847b379578588920cA78FbF26c0B4956C`, which becomes `deployer` and can never call `wire`: the contract is bricked, permanently NotWired. (ii) A factory that deploys in one call and exposes a separate `wireAll(...)` moves the front-running window from `wire` to the factory. P18 must: deploy and wire inside one factory call that takes no caller-supplied addresses; never use `{salt:}` for wired contracts; assert `deployer() == factory` and `wired()` from the deployment receipt; on Base Sepolia, assert that the price feed is the configured Chainlink address unless the environment is `fork_replay` (`ReplayAggregator` is operator-controlled). Also (P12 review F4) assert that both oracle feeds have code and equal the `config/<chain>.toml` addresses. Also update the threat-model row "Deployer key": with a factory, the deployer is the factory. | Claude | at P18 |
+| P11-1 | **Addressed at P18** (`BagehotFactory`, `DeploymentChecks`): deploy and wire in one constructor with no caller-supplied role addresses, no `{salt:}`, `deployer() == factory` and `wired()` asserted before broadcast and in the smoke test, feeds checked for code and against the config, threat-model row updated. The Base Sepolia feed check (configured Chainlink address unless `fork_replay`) is the same feed check and applies once `config/84532.toml` exists. Original: **P18 deployment pitfalls from the P11 review (F-4).** `deployer` is whoever executes CREATE. (i) `new X{salt: s}` inside `forge script` goes through the CREATE2 proxy `0x4e59b44847b379578588920cA78FbF26c0B4956C`, which becomes `deployer` and can never call `wire`: the contract is bricked, permanently NotWired. (ii) A factory that deploys in one call and exposes a separate `wireAll(...)` moves the front-running window from `wire` to the factory. P18 must: deploy and wire inside one factory call that takes no caller-supplied addresses; never use `{salt:}` for wired contracts; assert `deployer() == factory` and `wired()` from the deployment receipt; on Base Sepolia, assert that the price feed is the configured Chainlink address unless the environment is `fork_replay` (`ReplayAggregator` is operator-controlled). Also (P12 review F4) assert that both oracle feeds have code and equal the `config/<chain>.toml` addresses. Also update the threat-model row "Deployer key": with a factory, the deployer is the factory. | Claude | at P18 |
 | P11-2 | Resolved 2026-10-23: CHG-003 approved (option 1) and applied to spec §2.5, §3.3 constraint 8 and §11.1 (ADR-0031, proposed). The human's condition: the deploy-script wiring-graph check and the smoke-test assertions (`deployer() == factory`, `wired()` on every contract, peer-graph agreement) must be a named acceptance criterion in **P18's own prompt text**. The prompt kit is not in this repository (there is no `prompts/` directory), so the human adds it there; the exact text was handed over on 2026-10-23. | — | closed |
 | P12-1 | Resolved 2026-10-23: CHG-004 approved and applied. The floor is now `ceil(2·ORACLE_GAS/63) ≤ ORACLE_POST_FAILURE_GAS ≤ ORACLE_GAS`, start value 3,175, per ADR-0030 (which supersedes ADR-0024's bound). Before approving, the human required two checks, and both passed: the critical cases re-run on Base's real proxy, and an honest caller tested at the new floor. The permanent regression sweeps are `test_regression_proxiedFeed_*` (in `just test`) and `OracleGasRuleForkTest` (in `just test-fork`). | — | closed |
 | P15-1 | **Decided 2026-10-24: option 1 — the pool interest hook becomes non-fatal** (P15 review F4; threat T-24). Options 2 and 3 rejected by the human. Written up as CHG-006 (approved, not yet applied) and ADR-0033 (proposed); implemented at P19 with three named acceptance criteria (Carry-forward row CHG-006). Until then the behaviour pinned by `test_F4_revertingPool_blocksNormalMode_notTheWindow` stands. | Claude | at P19 |
@@ -1010,6 +1124,9 @@ obligations a later prompt must carry that are not in that prompt's text yet (ro
 | P16-1 | **Closed 2026-10-24.** CHG-007 approved and applied to `docs/invariants.md`: I5's clause about visited, unredeemed nodes now requires every visit before the last to be below MCR, and an unredeemed last visit at or above MCR to be a cancelled partial for exactly one legitimate reason (MIN_DEBT cap, CHG-002 post-check, stale hint — the first that holds); I15's "Breaks if" names the stored-`index` read. `RedemptionInvariantTest` asserts `lastVisitWithoutReason == 0`; negative tests: `RedemptionLastVisitTest.test_lastVisit_illegitimateStopIsRejected` and two contract mutants of a wrong early stop, both rejected. | Claude | closed |
 | P17-1 | **Open — human decision required before P20: stake collapse in deployment A** (found by the P17 campaign through the test-only `redistribute` harness; analysis in CHG-008's appendix). Each redistribution multiplies the snapshot ratio `totalStakesSnapshot/totalCollateralSnapshot` (§6.5.4) by roughly the share of stake that survives it, and nothing restores it while any stake is left. Campaign data (8 seeds × 256 runs × 200 calls, A): active stakes of 1–999 wei in every seed; **active positions with stake 0** (763 member-steps, 23 runs); **`totalStakes == 0` with a non-empty list** (432 steps, 18 runs), the state in which §6.4.1 sends every liquidation remainder to the DEFICIT path, which feeds the DEFICIT shutdown trigger (§6.11.1) — §6.4.4's statement that this is only reachable when the last position is liquidated is therefore false. Consequences: (i) reward misallocation of up to `1/stake` of a member's share of each later redistribution (confirmed); (ii) I13's derived bound (CHG-008) becomes weak, a relative tolerance of up to about `1/stake` (confirmed); (iii) a remainder recorded as deficit while positions are open, and a possible induced DEFICIT shutdown (state reached in the harness; not yet shown end to end with a real `liquidate`). The harness overstates the natural rate (it redistributes any position, without ICR < MCR or an empty pool). Rough attacker cost (float model, `scratchpad` only; each round: open an own position at MCR, let interest take it below MCR, liquidate it into an empty pool, redeem the redistributed debt back out of honest positions, which re-stakes them at the lower ratio): with honest collateral `F` present, the cheapest schedule loses ≈ 5× `F` to reach 1,000-wei stakes on 1 WETH (~3·10⁴ liquidations) and ≈ 9× `F` to reach zero stakes (~6·10⁴ liquidations); faster schedules cost 15–170× `F` (redemption fees and the penalty left behind dominate). With no honest stake (an empty or young deployment, or one where the attacker holds all positions) the penalty and rewards return to the attacker: gas only, ~10 liquidations with capital ≈ 100× the minimum position, recovered. In real money, zero on a testnet. Decide: (a) measure with P20's real `liquidate` (regression of the zero-total state, end-to-end deficit path); (b) whether to change the protocol, e.g. reset or rescale the snapshots when the ratio falls below a threshold, or treat `totalStakes == 0` with open positions as a distinct case (spec change through `/spec-change`, which would also change I13's derivation); (c) correct §6.4.4 in any case. **Added by the P17 review (F4), both worse than the above:** (d) snapshots are reset only inside a liquidation, so a collapsed ratio survives even a full exit — every later position is staked 0 until a liquidation resets it, and that liquidation itself takes the DEFICIT path ("nothing restores it short of a deficit"); (e) after a DEFICIT-path reset, surviving positions keep stake 0 while new ones are staked 1:1, so survivors take no redistributed debt until they touch their position (bad debt lands only on newcomers), and debt-heavy redistributions then move only the newcomers' NICR — order inversions of any size, not rounding, which a spec-compliant P20 would fail in I13. The harness cannot reach (e): it never runs §6.4.1's DEFICIT branch. Options the review adds for (b): reset or rescale the snapshots also when `activeCount == 0` or below a ratio threshold, or restake survivors lazily. | human | before P20 |
 | P17-2 | **Re-derived; human decision on CHG-009 (proposed).** The P17 review (F3) said CHG-008's I13 derivation omits the snapshot-ratio error. Confirmed and worse: a correct VaultManager breaks CHG-008's bound on a protocol-valid sequence of genuine full-collateral liquidations (`I13BoundCounterexampleTest`; exact state cross-checked against `scripts/analysis/i13_bound_search.py`, an independent exact-integer model; 34 of 64 protocol-valid grid scenarios break it, 0 of 2,600 random ones). A second gap: CHG-008 assumed exact keys order the list, but insertions are made against drifted keys. CHG-009 derives an exact per-pair tolerance from hidden ideal keys (common ideal stake `c·DP/(DP+L_p)`; hidden order by `h_p = n_p(DP+L_p)/c_p − snapLDebt_p`, invariant under every redistribution; allowance ι fixed at insertion), plus exact checks of the key identity, insertion order and the §6.5.4 stake. Proved sound (independently audited); zero violations over the full campaign; observed per-pair tolerance up to 4.4·10⁻³ of the NICR below 1,000-wei stakes and ~10⁻¹⁴ otherwise, against up to 0.48 under CHG-008 on the same pairs. No a-priori limit, and vacuous in reachable zero-stake states, as CHG-009 states. The handler asserts it alongside CHG-008's check, which is removed once CHG-009 is approved. `docs/invariants.md`, ADR-0034 (rewritten, proposed) and an optional §6.3.3 sentence wait for the human. | human | before P20 |
+| P18-1 | **Factory initcode limit.** `BagehotFactory`'s initcode is 43,903 bytes against EIP-3860's 49,152, because it embeds every contract's creation code. Replacing the stand-ins with StabilityPool, DeficitLedger, ShutdownModule and DutchAuctionHouse will exceed it. Options for P19 to decide: (a) a factory deployed first whose one-shot, deployer-only `deploy()` creates and wires everything in one call (calldata is not subject to the initcode limit; the creation codes would then come from the caller, and the scripts must check the deployed runtime code); (b) sub-deployers whose products are wired by the factory, which changes `deployer() == factory` (every `wire` is `onlyDeployer`); (c) shrinking contracts. Also (review D-1): deployment gas is about 9.4M against the 16,777,216 per-transaction cap (EIP-7825). Another option is (d) blueprints: creation code kept in inert data contracts, copied with `EXTCODECOPY` and created by the factory constructor, which keeps `deployer == factory` and the single transaction, with the scripts asserting the blueprints' code hashes. `test_factory_initcodeAndGasWithinLimits` fails CI before the limit fails a deployment. **Needs an ADR before P19.** Must keep P11-1's guarantees and ADR-0031's checks. | human (ADR), Claude | before P19 |
+| P18-2 | **Stand-ins to replace (same category as P16-F5 and P17-H2).** `StandInStrategy` (by P19's StabilityPool in A and P33's DutchAuctionHouse in B), `StandInDeficitLedger` (P21) and `StandInShutdownModule` (the ShutdownModule prompt). Each replacement must update `BagehotFactory`, extend `DeploymentChecks` (the new contract's peers, immutables and parameters; constraint 2 once `LIQUIDATION_PENALTY` lives on-chain), and re-run the smoke test. `Deploy.s.sol`, the factory and the stand-ins refuse every chain but 31337 until no stand-in is left. `StandInStrategy` has no `onLiquidation`: once P20 adds liquidation, liquidations in a local deployment revert until P19 (A) and P33 (B) replace it, so P20 must test against the real strategy contracts or a liquidation-capable test double, not this stand-in. | Claude | P19, P21, ShutdownModule prompt, P33 |
+| P18-3 | **Manifest provenance, low** (review L-5). `gitCommit` comes from `git rev-parse --short HEAD` and does not flag a dirty tree, and `solc` is a constant matching `foundry.toml`. Suggested: `git describe --always --dirty --abbrev=12`, and refuse a dirty tree on any chain but 31337. That edits the `deploy-local` and `deploy-sepolia-dry` recipe lines; `deploy-local`'s line holds the anvil key, which Claude does not open. Also optional: a `variant` parameter on `deploy-local` (`--sig "runVariant(string)" B`). | human (recipe line) | before the first Base Sepolia deployment |
 | P08-2 | `.gitleaks.toml` gained a value-only allowlist for public EVM addresses (`^0x[0-9a-fA-F]{40}$`): Aave's `a_token`/`v_token` keys in `config/8453.toml` tripped `generic-api-key`. A first version also allowlisted the `config/` path; a probe showed it hid a 64-hex private key there, so it was removed before anything was pushed. Probes confirm a 0x+64-hex key, a `private_key`, and a bare 40-hex token are still caught. The original slip: the scan and the commit were chained with `;`, so the commit ran despite the findings — scans now gate commits with `&&`. | Claude | no |
 | P02-4 | No vector exercises `redeem`'s `AuctionCallbackActive` branch (D-27, §6.7.2): the recorder cannot drive a buyer callback. Foundry test added at P16 (`RedemptionAuctionCallbackTest`, mock house); against the real house at P33; model test at P22. | Claude | at P22/P33 |
 | P02-3 | The vector reference implementation is throwaway (scratchpad). Vectors are validated independently from P10 (Foundry) and P22 (Python model); a vector that disagrees with both implementations is a spec question for `/spec-change`. | Claude | at P10/P22 |
@@ -1022,7 +1139,7 @@ obligations a later prompt must carry that are not in that prompt's text yet (ro
 | # | action | why |
 |---|---|---|
 | 1 | `chmod +x .claude/hooks/*.py` | The three hooks are mode 644. They work as configured (invoked as `python3 <path>`), so nothing is broken, but P00 asks that they be executable. `.claude/hooks/**` is protected from edits, so this one is yours. |
-| 2 | `mkdir -p deployments data/raw data/processed && touch deployments/.gitkeep` | See open issue P00-3. Both `mkdir`s were declined during the session. |
+| 2 | ~~`mkdir -p deployments data/raw data/processed && touch deployments/.gitkeep`~~ | `deployments/` done by the human 2026-10-25 (P18). `data/raw` and `data/processed`: see open issue P00-3. |
 | 3 | Copy `env.example` to `.env` and fill it in | Claude never reads or creates `.env`. Needed from P06 (`BASE_ARCHIVE_RPC`) onwards; `just fork`, `just smoke` and `just deploy-sepolia-dry` already fail with a clear message without it. |
 | 4 | ~~Confirm the `LICENSE` copyright holder~~ | Done: `Copyright (c) 2026 N3BCKN`. Optional follow-up, outside this repo: `git config --global user.name N3BCKN`, so other projects stop committing as `H3BCKN`. |
 | 5 | Decide whether `docs/redoubt-blueprint-v0.2.pdf` should be renamed | `CLAUDE.md` refers to it as `docs/blueprint-v0.2.pdf`, and the PDF itself uses the working name "Redoubt". Left untouched: renaming a source of truth is not Claude's call. |

@@ -1,5 +1,5 @@
 {
-  "filter_paths": "lib/|test/|src/mocks/",
+  "filter_paths": "lib/|test/|script/|src/mocks/",
   "exclude_dependencies": true,
   "exclude_informational": false,
   "exclude_low": false,

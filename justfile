@@ -176,7 +176,7 @@ deploy-local:
 deploy-fork:
     @test -f contracts/script/DeployFork.s.sol \
       || { echo "contracts/script/DeployFork.s.sol missing — added at P39"; exit 1; }
-    cd contracts && BAGEHOT_FORK=1 GIT_COMMIT=$(git rev-parse --short HEAD) forge script \
+    cd contracts && BAGEHOT_FORK=true GIT_COMMIT=$(git rev-parse --short HEAD) forge script \
       script/DeployFork.s.sol:DeployFork --rpc-url http://127.0.0.1:8546 --private-key {{ANVIL_KEY0}} --broadcast
 
 # Simulation only: no keystore unlock, no broadcast. The human runs the real broadcast (see /deploy).
@@ -188,9 +188,20 @@ deploy-sepolia-dry:
     cd contracts && GIT_COMMIT=$(git rev-parse --short HEAD) forge script script/Deploy.s.sol:Deploy \
       --rpc-url base_sepolia --sender "$DEPLOYER_ADDRESS"
 
+# Public anvil account 0 (an address, not a key): the smoke test's default sender on a localhost RPC.
+ANVIL_ADDR0 := "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+
 smoke rpc:
-    @test -f contracts/script/SmokeTest.s.sol \
+    #!/usr/bin/env bash
+    set -euo pipefail
+    test -f contracts/script/SmokeTest.s.sol \
       || { echo "contracts/script/SmokeTest.s.sol missing — added at P18"; exit 1; }
-    @test -n "${DEPLOYER_ADDRESS:-}" \
+    # The smoke test only simulates (no --broadcast), so no key is involved. On a localhost RPC the
+    # sender defaults to anvil's public account 0; elsewhere DEPLOYER_ADDRESS is required.
+    sender="${DEPLOYER_ADDRESS:-}"
+    case "{{rpc}}" in
+      http://127.0.0.1:*|http://localhost:*) sender="${sender:-{{ANVIL_ADDR0}}}" ;;
+    esac
+    test -n "$sender" \
       || { echo "DEPLOYER_ADDRESS is not set — copy env.example to .env and fill it in"; exit 1; }
-    cd contracts && forge script script/SmokeTest.s.sol:SmokeTest --rpc-url {{rpc}} --sender "$DEPLOYER_ADDRESS"
+    cd contracts && forge script script/SmokeTest.s.sol:SmokeTest --rpc-url {{rpc}} --sender "$sender"

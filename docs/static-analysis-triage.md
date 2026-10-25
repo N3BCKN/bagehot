@@ -7,6 +7,12 @@ never edited merely to turn a check green.
 Workflow: run `just static`, diff the findings against this table, fix what is real, add a row for
 what is not. A row needs a reason a reviewer can disagree with — "false positive" alone is not one.
 
+Scope: slither's `filter_paths` (`contracts/slither.config.json`) excludes `lib/`, `test/`, `script/`
+and `src/mocks/` — dependencies, tests, deployment tooling and test-only mocks, none of which is
+deployed protocol code. `script/` was added at P18, when the deployment scripts arrived (49 findings
+there, all `unused-return` / `incorrect-equality` / `uninitialized-local` on script-side reads). The
+factory those scripts deploy, `src/deploy/BagehotFactory.sol`, is in scope. No detector is disabled.
+
 | id | tool | detector | location | severity | decision | justification | date |
 |---|---|---|---|---|---|---|---|
 | SA-001 | aderyn | internal-function-used-once | src/lib/WadRayMath.sol:75 | Low | accepted | `rpow(x, n)` is the spec's power function (§2.3, every product rounded up) and the only form protocol code is meant to call; the three-argument `rpow(x, n, rounding)` exists so tests can bracket the exact value with Floor. "Used once" is true only until P15: VaultManager (interest index, R4), RedemptionModule (base-rate decay, R19) and DutchAuctionHouse (price curve, R23) all call it. Re-check at P33, when it should no longer fire. | 2026-10-22 |
@@ -129,6 +135,10 @@ what is not. A row needs a reason a reviewer can disagree with — "false positi
 | SA-124 | aderyn | state-no-address-check | src/redemption/RedemptionModule.sol:105 | Low | accepted | `RedemptionModule.wire`: `vaultManager_` and `shutdownModule_` are checked by `_requireNonZero(…, 0 / 1)` before they are stored (aderyn/slither do not follow the internal call, as SA-003); `auctionHouse_` is `address(0)` by design in deployment A (§3.4: "may be address(0)"; §6.7.2: the guard is then free). Tested in `RedemptionModuleTest.test_wire_checksAndOnce`. | 2026-10-24 |
 | SA-125 | slither | missing-zero-check | src/redemption/RedemptionModule.sol:100 | Low | accepted | `RedemptionModule.wire`: `vaultManager_` and `shutdownModule_` are checked by `_requireNonZero(…, 0 / 1)` before they are stored (aderyn/slither do not follow the internal call, as SA-003); `auctionHouse_` is `address(0)` by design in deployment A (§3.4: "may be address(0)"; §6.7.2: the guard is then free). Tested in `RedemptionModuleTest.test_wire_checksAndOnce`. | 2026-10-24 |
 | SA-126 | slither | incorrect-equality | src/core/VaultManager.sol:747 | Medium | false-positive | `_computeStake`: the test that either snapshot equals 0 is §6.5.4's "no snapshot yet / reset" test (stake = coll), written only by `updateSystemSnapshots` from internal totals, never from a balance, so no donation or rounding nudge can dodge it. Code unchanged since P14; first reported at P17, when the test-only `VaultManagerHarness` (which inherits VaultManager and writes the snapshots in its stand-in redistribution) entered the compilation. Related protocol question, not this detector's: a collapsed but non-zero ratio passes this test and stakes new positions at 0 — open issue P17-1. | 2026-10-25 |
+| SA-127 | slither | missing-zero-check | src/deploy/BagehotFactory.sol:116 | Low | false-positive | `ledger_` is the address `new StandInDeficitLedger(...)` returned two lines earlier: CREATE either returns the new contract's non-zero address or reverts the whole constructor, so it cannot be 0; it is then passed to `VaultManager.wire` and `StableToken.wire`, which reject 0 anyway (`_requireNonZero`). | 2026-10-25 |
+| SA-128 | slither | missing-zero-check | src/deploy/BagehotFactory.sol:117 | Low | false-positive | Same as SA-127 for `shutdown_` (`new StandInShutdownModule(...)`), also passed to three `wire` calls that reject 0. | 2026-10-25 |
+| SA-129 | slither | unindexed-event-address | src/deploy/BagehotFactory.sol:64 | Informational | accepted | `Deployed` is emitted exactly once, in the factory's constructor; consumers read it from that transaction's receipt (the manifest, the smoke test, the indexer) and never filter logs by one of these addresses, so indexing them buys nothing and only three of the nine could be indexed. | 2026-10-25 |
+| SA-130 | aderyn | local-variable-shadowing | src/deploy/BagehotFactory.sol:34 | Low | false-positive | The flagged name is the `variantB` *field* of the `Params` struct, not a local variable; it is only ever read as `p.variantB` and cannot be confused with the immutable `variantB`, which the constructor sets from it. | 2026-10-25 |
 
 Decision is one of: `fixed` (with the commit), `accepted` (risk understood and taken),
 `false-positive` (the detector's premise does not hold here, say why).
