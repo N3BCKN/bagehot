@@ -87,6 +87,26 @@ that writes it. "TBD" where nothing covers it yet.
 | T-22 | Dishonest or irreproducible results | Re-tuning after seeing results; hand-edited report numbers; data that cannot be refetched | The report claims something the data do not support | Medium — this is the project's own failure mode | Preregistration frozen before the first sweep, dated addenda only; report numbers only from `experiments/` scripts; raw data reproducible from fetchers and cards; block bootstrap for intervals (ADR-0013, ADR-0020) | A hypothesis contradicted by results must be reported as such; nothing technical prevents a dishonest author | `experiment-auditor` before every results prompt; P30 gate |
 | T-23 | Model and contracts silently diverge | A contract change without the matching model change | Sweeps describe a system that was never deployed | Medium | Same-commit rule, zero-tolerance differential test, shared vectors as a third reference (ADR-0012, ADR-0022) | The differential test explores a sampled operation space, not all of it | Differential harness (P23); `spec/vectors/**` on both sides (P10, P22) |
 | T-24 | Interest hook failure bricks every operation | Since P15 every normal-mode operation — including the rescue paths repay, addCollateral and close, liquidation from P20, and `ShutdownModule.check` (which accrues before `onShutdown`) — runs `_accrue()`, which calls the pool's `acceptsInterest`/`onInterest`, the ledger's `onInterest` and `token.mint`. A revert in any of them (e.g. the pool's `G` overflow that spec §6.6.3 accepts after ≥ 338 adversarial events in one epoch/scale, or `SupplyCapExceeded`) makes every operation revert, and because `check()` cannot trigger, the window is never reached | Permanent loss of liveness: no repay, no close, no liquidation, no shutdown | Very low (adversarial sizes near the supply cap; ≥ 10^8 events at realistic sizes) but total and irreversible | None in code today; in the window `_accrue` returns before any hook, so the rescue paths survive *if* the window is reached. Decided 2026-10-24 (P15-1, option 1): CHG-006 / ADR-0033 make the pool hook a gas-capped, failure-tolerant call whose share falls back to the reserve, implemented at P19. Residual after that: `SupplyCapExceeded`, reachable only by decades of compounding interest | The trigger itself is blocked, so the window cannot be reached | `VaultManagerInterestHooksTest.test_F4_revertingPool_blocksNormalMode_notTheWindow` pins today's behaviour |
+| T-25 | Stake collapse in deployment A (P17-1) | Repeated self-liquidations into an empty pool, each followed by redeeming the redistributed debt out of honest positions, shrink the snapshot ratio `totalStakesSnapshot/totalCollateralSnapshot` (§6.5.4) round by round | New positions get stakes of a few wei or zero: redistribution rewards are misallocated, I13's tolerance grows until it is vacuous, and at zero stakes liquidation takes the DEFICIT path of §6.4.1 | Cheap on a young or empty deployment; very expensive on an established one (cost model below) | None in code — accepted by the human 2026-10-26 as documented residual risk. The economic defence is the attacker's loss of about 5–9× the honest collateral once honest positions exist | On a young deployment the attack costs gas only, because penalty and redistributed collateral return to the attacker; this is a testnet with no real value at stake | `scripts/analysis/stake_collapse_cost.py`; `CoreHandlerRegressionsTest.test_regression_I13_derivedBound_stakeCollapse`; I13 (CHG-009) |
+
+### T-25 cost model
+
+From `scripts/analysis/stake_collapse_cost.py` (an order-of-magnitude model, not a price; WETH at
+$3,000 and Base gas at about 0.01 gwei assumed). Each round opens a position at MCR, liquidates it into
+an empty pool and redeems the redistributed debt. "1,000-wei stakes" means a 1-WETH position staked at
+about 1,000 wei (about 0.1 % reward misallocation); "zero stakes" means positions up to 100 WETH staked
+at 0.
+
+| honest collateral | target | positions opened and liquidated | per position | attacker's net loss |
+|---|---|---|---|---|
+| none (young deployment) | 1,000-wei stakes | 8 | 73 WETH, reused | gas only (~24 transactions) |
+| none (young deployment) | zero stakes | 11 | 73 WETH, reused | gas only (~33 transactions) |
+| 33 WETH ($100k) | 1,000-wei / zero stakes | 4,222 / 8,041 | 0.73 WETH | ~$0.61M / ~$1.16M (6× / 12×) |
+| 333 WETH ($1M) | 1,000-wei / zero stakes | 41,837 / 79,695 | 0.73 WETH | ~$4.8M / ~$9.1M (4.8× / 9.1×) |
+| 3,333 WETH ($10M) | 1,000-wei / zero stakes | 91,991 / 175,233 | 3.3 WETH | ~$47M / ~$89M (4.7× / 8.9×) |
+
+Not modelled, all of which raise the cost: pool deposits that must be burned through first, competing
+liquidators, price moves. No code change is planned for P19 or P20.
 
 ## 4. Out of scope
 
