@@ -4,7 +4,7 @@ pragma solidity 0.8.28;
 import {StableToken} from "../../../src/core/StableToken.sol";
 import {InsufficientBalance, ZeroAmount} from "../../../src/lib/Errors.sol";
 import {StabilityPool} from "../../../src/liquidation/StabilityPool.sol";
-import {StandInDeficitLedger} from "../../../src/mocks/StandInDeficitLedger.sol";
+import {DeficitLedger} from "../../../src/safety/DeficitLedger.sol";
 import {PoolTestVault, StabilityPoolHarness} from "../../utils/PoolMocks.sol";
 import {MockWETH} from "../../utils/VaultMocks.sol";
 import {CommonBase} from "forge-std/Base.sol";
@@ -24,7 +24,7 @@ contract StabilityPoolHandler is CommonBase, StdUtils {
     StableToken public token;
     PoolTestVault public tv;
     StabilityPoolHarness public pool;
-    StandInDeficitLedger public ledger;
+    DeficitLedger public ledger;
     address[5] public actors;
 
     // ghosts
@@ -44,10 +44,11 @@ contract StabilityPoolHandler is CommonBase, StdUtils {
         token = new StableToken("Bagehot USD TEST", "bUSDTEST");
         tv = new PoolTestVault(weth, token);
         pool = new StabilityPoolHarness(address(weth), address(token), PENALTY, MIN_DEPOSIT);
-        ledger = new StandInDeficitLedger(address(tv));
+        ledger = new DeficitLedger(address(weth), address(token));
         tv.setPool(pool);
         token.wire(address(tv), address(pool), address(ledger), address(0x5D));
         pool.wire(address(tv), address(ledger));
+        ledger.wire(address(tv), address(pool), address(0), address(pool), address(0x5D));
     }
 
     // ------------------------------------------------------------------ actions

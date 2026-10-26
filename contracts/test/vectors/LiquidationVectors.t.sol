@@ -8,8 +8,8 @@ import {VaultManager} from "../../src/core/VaultManager.sol";
 import {StabilityPool} from "../../src/liquidation/StabilityPool.sol";
 import {MockAggregator} from "../../src/mocks/MockAggregator.sol";
 import {MockSequencerFeed} from "../../src/mocks/MockSequencerFeed.sol";
-import {StandInDeficitLedger} from "../../src/mocks/StandInDeficitLedger.sol";
 import {RedemptionModule} from "../../src/redemption/RedemptionModule.sol";
+import {DeficitLedger} from "../../src/safety/DeficitLedger.sol";
 import {MockShutdownGate} from "../utils/RedemptionMocks.sol";
 import {VaultManagerHarness} from "../utils/VaultManagerHarness.sol";
 import {MockWETH} from "../utils/VaultMocks.sol";
@@ -32,7 +32,7 @@ contract LiquidationVectorsTest is Test {
     VaultManager internal v;
     SortedPositions internal sorted;
     StabilityPool internal pool;
-    StandInDeficitLedger internal ledger;
+    DeficitLedger internal ledger;
     RedemptionModule internal rm;
     uint256 internal funds;
 
@@ -336,7 +336,7 @@ contract LiquidationVectorsTest is Test {
             _u(string.concat(p, ".LIQUIDATION_PENALTY")),
             _u(string.concat(p, ".MIN_DEPOSIT"))
         );
-        ledger = new StandInDeficitLedger(address(v));
+        ledger = new DeficitLedger(address(weth), address(token));
         rm = new RedemptionModule(
             address(token),
             address(oracle),
@@ -351,6 +351,7 @@ contract LiquidationVectorsTest is Test {
         token.wire(address(v), address(pool), address(ledger), address(gate));
         rm.wire(address(v), address(gate), address(0));
         pool.wire(address(v), address(ledger));
+        ledger.wire(address(v), address(pool), address(0), address(pool), address(gate));
         string[] memory actors = vm.parseJsonStringArray(json, string.concat(vp, ".inputs.actors"));
         funds = _u(".inputs.actorWeth");
         for (uint256 k; k < actors.length; ++k) {

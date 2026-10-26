@@ -9,7 +9,7 @@ import {InvalidParameter} from "../../src/lib/Errors.sol";
 import {StabilityPool} from "../../src/liquidation/StabilityPool.sol";
 import {MockAggregator} from "../../src/mocks/MockAggregator.sol";
 import {MockSequencerFeed} from "../../src/mocks/MockSequencerFeed.sol";
-import {StandInDeficitLedger} from "../../src/mocks/StandInDeficitLedger.sol";
+import {DeficitLedger} from "../../src/safety/DeficitLedger.sol";
 import {VaultManagerHarness} from "../utils/VaultManagerHarness.sol";
 import {GasSensitivePool, HostilePool, MockWETH} from "../utils/VaultMocks.sol";
 import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
@@ -31,7 +31,7 @@ contract VaultManagerPoolHookTest is Test {
     StableToken internal token;
     MockWETH internal weth;
     MockAggregator internal feed;
-    StandInDeficitLedger internal ledger;
+    DeficitLedger internal ledger;
     HostilePool internal hostile;
     StabilityPool internal realPool;
     address internal pool; // the wired pool: `hostile` or `realPool`
@@ -63,7 +63,7 @@ contract VaultManagerPoolHookTest is Test {
             SHARE,
             HOOK_GAS
         );
-        ledger = new StandInDeficitLedger(address(v));
+        ledger = new DeficitLedger(address(weth), address(token));
         if (real) {
             realPool = new StabilityPool(address(weth), address(token), 0.05e18, 1e18);
             pool = address(realPool);
@@ -75,6 +75,7 @@ contract VaultManagerPoolHookTest is Test {
         sorted.wire(address(v));
         token.wire(address(v), pool, address(ledger), SHUTDOWN);
         if (real) realPool.wire(address(v), address(ledger));
+        ledger.wire(address(v), pool, address(0), pool, SHUTDOWN);
         for (uint256 i; i < 2; ++i) {
             address a = i == 0 ? alice : bob;
             weth.mint(a, 1000e18);
@@ -100,11 +101,12 @@ contract VaultManagerPoolHookTest is Test {
 
     // ------------------------------------------------------------------ AC-1: the fallback cannot revert
 
-    /// @dev The ledger's `onInterest` (the DeficitLedger stand-in until P21) takes any amount up to the
-    ///      supply cap, with the tokens minted to match, and never reverts.
+    /// @dev The ledger's `onInterest` (the real DeficitLedger since P21) takes any amount up to the supply
+    ///      cap, with the tokens minted to match, and never reverts.
     function testFuzz_ledgerOnInterest_neverRevertsUpToTheSupplyCap(uint256[6] memory amounts) public {
         StableToken t = new StableToken("T", "T");
-        StandInDeficitLedger l = new StandInDeficitLedger(address(this));
+        DeficitLedger l = new DeficitLedger(address(0xBEEF), address(t)); // no WETH moves here
+        l.wire(address(this), address(1), address(0), address(1), address(2));
         t.wire(address(this), address(1), address(l), address(2));
         uint256 cap = type(uint128).max;
         uint256 sum;
@@ -306,10 +308,11 @@ contract VaultManagerPoolHookTest is Test {
             HOOK_GAS
         );
         SortedPositions s2 = new SortedPositions(30);
-        StandInDeficitLedger l2 = new StandInDeficitLedger(address(v2));
+        DeficitLedger l2 = new DeficitLedger(address(weth), address(t2));
         v2.wire(address(s2), address(sensitive), address(sensitive), address(0xDE11), address(l2), SHUTDOWN);
         s2.wire(address(v2));
         t2.wire(address(v2), address(sensitive), address(l2), SHUTDOWN);
+        l2.wire(address(v2), address(sensitive), address(0), address(sensitive), SHUTDOWN);
         vm.prank(alice);
         weth.approve(address(v2), type(uint256).max);
         vm.prank(alice);

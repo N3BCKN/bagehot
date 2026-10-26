@@ -8,8 +8,8 @@ import {VaultManager} from "../../src/core/VaultManager.sol";
 import {StabilityPool} from "../../src/liquidation/StabilityPool.sol";
 import {MockAggregator} from "../../src/mocks/MockAggregator.sol";
 import {MockSequencerFeed} from "../../src/mocks/MockSequencerFeed.sol";
-import {StandInDeficitLedger} from "../../src/mocks/StandInDeficitLedger.sol";
 import {RedemptionModule} from "../../src/redemption/RedemptionModule.sol";
+import {DeficitLedger} from "../../src/safety/DeficitLedger.sol";
 import {MockShutdownGate} from "../utils/RedemptionMocks.sol";
 import {MockWETH} from "../utils/VaultMocks.sol";
 import {Test} from "forge-std/Test.sol";
@@ -26,7 +26,7 @@ contract ProductSumSystemVectorTest is Test {
     MockAggregator internal feed;
     VaultManager internal v;
     StabilityPool internal pool;
-    StandInDeficitLedger internal ledger;
+    DeficitLedger internal ledger;
     RedemptionModule internal rm;
 
     function setUp() public {
@@ -187,7 +187,7 @@ contract ProductSumSystemVectorTest is Test {
             _u(string.concat(p, ".LIQUIDATION_PENALTY")),
             _u(string.concat(p, ".MIN_DEPOSIT"))
         );
-        ledger = new StandInDeficitLedger(address(v));
+        ledger = new DeficitLedger(address(weth), address(token));
         rm = new RedemptionModule(
             address(token),
             address(oracle),
@@ -202,6 +202,7 @@ contract ProductSumSystemVectorTest is Test {
         token.wire(address(v), address(pool), address(ledger), address(gate));
         rm.wire(address(v), address(gate), address(0));
         pool.wire(address(v), address(ledger));
+        ledger.wire(address(v), address(pool), address(0), address(pool), address(gate));
         string[] memory actors = vm.parseJsonStringArray(json, string.concat(VP, ".inputs.actors"));
         uint256 funds = _u(string.concat(VP, ".inputs.actorWeth"));
         for (uint256 i; i < actors.length; ++i) {

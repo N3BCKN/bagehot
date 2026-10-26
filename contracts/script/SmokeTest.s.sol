@@ -7,8 +7,8 @@ import {IDeficitLedgerViews} from "../src/interfaces/ISystemViews.sol";
 import {StabilityPool} from "../src/liquidation/StabilityPool.sol";
 import {LocalWETH} from "../src/mocks/LocalWETH.sol";
 import {MockAggregator} from "../src/mocks/MockAggregator.sol";
-import {StandInDeficitLedger} from "../src/mocks/StandInDeficitLedger.sol";
 import {RedemptionModule} from "../src/redemption/RedemptionModule.sol";
+import {DeficitLedger} from "../src/safety/DeficitLedger.sol";
 import {Blueprints} from "./Blueprints.sol";
 import {ConfigLoader, DeployConfig} from "./Config.s.sol";
 import {DeploymentChecks} from "./DeploymentChecks.sol";
@@ -274,7 +274,7 @@ contract SmokeTest is ConfigLoader {
             "accrue: reserve share minted to the ledger"
         );
         _req(
-            StandInDeficitLedger(f.deficitLedger()).reserve() == f.token().balanceOf(f.deficitLedger()),
+            DeficitLedger(f.deficitLedger()).reserve() == f.token().balanceOf(f.deficitLedger()),
             "accrue: reserve recorded"
         );
         if (!c.variantB) {

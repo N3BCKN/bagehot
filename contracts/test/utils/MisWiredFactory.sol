@@ -10,10 +10,10 @@ import {BagehotFactory} from "../../src/deploy/BagehotFactory.sol";
 import {ISortKeySource} from "../../src/interfaces/ISortKeySource.sol";
 import {ISortedPositions} from "../../src/interfaces/ISortedPositions.sol";
 import {StabilityPool} from "../../src/liquidation/StabilityPool.sol";
-import {StandInDeficitLedger} from "../../src/mocks/StandInDeficitLedger.sol";
 import {StandInShutdownModule} from "../../src/mocks/StandInShutdownModule.sol";
 import {StandInStrategy} from "../../src/mocks/StandInStrategy.sol";
 import {RedemptionModule} from "../../src/redemption/RedemptionModule.sol";
+import {DeficitLedger} from "../../src/safety/DeficitLedger.sol";
 
 /// @notice TEST ONLY. BagehotFactory's deployment (variant A) with one deliberate wiring fault, to
 ///         prove DeploymentChecks rejects it (ADR-0031): mode 1 wires the token to a second strategy
@@ -67,9 +67,8 @@ contract MisWiredFactory {
             address(new StabilityPool(p.weth, address(token), p.liquidationPenalty, p.minDeposit));
         strategy = strategy_;
         stabilityPool = strategy_;
-        deficitLedger = address(new StandInDeficitLedger(address(vaultManager)));
-        address vmLedger =
-            mode == 3 ? address(new StandInDeficitLedger(address(vaultManager))) : deficitLedger;
+        deficitLedger = address(new DeficitLedger(p.weth, address(token)));
+        address vmLedger = mode == 3 ? address(new DeficitLedger(p.weth, address(token))) : deficitLedger;
         shutdownModule = address(new StandInShutdownModule(address(vaultManager), address(0), p.criticalTcr));
         sorted.wire(address(vaultManager));
         vaultManager.wire(
@@ -79,6 +78,8 @@ contract MisWiredFactory {
         address tokenStrategy = mode == 1 ? address(new StandInStrategy()) : strategy_;
         if (mode != 4) token.wire(address(vaultManager), tokenStrategy, deficitLedger, shutdownModule);
         StabilityPool(strategy_).wire(address(vaultManager), deficitLedger);
+        DeficitLedger(deficitLedger)
+            .wire(address(vaultManager), strategy_, address(0), strategy_, shutdownModule);
         hintHelpers =
             new HintHelpers(ISortKeySource(address(vaultManager)), ISortedPositions(address(sorted)));
     }

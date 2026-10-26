@@ -7,7 +7,7 @@ import {StableToken} from "../../src/core/StableToken.sol";
 import {StabilityPool} from "../../src/liquidation/StabilityPool.sol";
 import {MockAggregator} from "../../src/mocks/MockAggregator.sol";
 import {MockSequencerFeed} from "../../src/mocks/MockSequencerFeed.sol";
-import {StandInDeficitLedger} from "../../src/mocks/StandInDeficitLedger.sol";
+import {DeficitLedger} from "../../src/safety/DeficitLedger.sol";
 import {VaultManagerHarness} from "./VaultManagerHarness.sol";
 import {MockWETH} from "./VaultMocks.sol";
 import {Test} from "forge-std/Test.sol";
@@ -36,7 +36,7 @@ abstract contract LiquidationFixture is Test {
     SortedPositions internal sorted;
     VaultManagerHarness internal v;
     StabilityPool internal pool;
-    StandInDeficitLedger internal ledger;
+    DeficitLedger internal ledger;
     address internal alice = makeAddr("alice");
     address internal bob = makeAddr("bob");
     address internal carol = makeAddr("carol");
@@ -58,12 +58,13 @@ abstract contract LiquidationFixture is Test {
             address(weth), address(token), address(oracle), MCR, MIN_DEBT, GAS_RESERVE, RATE, 7500, 200_000
         );
         pool = new StabilityPool(address(weth), address(token), PENALTY, 1e18);
-        ledger = new StandInDeficitLedger(address(v));
+        ledger = new DeficitLedger(address(weth), address(token));
         address strategy = strategyOverride == address(0) ? address(pool) : strategyOverride;
         v.wire(address(sorted), strategy, strategy, REDEMPTION, address(ledger), SHUTDOWN);
         sorted.wire(address(v));
         token.wire(address(v), strategy, address(ledger), SHUTDOWN);
         pool.wire(address(v), address(ledger));
+        ledger.wire(address(v), strategy, address(0), strategy, SHUTDOWN);
         address[4] memory who = [alice, bob, carol, liq];
         for (uint256 i; i < 4; ++i) {
             weth.mint(who[i], 1e27);

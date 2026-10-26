@@ -3,8 +3,8 @@ pragma solidity 0.8.28;
 
 import {BagehotFactory} from "../src/deploy/BagehotFactory.sol";
 import {StabilityPool} from "../src/liquidation/StabilityPool.sol";
-import {StandInDeficitLedger} from "../src/mocks/StandInDeficitLedger.sol";
 import {StandInShutdownModule} from "../src/mocks/StandInShutdownModule.sol";
+import {DeficitLedger} from "../src/safety/DeficitLedger.sol";
 import {Blueprints} from "./Blueprints.sol";
 import {DeployConfig} from "./Config.s.sol";
 import {Vm} from "forge-std/Vm.sol";
@@ -129,6 +129,8 @@ library DeploymentChecks {
             f.redemptionModule().deployer() == fa && f.redemptionModule().wired(),
             "redemptionModule: deployer == factory and wired"
         );
+        DeficitLedger dl = DeficitLedger(f.deficitLedger());
+        _req(dl.deployer() == fa && dl.wired(), "deficitLedger: deployer == factory and wired");
         if (f.stabilityPool() != address(0)) {
             StabilityPool p = StabilityPool(f.stabilityPool());
             _req(p.deployer() == fa && p.wired(), "stabilityPool: deployer == factory and wired");
@@ -175,7 +177,13 @@ library DeploymentChecks {
             _req(address(StabilityPool(pool).deficitLedger()) == ledger, "stabilityPool.deficitLedger");
         }
         // stand-ins (local only) read the same peers
-        _req(StandInDeficitLedger(ledger).vaultManager() == vm_, "deficitLedger.vaultManager");
+        // DeficitLedger (P21): its peers, and constraint 7 for its auction house
+        DeficitLedger dl = DeficitLedger(ledger);
+        _req(dl.vaultManager() == vm_, "deficitLedger.vaultManager");
+        _req(dl.strategy() == strategy, "deficitLedger.strategy");
+        _req(dl.auctionHouse() == house, "deficitLedger.auctionHouse (constraint 7)");
+        _req(dl.stabilityPool() == pool, "deficitLedger.stabilityPool");
+        _req(dl.shutdownModule() == shutdown, "deficitLedger.shutdownModule");
         _req(address(StandInShutdownModule(shutdown).vaultManager()) == vm_, "shutdownModule.vaultManager");
         _req(
             StandInShutdownModule(shutdown).auctionHouse() == house,
@@ -190,6 +198,8 @@ library DeploymentChecks {
         _req(address(f.vaultManager().token()) == address(f.token()), "vaultManager.token");
         _req(address(f.vaultManager().oracle()) == address(f.oracle()), "vaultManager.oracle");
         _req(address(f.redemptionModule().token()) == address(f.token()), "redemptionModule.token");
+        _req(address(DeficitLedger(f.deficitLedger()).WETH()) == c.weth, "deficitLedger.WETH");
+        _req(address(DeficitLedger(f.deficitLedger()).token()) == address(f.token()), "deficitLedger.token");
         if (!c.variantB) {
             _req(address(StabilityPool(f.strategy()).WETH()) == c.weth, "stabilityPool.WETH");
             _req(address(StabilityPool(f.strategy()).token()) == address(f.token()), "stabilityPool.token");

@@ -7,10 +7,10 @@ import {SortedPositions} from "../src/core/SortedPositions.sol";
 import {StableToken} from "../src/core/StableToken.sol";
 import {VaultManager} from "../src/core/VaultManager.sol";
 import {StabilityPool} from "../src/liquidation/StabilityPool.sol";
-import {StandInDeficitLedger} from "../src/mocks/StandInDeficitLedger.sol";
 import {StandInShutdownModule} from "../src/mocks/StandInShutdownModule.sol";
 import {StandInStrategy} from "../src/mocks/StandInStrategy.sol";
 import {RedemptionModule} from "../src/redemption/RedemptionModule.sol";
+import {DeficitLedger} from "../src/safety/DeficitLedger.sol";
 import {Vm} from "forge-std/Vm.sol";
 
 /// @notice ADR-0035 blueprints, script side. A blueprint is a contract whose code is
@@ -38,7 +38,7 @@ library Blueprints {
         c[3] = type(SortedPositions).creationCode;
         c[4] = type(RedemptionModule).creationCode;
         c[5] = variantB ? type(StandInStrategy).creationCode : type(StabilityPool).creationCode;
-        c[6] = type(StandInDeficitLedger).creationCode;
+        c[6] = type(DeficitLedger).creationCode;
         c[7] = type(StandInShutdownModule).creationCode;
         c[8] = type(HintHelpers).creationCode;
     }
@@ -51,7 +51,7 @@ library Blueprints {
         a[3] = "SortedPositions.sol:SortedPositions";
         a[4] = "RedemptionModule.sol:RedemptionModule";
         a[5] = variantB ? "StandInStrategy.sol:StandInStrategy" : "StabilityPool.sol:StabilityPool";
-        a[6] = "StandInDeficitLedger.sol:StandInDeficitLedger";
+        a[6] = "DeficitLedger.sol:DeficitLedger";
         a[7] = "StandInShutdownModule.sol:StandInShutdownModule";
         a[8] = "HintHelpers.sol:HintHelpers";
     }

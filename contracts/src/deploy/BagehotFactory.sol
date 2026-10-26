@@ -8,6 +8,7 @@ import {StableToken} from "../core/StableToken.sol";
 import {VaultManager} from "../core/VaultManager.sol";
 import {StabilityPool} from "../liquidation/StabilityPool.sol";
 import {RedemptionModule} from "../redemption/RedemptionModule.sol";
+import {DeficitLedger} from "../safety/DeficitLedger.sol";
 
 /// @title BagehotFactory
 /// @notice Deploys every contract of one deployment variant and wires them, all inside its own
@@ -20,8 +21,9 @@ import {RedemptionModule} from "../redemption/RedemptionModule.sol";
 ///         role: each blueprint must match the code hash passed with it, the deploy script derives
 ///         those hashes from the build artifacts, and `blueprintsDigest` lets the checks re-derive
 ///         them after the fact.
-///         The strategy is the real StabilityPool in deployment A (P19). Until the DeficitLedger
-///         (P21), ShutdownModule and DutchAuctionHouse (P33) exist, those roles are filled by LOCAL-ONLY
+///         The strategy is the real StabilityPool in deployment A (P19). The DeficitLedger is the real one
+/// since P21. Until the ShutdownModule and DutchAuctionHouse (P33) exist, those roles are filled by
+/// LOCAL-ONLY
 ///         stand-ins (`src/mocks/StandIn*`), and
 ///         the deployment script refuses to deploy this factory on any chain but 31337.
 ///         Cross-contract constraints (§3.3 1, 2, 5, 7, 8) are asserted by the deployment script and
@@ -159,6 +161,8 @@ contract BagehotFactory {
         StableToken(c[ROLE_TOKEN])
             .wire(c[ROLE_VAULT_MANAGER], c[ROLE_STRATEGY], c[ROLE_DEFICIT_LEDGER], c[ROLE_SHUTDOWN_MODULE]);
         if (!p.variantB) StabilityPool(pool_).wire(c[ROLE_VAULT_MANAGER], c[ROLE_DEFICIT_LEDGER]);
+        DeficitLedger(c[ROLE_DEFICIT_LEDGER])
+            .wire(c[ROLE_VAULT_MANAGER], c[ROLE_STRATEGY], house_, pool_, c[ROLE_SHUTDOWN_MODULE]);
         emit Deployed(
             p.variantB,
             c[ROLE_TOKEN],
@@ -217,7 +221,7 @@ contract BagehotFactory {
             p.variantB ? bytes("") : abi.encode(p.weth, c[ROLE_TOKEN], p.liquidationPenalty, p.minDeposit)
         );
         address house_ = p.variantB ? c[ROLE_STRATEGY] : address(0);
-        c[ROLE_DEFICIT_LEDGER] = _create(blueprints[ROLE_DEFICIT_LEDGER], abi.encode(c[ROLE_VAULT_MANAGER]));
+        c[ROLE_DEFICIT_LEDGER] = _create(blueprints[ROLE_DEFICIT_LEDGER], abi.encode(p.weth, c[ROLE_TOKEN])); // P21
         c[ROLE_SHUTDOWN_MODULE] = _create(
             blueprints[ROLE_SHUTDOWN_MODULE], abi.encode(c[ROLE_VAULT_MANAGER], house_, p.criticalTcr)
         );

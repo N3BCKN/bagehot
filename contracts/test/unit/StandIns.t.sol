@@ -3,7 +3,6 @@ pragma solidity 0.8.28;
 
 import {Unauthorized} from "../../src/lib/Errors.sol";
 import {LocalWETH} from "../../src/mocks/LocalWETH.sol";
-import {StandInDeficitLedger} from "../../src/mocks/StandInDeficitLedger.sol";
 import {StandInShutdownModule} from "../../src/mocks/StandInShutdownModule.sol";
 import {StandInStrategy} from "../../src/mocks/StandInStrategy.sol";
 import {Test} from "forge-std/Test.sol";
@@ -43,17 +42,6 @@ contract StandInsTest is Test {
         assertFalse(s.onInterest(1), "an empty pool declines (ADR-0033)");
     }
 
-    function test_ledger_recordsReserveFromTheVaultOnly() public {
-        address vm_ = makeAddr("vault");
-        StandInDeficitLedger l = new StandInDeficitLedger(vm_);
-        assertEq(l.recoveredColl() + l.auctionDebt() + l.deficit(), 0);
-        vm.prank(vm_);
-        l.onInterest(7);
-        assertEq(l.reserve(), 7);
-        vm.expectRevert(Unauthorized.selector);
-        l.onInterest(1);
-    }
-
     /// @dev §5.8: live and D > 0 and C · price < CRITICAL_TCR · D, live counting auctions in B.
     function test_gate_belowCritical_boundary() public {
         GateVaultViews v = new GateVaultViews();
@@ -83,8 +71,6 @@ contract StandInsTest is Test {
         vm.chainId(84_532);
         vm.expectRevert(StandInStrategy.StandInLocalOnly.selector);
         new StandInStrategy();
-        vm.expectRevert(StandInDeficitLedger.StandInLocalOnly.selector);
-        new StandInDeficitLedger(address(1));
         vm.expectRevert(StandInShutdownModule.StandInInvalid.selector);
         new StandInShutdownModule(address(1), address(0), 1.05e18);
     }

@@ -2,7 +2,7 @@
 pragma solidity 0.8.28;
 
 import {StableToken} from "../../src/core/StableToken.sol";
-import {StandInDeficitLedger} from "../../src/mocks/StandInDeficitLedger.sol";
+import {DeficitLedger} from "../../src/safety/DeficitLedger.sol";
 import {PoolTestVault, StabilityPoolHarness} from "./PoolMocks.sol";
 import {MockWETH} from "./VaultMocks.sol";
 import {Test} from "forge-std/Test.sol";
@@ -17,17 +17,18 @@ abstract contract PoolFixture is Test {
     StableToken internal token;
     PoolTestVault internal tv;
     StabilityPoolHarness internal pool;
-    StandInDeficitLedger internal ledger;
+    DeficitLedger internal ledger;
 
     function _deployPool(uint256 minDeposit) internal {
         weth = new MockWETH();
         token = new StableToken("Bagehot USD TEST", "bUSDTEST");
         tv = new PoolTestVault(weth, token);
         pool = new StabilityPoolHarness(address(weth), address(token), PENALTY, minDeposit);
-        ledger = new StandInDeficitLedger(address(tv));
+        ledger = new DeficitLedger(address(weth), address(token));
         tv.setPool(pool);
         token.wire(address(tv), address(pool), address(ledger), makeAddr("shutdown"));
         pool.wire(address(tv), address(ledger));
+        ledger.wire(address(tv), address(pool), address(0), address(pool), makeAddr("shutdown"));
     }
 
     function _fund(address a, uint256 amount) internal {

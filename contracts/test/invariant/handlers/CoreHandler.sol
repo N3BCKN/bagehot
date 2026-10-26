@@ -13,12 +13,13 @@ import {StabilityPool} from "../../../src/liquidation/StabilityPool.sol";
 import {MockAggregator} from "../../../src/mocks/MockAggregator.sol";
 import {MockSequencerFeed} from "../../../src/mocks/MockSequencerFeed.sol";
 import {RedemptionModule} from "../../../src/redemption/RedemptionModule.sol";
+import {DeficitLedger} from "../../../src/safety/DeficitLedger.sol";
 import {CountingOracle} from "../../utils/CountingOracle.sol";
 import {I13HiddenKeys} from "../../utils/I13HiddenKeys.sol";
 import {RedemptionLastVisit} from "../../utils/RedemptionLastVisit.sol";
 import {MockPurchaseHouse, MockShutdownGate} from "../../utils/RedemptionMocks.sol";
 import {VaultManagerHarness} from "../../utils/VaultManagerHarness.sol";
-import {MockLedgerViews, MockWETH} from "../../utils/VaultMocks.sol";
+import {MockWETH} from "../../utils/VaultMocks.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Test} from "forge-std/Test.sol";
@@ -70,7 +71,7 @@ contract CoreHandler is Test {
     OracleAdapter public oracle;
     CountingOracle public counting;
     SortedPositions public sorted;
-    MockLedgerViews public ledger;
+    DeficitLedger public ledger; // the real one since P21
     StabilityPool public pool; // deployment A only (P19); address(0) in B
     MockPurchaseHouse public house;
     VaultManagerHarness public v;
@@ -99,6 +100,7 @@ contract CoreHandler is Test {
     uint256 public i9Violations;
     uint256 public poolEntitlementViolations; // I3: withdraw paid other than min(x, compounded)
     uint256 public i4Violations; // I4 (A1–A3, B1–B2), checked inside `liquidate`
+    uint256 public ledgerViolations; // `cover` (§6.9.2), checked inside the action
     uint256 public i6Violations; // I6, by state deltas inside `liquidate`
     uint256 public i7Violations; // I7, per-actor WETH deltas inside `liquidate`
     string public lastLiqViolation;
@@ -133,6 +135,7 @@ contract CoreHandler is Test {
     // coverage
     mapping(bytes32 => uint256) public ok;
     uint256 public calls;
+    uint256 internal constant REACH_AT = 50; // `_reachTolerance`: well before the reach check at call 100
 
     constructor(bool variantB_, bool eventsAvailable_, address[5] memory actors_) {
         variantB = variantB_;
@@ -167,7 +170,7 @@ contract CoreHandler is Test {
         );
         counting = new CountingOracle(oracle);
         sorted = new SortedPositions(HINT_STEPS);
-        ledger = new MockLedgerViews();
+        ledger = new DeficitLedger(address(weth), address(token));
         if (!variantB) pool = new StabilityPool(address(weth), address(token), PENALTY, 1e18);
         house = new MockPurchaseHouse();
         address strategy = variantB ? address(house) : address(pool);
@@ -198,6 +201,10 @@ contract CoreHandler is Test {
         rm.wire(address(v), address(gate), variantB ? address(house) : address(0));
         if (!variantB) pool.wire(address(v), address(ledger));
         house.setLedger(address(ledger));
+        address strat = variantB ? address(house) : address(pool);
+        ledger.wire(
+            address(v), strat, variantB ? strat : address(0), variantB ? address(0) : strat, address(gate)
+        );
     }
 
     function _seedOpen(address who, uint256 coll, uint256 debt) internal {
@@ -211,6 +218,7 @@ contract CoreHandler is Test {
 
     /// @dev Bookkeeping around every action, also when the body returns early.
     modifier action() {
+        _reachTolerance();
         _begin();
         _;
         _end();
@@ -422,8 +430,12 @@ contract CoreHandler is Test {
         _applyOracleMode();
     }
 
+    /// @notice A donation to a core contract (I1's D_w / D_t): the VaultManager, the RedemptionModule, the
+    ///         DeficitLedger, or the pool (A). Donations must stay inert.
     function donate(uint256 holderSeed, uint256 amountSeed, bool stable) external action {
-        address holder = holderSeed % 2 == 0 ? address(v) : address(rm);
+        uint256 k = holderSeed % 4;
+        address holder =
+            k == 0 ? address(v) : k == 1 ? address(rm) : k == 2 || variantB ? address(ledger) : address(pool);
         uint256 amount = bound(amountSeed, 1, 10e18);
         if (stable) {
             address from = _actor(amountSeed);
@@ -454,9 +466,9 @@ contract CoreHandler is Test {
     }
 
     /// @notice Deployment A: a partial or full (`type(uint256).max`) pool withdrawal. I3's entitlement
-    ///      clause is checked exactly through `totalDeposits`: accrual inside the call can add interest
-    ///      gain (paid in the same transfer), but never changes the compounded deposit, so the amount
-    ///      withdrawn is `T before − T after − swept dust`, and must equal `min(x, compounded before)`.
+    ///      clause is checked exactly through the depositor's record: accrual inside the call can add
+    ///      interest gain (paid in the same transfer), but never changes the compounded deposit, so the
+    ///      amount withdrawn is `compounded before − deposit after`, and must equal `min(x, compounded)`.
     function poolWithdraw(uint256 actorSeed, uint256 amountSeed, bool all) external action {
         if (variantB) return;
         address a = _actor(actorSeed);
@@ -464,12 +476,12 @@ contract CoreHandler is Test {
         if (initial == 0) return;
         uint256 x = all ? type(uint256).max : bound(amountSeed, 1, 2 * initial);
         uint256 compounded = pool.compoundedDeposit(a);
-        uint256 t0 = pool.totalDeposits();
-        uint256 dust0 = ledger.poolDust();
         vm.prank(a);
         try pool.withdraw(x) {
             ++ok["poolWithdraw"];
-            uint256 w = t0 - pool.totalDeposits() - (ledger.poolDust() - dust0);
+            // the deposit left is `compounded − w`, or nothing when w took all of it (§5.3.2)
+            (uint256 initialAfter,,,,,) = pool.deposits(a);
+            uint256 w = compounded - initialAfter;
             if (w != (x < compounded ? x : compounded)) ++poolEntitlementViolations;
         } catch (bytes memory err) {
             _allow(
@@ -507,6 +519,22 @@ contract CoreHandler is Test {
     ///         (CHG-005). The expected outcome is reconstructed from the pre-state with the spec's
     ///         formulas (§6.4.1, §6.6.4, §6.8.2), so I4, I6 and I7 are checked without event logs too.
     function liquidate(uint256 idSeed, uint8 mode, bool lastMode) external action {
+        _liquidate(idSeed, mode, lastMode);
+    }
+
+    /// @dev CHG-005 asks every run of A to reach I13's tolerance regime by call 100, which needs a
+    ///      redistribution. With one `liquidate` in about twenty selectors, a few of them as-is (mode 7),
+    ///      some runs' first 100 calls never redistribute, so from call REACH_AT on, until the run has
+    ///      reached it, every action is preceded by one priced liquidation at ICR 0.95 (mode 2, the pool
+    ///      thinned first): coverage only — it is an ordinary checked `liquidate`, nothing is relaxed.
+    function _reachTolerance() internal {
+        if (variantB || stepsNonExact != 0 || stepsAllExact == 0 || calls < REACH_AT || v.shutdown()) return;
+        _begin();
+        _liquidate(uint256(keccak256(abi.encode(calls))), 2, false);
+        _end();
+    }
+
+    function _liquidate(uint256 idSeed, uint8 mode, bool lastMode) internal {
         if (v.shutdown()) return;
         if (stepsAllExact == 0) return; // CHG-005: one exact step first (as the old action did)
         mode %= 8; // 0–6: priced to a target ICR; 7: as the oracle stands (I12), rarer so runs liquidate
@@ -767,6 +795,24 @@ contract CoreHandler is Test {
         }
     }
 
+    /// @notice `DeficitLedger.cover()` (§6.9.2), permissionless: burns `min(reserve, deficit)` of the
+    ///         reserve; supply, reserve and deficit fall by exactly that, so I2's `E` is unchanged.
+    function cover() external action {
+        (uint256 r, uint256 d, uint256 supply) = (ledger.reserve(), ledger.deficit(), token.totalSupply());
+        try ledger.cover() returns (uint256 c) {
+            ++ok["cover"];
+            if (c > 0) ++ok["coverBurned"];
+            uint256 want = r < d ? r : d;
+            if (c != want || ledger.reserve() != r - c || ledger.deficit() != d - c) ++ledgerViolations;
+            if (supply - token.totalSupply() != c) ++ledgerViolations;
+        } catch (bytes memory err) {
+            _discardLogs();
+            if (!(ledger.settled() && bytes4(err) == SystemSettled.selector)) {
+                _unexpected(bytes4(err), "cover");
+            }
+        }
+    }
+
     /// @notice Rarely, the wired shutdown address freezes the vault (as `check()` will: accrue first).
     function triggerShutdown(uint256 seed) external action {
         if (seed % 128 != 0 || v.shutdown()) return;
@@ -795,6 +841,13 @@ contract CoreHandler is Test {
         vm.prank(address(gate));
         try v.onSettlement() {
             ++ok["settle"];
+            // the ledger settles with the vault (§6.11.3; the ShutdownModule role is the gate address)
+            vm.prank(address(gate));
+            try ledger.onSettlement() {}
+            catch (bytes memory err) {
+                _discardLogs();
+                _unexpected(bytes4(err), "settle: ledger");
+            }
         } catch (bytes memory err) {
             _discardLogs();
             _unexpected(bytes4(err), "settle");
@@ -1350,20 +1403,31 @@ contract CoreHandler is Test {
         if (token.balanceOf(address(rm)) != donatedToken[address(rm)]) {
             return (false, "I1: RedemptionModule token");
         }
-        if (weth.balanceOf(address(ledger)) != ledger.recoveredColl()) {
+        // DeficitLedger (P21): token = reserve + D_t, WETH = recoveredColl + D_w; settled: only donations
+        bool ls = ledger.settled();
+        if (
+            weth.balanceOf(address(ledger))
+                != (ls ? 0 : ledger.recoveredColl()) + donatedWeth[address(ledger)]
+        ) {
             return (false, "I1: DeficitLedger WETH");
         }
+        if (token.balanceOf(address(ledger)) != (ls ? 0 : ledger.reserve()) + donatedToken[address(ledger)]) {
+            return (false, "I1: DeficitLedger token");
+        }
+        if (ledgerViolations != 0) return (false, "cover: amounts or supply not as 6.9.2");
         if (variantB && weth.balanceOf(address(house)) != house.totalLot()) return (false, "I1: house WETH");
         return (true, "");
     }
 
-    /// @dev Deployment A's pool (P19): I1 (pool row, no donations to the pool in this handler), I3's
+    /// @dev Deployment A's pool (P19): I1 (pool row, donations included), I3's
     ///      exact inequalities over the actors (the only depositors), the `P` range, the empty-epoch
-    ///      clause (the mock ledger never settles), withdraw entitlement, and U4.
+    ///      clause (while the ledger has not settled), withdraw entitlement, and U4.
     function checkPool() public view returns (bool, string memory) {
         if (variantB) return (true, "");
-        if (weth.balanceOf(address(pool)) != pool.collGainsBalance()) return (false, "I1: pool WETH");
-        uint256 bal = token.balanceOf(address(pool));
+        if (weth.balanceOf(address(pool)) != pool.collGainsBalance() + donatedWeth[address(pool)]) {
+            return (false, "I1: pool WETH");
+        }
+        uint256 bal = token.balanceOf(address(pool)) - donatedToken[address(pool)];
         if (bal != pool.totalDeposits() + pool.interestGainsBalance()) return (false, "I1: pool stablecoin");
         (uint256 compounded, uint256 collGains, uint256 interestGains) = (0, 0, 0);
         for (uint256 i; i < 5; ++i) {
@@ -1375,7 +1439,8 @@ contract CoreHandler is Test {
         if (collGains > pool.collGainsBalance()) return (false, "I3: collateral gains > balance");
         if (interestGains > pool.interestGainsBalance()) return (false, "I3: interest gains > balance");
         if (pool.P() < pool.P_MIN() || pool.P() > pool.P_PRECISION()) return (false, "I3: P out of range");
-        if (pool.depositorCount(pool.currentEpoch()) == 0 && pool.totalDeposits() != 0) {
+        // I3: the antecedent includes `!settled` — after settlement the residual stays (§5.3.1)
+        if (pool.depositorCount(pool.currentEpoch()) == 0 && pool.totalDeposits() != 0 && !ledger.settled()) {
             return (false, "I3: empty current epoch holds deposits");
         }
         if (poolEntitlementViolations != 0) return (false, "I3: withdraw entitlement");

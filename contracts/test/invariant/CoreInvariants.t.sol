@@ -7,6 +7,7 @@ import {VaultManager} from "../../src/core/VaultManager.sol";
 import {WiredBase} from "../../src/lib/Wired.sol";
 import {StabilityPool} from "../../src/liquidation/StabilityPool.sol";
 import {RedemptionModule} from "../../src/redemption/RedemptionModule.sol";
+import {DeficitLedger} from "../../src/safety/DeficitLedger.sol";
 import {CoreHandler} from "./handlers/CoreHandler.sol";
 import {Test} from "forge-std/Test.sol";
 
@@ -207,6 +208,18 @@ contract CoreInvariantsTest is Test {
             "I8 unwind: VaultManager holds donations plus pending dust"
         );
         _assertPoolResidual(settled);
+        // I8 step 3, DeficitLedger (P21): recoveredColl and reserve stay (the unwind never covers)
+        DeficitLedger l = handler.ledger();
+        assertEq(
+            handler.weth().balanceOf(address(l)),
+            (l.settled() ? 0 : l.recoveredColl()) + handler.donatedWeth(address(l)),
+            "I8 unwind: ledger WETH"
+        );
+        assertEq(
+            handler.token().balanceOf(address(l)),
+            (l.settled() ? 0 : l.reserve()) + handler.donatedToken(address(l)),
+            "I8 unwind: ledger stablecoin"
+        );
         assertEq(handler.weth().balanceOf(address(handler.rm())), handler.donatedWeth(address(handler.rm())));
         assertEq(
             handler.token().balanceOf(address(handler.rm())), handler.donatedToken(address(handler.rm()))
@@ -232,16 +245,19 @@ contract CoreInvariantsTest is Test {
         }
     }
 
-    /// @dev I8 step 3 for the pool: WETH == collGainsBalance, stablecoin == interestGainsBalance (plus
-    ///      totalDeposits once the ledger has settled; the mock ledger never does), and no depositor
-    ///      claim left unpaid. No donations reach the pool in this handler.
+    /// @dev I8 step 3 for the pool: WETH == collGainsBalance + D_w, stablecoin == interestGainsBalance +
+    ///      D_t (plus totalDeposits once the ledger has settled), and no depositor claim left unpaid.
     function _assertPoolResidual(bool settled) internal view {
         if (_variantB()) return;
         StabilityPool pool = handler.pool();
-        assertEq(handler.weth().balanceOf(address(pool)), pool.collGainsBalance(), "I8 unwind: pool WETH");
+        assertEq(
+            handler.weth().balanceOf(address(pool)),
+            pool.collGainsBalance() + handler.donatedWeth(address(pool)),
+            "I8 unwind: pool WETH"
+        );
         assertEq(
             handler.token().balanceOf(address(pool)),
-            pool.interestGainsBalance() + pool.totalDeposits(),
+            pool.interestGainsBalance() + pool.totalDeposits() + handler.donatedToken(address(pool)),
             "I8 unwind: pool stablecoin"
         );
         if (settled) return;
