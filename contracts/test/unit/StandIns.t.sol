@@ -38,10 +38,9 @@ contract StandInsTest is Test {
         assertEq(s.activeAuctions(), 0);
     }
 
-    function test_strategy_onInterest_reverts() public {
+    function test_strategy_onInterest_declines() public {
         StandInStrategy s = new StandInStrategy();
-        vm.expectRevert(StandInStrategy.StandInNoPool.selector);
-        s.onInterest(1);
+        assertFalse(s.onInterest(1), "an empty pool declines (ADR-0033)");
     }
 
     function test_ledger_recordsReserveFromTheVaultOnly() public {

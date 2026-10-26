@@ -55,6 +55,10 @@ values from the spec formulas.
 - Unit ops: `mulDiv`, `rpow`, `convert`, `accrue`, `insert`, `find`, `redistribute`,
   `hook.offset` (StabilityPool `offset` with the collateral already received), `hook.onInterest`
   (amount minted to the pool, then `onInterest`), `claim`, plus the system ops a harness exposes.
+- `accrue` vectors in `interest.json` may carry `inputs.poolHook` (CHG-006, ADR-0033): what the pool's
+  guarded `onInterest` call does — `book` (the default; it books while `totalDeposits ≥ MIN_DEPOSIT`),
+  `decline`, or `fail` (it reverts, runs out of `POOL_HOOK_GAS` or answers malformed). A `fail` result
+  carries `redirected`, the amount of the `PoolInterestRedirected` event.
 - `expected` in system vectors is a full snapshot after the last step. `weth` lists actor balances
   as deltas relative to `actorWeth`, and contract balances as absolute values. `S` / `G`
   accumulators are keyed `"epoch:scale"`.

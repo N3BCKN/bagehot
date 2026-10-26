@@ -194,6 +194,7 @@ library DeploymentChecks {
         _req(f.vaultManager().GAS_RESERVE() == c.gasReserve, "GAS_RESERVE");
         _req(f.vaultManager().RATE_PER_SECOND() == c.ratePerSecond, "RATE_PER_SECOND");
         _req(f.vaultManager().POOL_SHARE_BPS() == c.poolShareBps, "POOL_SHARE_BPS");
+        _req(f.vaultManager().POOL_HOOK_GAS() == c.poolHookGas, "POOL_HOOK_GAS");
         _req(f.sorted().MAX_HINT_STEPS() == c.maxHintSteps, "MAX_HINT_STEPS");
         _req(f.redemptionModule().REDEMPTION_FEE_FLOOR() == c.redemptionFeeFloor, "REDEMPTION_FEE_FLOOR");
         _req(f.redemptionModule().BETA() == c.beta, "BETA");

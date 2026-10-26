@@ -9,12 +9,12 @@ import {MockAggregator} from "../../src/mocks/MockAggregator.sol";
 import {MockSequencerFeed} from "../../src/mocks/MockSequencerFeed.sol";
 import {HostileInterestSink, MockWETH} from "../utils/VaultMocks.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 
 /// @notice The interest hooks under hostile sinks. F3: a pool or ledger whose `onInterest` re-enters
-///         the VaultManager hits the lock on every mutator. F4: today's liveness coupling — in normal
-///         mode a reverting pool blocks the rescue paths (accepted by the spec, raised as an issue); in
-///         the window they do not touch the pool and keep working.
+///         the VaultManager hits the lock on every mutator. F4 (flipped by ADR-0033 / CHG-006): a
+///         reverting pool no longer blocks anything — its share is redirected to the reserve and the
+///         rescue paths run in normal mode; in the window they do not touch the pool at all.
 contract VaultManagerInterestHooksTest is Test {
     VaultManager internal v;
     StableToken internal token;
@@ -47,7 +47,8 @@ contract VaultManagerInterestHooksTest is Test {
             2000e18,
             0.0375e18,
             1_547_125_957_863_212_449,
-            7500
+            7500,
+            200_000
         );
         v.wire(address(sorted), address(pool), address(pool), address(0xDE11), address(ledger), SHUTDOWN);
         sorted.wire(address(v));
@@ -103,14 +104,38 @@ contract VaultManagerInterestHooksTest is Test {
         }
     }
 
-    /// @dev F4, as the spec stands: a pool whose acceptsInterest reverts blocks repay (and every other
-    ///      normal-mode operation) — but after the trigger the rescue paths never call the pool.
-    function test_F4_revertingPool_blocksNormalMode_notTheWindow() public {
+    /// @dev F4 after ADR-0033: a pool whose `onInterest` reverts makes accrual redirect the pool's share
+    ///      to the reserve, so `repay` succeeds in normal mode — and after the trigger the rescue paths
+    ///      never call the pool.
+    function test_F4_revertingPool_isRedirected_normalModeAndWindowBothLive() public {
         vm.warp(block.timestamp + 1 days);
-        pool.setRevertAccepts(true);
+        pool.setRevertInterest(true);
+        uint256 poolBefore = token.balanceOf(address(pool));
+        uint256 ledgerBefore = token.balanceOf(address(ledger));
+        uint256 supplyBefore = token.totalSupply();
+        vm.recordLogs();
         vm.prank(alice);
-        vm.expectRevert(bytes("pool broken"));
         v.repay(1, 1, 0, 0);
+        uint256 interest = token.totalSupply() + 1 - supplyBefore; // repay burned 1
+        assertGt(interest, 0, "interest accrued");
+        assertEq(token.balanceOf(address(pool)), poolBefore, "nothing minted to the failing pool");
+        assertEq(
+            token.balanceOf(address(ledger)) - ledgerBefore, interest, "the whole interest to the reserve"
+        );
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bool redirected;
+        for (uint256 i; i < logs.length; ++i) {
+            if (logs[i].topics[0] == VaultManager.PoolInterestRedirected.selector) redirected = true;
+        }
+        assertTrue(redirected, "PoolInterestRedirected emitted");
+        // the accrued interest now sits on alice's debt: a second borrower funds her close
+        address bob = makeAddr("bob");
+        weth.mint(bob, 100e18);
+        vm.startPrank(bob);
+        weth.approve(address(v), type(uint256).max);
+        v.openPosition(10e18, 4000e18, 0, 0);
+        token.transfer(alice, 100e18);
+        vm.stopPrank();
         vm.prank(SHUTDOWN);
         v.onShutdown();
         vm.warp(block.timestamp + 1 days);

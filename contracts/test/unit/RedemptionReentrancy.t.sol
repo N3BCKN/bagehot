@@ -31,7 +31,7 @@ contract RedemptionReentrancyTest is Test {
         MockLedgerViews ledger = new MockLedgerViews();
         MockPool pool = new MockPool();
         v = new VaultManager(
-            address(weth), address(token), address(oracle), 1.1e18, 2000e18, 0.0375e18, 0, 7500
+            address(weth), address(token), address(oracle), 1.1e18, 2000e18, 0.0375e18, 0, 7500, 200_000
         );
         rm = new RedemptionModule(
             address(token), address(oracle), 0.005e18, 2, 999_983_955_055_097_432_543_272_791

@@ -55,7 +55,8 @@ contract MisWiredFactory {
             p.minDebt,
             p.gasReserve,
             p.ratePerSecond,
-            p.poolShareBps
+            p.poolShareBps,
+            p.poolHookGas
         );
         sorted = new SortedPositions(p.maxHintSteps);
         redemptionModule = new RedemptionModule(

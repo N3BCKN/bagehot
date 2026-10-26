@@ -207,7 +207,8 @@ contract VaultI2InvariantTest is Test {
             2000e18,
             0.0375e18,
             1_547_125_957_863_212_449,
-            7500
+            7500,
+            200_000
         );
         v.wire(address(sorted), address(pool), address(pool), address(0xDE11), address(ledger), address(0x5D));
         sorted.wire(address(v));

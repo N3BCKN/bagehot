@@ -52,7 +52,8 @@ contract VaultManagerTest is VaultFixture {
             a[4],
             a[5],
             a[6],
-            a[7]
+            a[7],
+            200_000
         );
     }
 
@@ -95,7 +96,7 @@ contract VaultManagerTest is VaultFixture {
 
     function test_wire_checksAndOnce() public {
         VaultManager v = new VaultManager(
-            address(weth), address(token), address(oracle), MCR, MIN_DEBT, GAS_RESERVE, RATE, 100
+            address(weth), address(token), address(oracle), MCR, MIN_DEBT, GAS_RESERVE, RATE, 100, 200_000
         );
         address s = address(sorted);
         address st = address(0x5);
@@ -135,7 +136,7 @@ contract VaultManagerTest is VaultFixture {
 
     function test_mutators_revertNotWired() public {
         VaultManager v = new VaultManager(
-            address(weth), address(token), address(oracle), MCR, MIN_DEBT, GAS_RESERVE, RATE, 0
+            address(weth), address(token), address(oracle), MCR, MIN_DEBT, GAS_RESERVE, RATE, 0, 200_000
         );
         vm.startPrank(SHUTDOWN);
         vm.expectRevert(WiredBase.NotWired.selector);

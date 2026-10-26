@@ -86,6 +86,9 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
     error InsufficientCollateral();
     error RepayExceedsMaximum();
     error CollateralTooLarge();
+    /// @notice The pool's `onInterest` call failed and less than `ceil(2·POOL_HOOK_GAS / 63)` gas is
+    ///         left: the caller may have starved it on purpose (§6.2, ADR-0033).
+    error InsufficientGasForPoolHook();
 
     event PositionOpened(uint256 indexed id, address indexed owner, uint256 debtMinted);
     event PositionUpdated(
@@ -115,6 +118,9 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
     event InterestAccrued(
         uint256 index, uint256 interest, uint256 toPool, uint256 toReserve, uint256 timestamp
     );
+    /// @notice The pool's offered interest share went to the reserve because its `onInterest` call
+    ///         failed (§6.2, ADR-0033).
+    event PoolInterestRedirected(uint256 amount);
 
     // ------------------------------------------------------------------ constants
 
@@ -131,6 +137,8 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
     uint256 public constant MAX_MCR = 2 * WAD;
     uint256 public constant MIN_MIN_DEBT = 1e18;
     uint256 public constant MAX_RATE_PER_SECOND = 21_979_553_151_239_153_028; // ANNUAL_RATE = 1.0
+    uint256 public constant MIN_POOL_HOOK_GAS = 50_000;
+    uint256 public constant MAX_POOL_HOOK_GAS = 1_000_000;
 
     uint8 internal constant OP_OPEN = 1;
     uint8 internal constant OP_ADD_COLLATERAL = 2;
@@ -150,6 +158,10 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
     uint256 public immutable GAS_RESERVE;
     uint256 public immutable RATE_PER_SECOND;
     uint256 public immutable POOL_SHARE_BPS;
+    /// @notice Gas forwarded to the pool's `onInterest` (§3.1, ADR-0033).
+    uint256 public immutable POOL_HOOK_GAS;
+    /// @notice `ceil(2·POOL_HOOK_GAS / 63)`: the least `gasleft()` after a failed pool call (§6.2).
+    uint256 public immutable POOL_HOOK_FLOOR;
 
     // ------------------------------------------------------------------ storage (§4.2)
 
@@ -186,7 +198,8 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
         uint256 minDebt,
         uint256 gasReserve,
         uint256 ratePerSecond,
-        uint256 poolShareBps
+        uint256 poolShareBps,
+        uint256 poolHookGas
     ) {
         if (weth_ == address(0)) revert InvalidParameter(0);
         if (token_ == address(0)) revert InvalidParameter(1);
@@ -196,6 +209,7 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
         if (gasReserve == 0) revert InvalidParameter(5);
         if (ratePerSecond > MAX_RATE_PER_SECOND) revert InvalidParameter(6);
         if (poolShareBps > BPS) revert InvalidParameter(7);
+        if (poolHookGas < MIN_POOL_HOOK_GAS || poolHookGas > MAX_POOL_HOOK_GAS) revert InvalidParameter(8);
         WETH = IERC20(weth_);
         token = IStableToken(token_);
         oracle = IOracleAdapter(oracle_);
@@ -204,6 +218,8 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
         GAS_RESERVE = gasReserve;
         RATE_PER_SECOND = ratePerSecond;
         POOL_SHARE_BPS = poolShareBps;
+        POOL_HOOK_GAS = poolHookGas;
+        POOL_HOOK_FLOOR = Rounding.divUp(2 * poolHookGas, 63);
         lastAccrual = block.timestamp;
     }
 
@@ -585,19 +601,52 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
         lastAccrual = block.timestamp;
         address pool = stabilityPool;
         uint256 toPool = 0;
-        if (pool != address(0) && IStabilityPoolInterest(pool).acceptsInterest()) {
-            toPool = Rounding.mulDivDown(interest, POOL_SHARE_BPS, BPS);
+        if (pool != address(0)) {
+            uint256 offered = Rounding.mulDivDown(interest, POOL_SHARE_BPS, BPS); // R7 (down)
+            if (offered > 0) {
+                (bool ok, bool booked) = _poolOnInterest(pool, offered);
+                if (ok && booked) {
+                    toPool = offered;
+                } else if (!ok) {
+                    _requirePoolHookGas(gasleft());
+                    emit PoolInterestRedirected(offered);
+                }
+            }
         }
         uint256 toReserve = interest - toPool;
-        if (toPool > 0) {
-            token.mint(pool, toPool);
-            IStabilityPoolInterest(pool).onInterest(toPool);
-        }
+        if (toPool > 0) token.mint(pool, toPool); // after the pool booked it
         if (toReserve > 0) {
             token.mint(deficitLedger, toReserve);
             IDeficitLedgerInterest(deficitLedger).onInterest(toReserve);
         }
         emit InterestAccrued(newIndex, interest, toPool, toReserve, block.timestamp);
+    }
+
+    /// @dev After a failed pool call: a starved call leaves `< 2·POOL_HOOK_GAS/63`, so revert rather
+    ///      than redirect (§6.2, ADR-0033). Takes `gasleft()` as an argument so the boundary is
+    ///      testable exactly.
+    function _requirePoolHookGas(uint256 left) internal view {
+        if (left < POOL_HOOK_FLOOR) revert InsufficientGasForPoolHook();
+    }
+
+    /// @dev The guarded pool call of §6.2 (ADR-0033, the ADR-0029 pattern): `onInterest(amount)` with
+    ///      `POOL_HOOK_GAS`, at most 32 bytes of return data copied, and only an exactly-32-byte answer
+    ///      of 0 or 1 decoded. `ok` is false when the call reverts, runs out of gas, or answers any
+    ///      other size or word; the pool's own state is then rolled back by the revert.
+    function _poolOnInterest(address pool, uint256 amount) internal returns (bool ok, bool booked) {
+        bytes4 selector = IStabilityPoolInterest.onInterest.selector;
+        uint256 gasCap = POOL_HOOK_GAS;
+        uint256 word;
+        assembly ("memory-safe") {
+            let ptr := mload(0x40)
+            mstore(ptr, selector)
+            mstore(add(ptr, 4), amount)
+            ok := call(gasCap, pool, 0, ptr, 0x24, ptr, 0x20)
+            ok := and(ok, eq(returndatasize(), 0x20))
+            if ok { word := mload(ptr) }
+        }
+        ok = ok && word <= 1;
+        booked = word == 1;
     }
 
     /// @dev The loop of §6.7.3. The node's predecessor is read before the node is touched.

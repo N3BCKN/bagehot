@@ -25,6 +25,7 @@ struct DeployConfig {
     uint256 gasReserve;
     uint256 ratePerSecond;
     uint256 poolShareBps;
+    uint256 poolHookGas;
     uint256 maxHintSteps;
     uint256 liquidationPenalty;
     uint256 redemptionFeeFloor;
@@ -80,6 +81,7 @@ abstract contract ConfigLoader is Script {
         c.ratePerSecond = _big(t, ".params.rate_per_second");
         c.poolShareBps =
             c.variantB ? t.readUint(".params.pool_share_bps_b") : t.readUint(".params.pool_share_bps_a");
+        c.poolHookGas = t.readUint(".params.pool_hook_gas");
         c.maxHintSteps = t.readUint(".params.max_hint_steps");
         c.liquidationPenalty = _big(t, ".params.liquidation_penalty");
         c.redemptionFeeFloor = _big(t, ".params.redemption_fee_floor");

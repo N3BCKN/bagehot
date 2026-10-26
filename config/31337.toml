@@ -29,6 +29,7 @@ annual_rate = "0.05"                               # documentation only; rate_pe
 rate_per_second = "1547125957863212449"           # RAY, round_half_even(((1.05)^(1/31_536_000) − 1)·RAY), math.json#derived_constants
 pool_share_bps_a = 7500
 pool_share_bps_b = 0
+pool_hook_gas = 200000                             # gas to the pool's onInterest, ≥ 2× its measured worst case (spec §3.1, ADR-0033)
 # SortedPositions
 max_hint_steps = 30
 # Liquidation strategy (StabilityPool / DutchAuctionHouse; checked by §3.3 constraint 1 already)

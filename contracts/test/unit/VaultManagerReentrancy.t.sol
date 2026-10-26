@@ -33,7 +33,8 @@ contract VaultManagerReentrancyTest is Test {
             2000e18,
             0.0375e18,
             0,
-            7500
+            7500,
+            200_000
         );
         address pool = makeAddr("pool");
         v.wire(address(sorted), pool, pool, address(0xDE11), address(ledger), SHUTDOWN);

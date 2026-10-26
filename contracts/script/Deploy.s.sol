@@ -138,8 +138,8 @@ contract Deploy is ConfigLoader {
     function _factoryParams(DeployConfig memory c) internal pure returns (BagehotFactory.Params memory p) {
         p.variantB = c.variantB;
         (p.weth, p.priceFeed, p.sequencerFeed) = (c.weth, c.priceFeed, c.sequencerFeed);
-        (p.mcr, p.minDebt, p.gasReserve, p.ratePerSecond, p.poolShareBps) =
-        (c.mcr, c.minDebt, c.gasReserve, c.ratePerSecond, c.poolShareBps);
+        (p.mcr, p.minDebt, p.gasReserve, p.ratePerSecond, p.poolShareBps, p.poolHookGas) =
+        (c.mcr, c.minDebt, c.gasReserve, c.ratePerSecond, c.poolShareBps, c.poolHookGas);
         p.maxHintSteps = c.maxHintSteps;
         (p.staleness, p.gracePeriod, p.minPrice, p.maxPrice) =
         (c.staleness, c.gracePeriod, c.minPrice, c.maxPrice);
@@ -217,6 +217,7 @@ contract Deploy is ConfigLoader {
         vm.serializeUint(k, "GAS_RESERVE", c.gasReserve);
         vm.serializeUint(k, "RATE_PER_SECOND", c.ratePerSecond);
         vm.serializeUint(k, "POOL_SHARE_BPS", c.poolShareBps);
+        vm.serializeUint(k, "POOL_HOOK_GAS", c.poolHookGas);
         vm.serializeUint(k, "MAX_HINT_STEPS", c.maxHintSteps);
         vm.serializeUint(k, "REDEMPTION_FEE_FLOOR", c.redemptionFeeFloor);
         vm.serializeUint(k, "BETA", c.beta);

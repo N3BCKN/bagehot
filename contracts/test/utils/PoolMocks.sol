@@ -79,6 +79,15 @@ contract PoolTestVault {
         booked = pool.onInterest(g);
     }
 
+    /// @notice Gas used by `onInterest(g)` as accrual calls it (CHG-006's measurement): mint first,
+    ///         then the call, timed around the call alone (the pool account access is included).
+    function measureInterest(uint256 g) external returns (uint256 used, bool booked) {
+        token.mint(address(pool), g);
+        uint256 before = gasleft();
+        booked = pool.onInterest(g);
+        used = before - gasleft();
+    }
+
     function liquidate(uint256 id, address owner, uint256 debt, uint256 coll, uint256 price)
         external
         returns (uint256 debtAbsorbed, uint256 collReturned)

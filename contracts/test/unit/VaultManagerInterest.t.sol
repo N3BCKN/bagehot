@@ -49,7 +49,15 @@ contract VaultManagerInterestTest is Test {
         pool = new MockPool();
         address strategy = b ? address(new MockHouseViews()) : address(pool);
         v = new VaultManagerHarness(
-            address(weth), address(token), address(oracle), 1.1e18, 2000e18, GAS_RESERVE, rate, b ? 0 : 7500
+            address(weth),
+            address(token),
+            address(oracle),
+            1.1e18,
+            2000e18,
+            GAS_RESERVE,
+            rate,
+            b ? 0 : 7500,
+            200_000
         );
         v.wire(
             address(sorted), strategy, b ? address(0) : strategy, address(0xDE11), address(ledger), SHUTDOWN
@@ -93,9 +101,19 @@ contract VaultManagerInterestTest is Test {
             _u(string.concat(inp, ".totalNormDebt"))
         );
         if (!b) pool.setDeposits(_u(string.concat(inp, ".totalDeposits")));
+        // interest.json#poolHook (CHG-006): book (default) / decline (deposits below MIN_DEPOSIT) / fail
+        string memory hook = vm.keyExistsJson(json, string.concat(inp, ".poolHook"))
+            ? vm.parseJsonString(json, string.concat(inp, ".poolHook"))
+            : "book";
+        bool fails = keccak256(bytes(hook)) == keccak256("fail");
+        if (fails) pool.setFail(true);
         string memory s = string.concat(p, ".steps[0]");
         vm.warp(_u(string.concat(s, ".t")));
         string memory r = string.concat(s, ".result");
+        if (fails) {
+            vm.expectEmit(address(v));
+            emit VaultManager.PoolInterestRedirected(_u(string.concat(r, ".redirected")));
+        }
         vm.expectEmit(address(v));
         emit VaultManager.InterestAccrued(
             _u(string.concat(r, ".index")),
@@ -114,9 +132,11 @@ contract VaultManagerInterestTest is Test {
 
     function test_vectors_accrual() public {
         json = vm.readFile("../spec/vectors/interest.json");
-        for (uint256 i; i < 3; ++i) {
+        uint256[4] memory accrual = [uint256(0), 1, 2, 5]; // 5: accrue_pool_hook_fails (CHG-006)
+        assertEq(vm.parseJsonString(json, ".vectors[5].name"), "accrue_pool_hook_fails");
+        for (uint256 k; k < accrual.length; ++k) {
             uint256 snap = vm.snapshotState();
-            _accrueVector(i);
+            _accrueVector(accrual[k]);
             vm.revertToState(snap);
         }
     }
@@ -192,7 +212,7 @@ contract VaultManagerInterestTest is Test {
 
     function test_accrue_anyoneButOnlyWhenWired() public {
         VaultManager raw =
-            new VaultManager(address(weth), address(token), address(1), 1.1e18, 2000e18, 1, RATE, 0);
+            new VaultManager(address(weth), address(token), address(1), 1.1e18, 2000e18, 1, RATE, 0, 200_000);
         vm.expectRevert(WiredBase.NotWired.selector);
         raw.accrue();
         vm.warp(block.timestamp + 10);

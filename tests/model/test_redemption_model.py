@@ -40,7 +40,7 @@ class Env:
             rate_per_second=p["RATE_PER_SECOND"],
             pool_share_bps=p["POOL_SHARE_BPS"],
             has_pool=inputs["variant"] == "A",
-            accepts_interest=lambda: False,  # no pool deposits in any redemption vector
+            # no pool deposits in any redemption vector: the default pool hook declines
             now=t0,
             last_accrual=t0,
         )

@@ -60,6 +60,7 @@ contract BagehotFactory {
         uint256 gasReserve;
         uint256 ratePerSecond;
         uint256 poolShareBps;
+        uint256 poolHookGas;
         // SortedPositions
         uint256 maxHintSteps;
         // OracleAdapter
@@ -196,7 +197,8 @@ contract BagehotFactory {
                 p.minDebt,
                 p.gasReserve,
                 p.ratePerSecond,
-                p.poolShareBps
+                p.poolShareBps,
+                p.poolHookGas
             )
         );
         c[ROLE_SORTED] = _create(blueprints[ROLE_SORTED], abi.encode(p.maxHintSteps));

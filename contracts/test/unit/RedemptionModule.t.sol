@@ -113,7 +113,15 @@ contract RedemptionModuleTest is RedemptionFixture {
 
     function test_redeemCollateral_notWiredThenOnlyTheModule() public {
         VaultManager fresh = new VaultManager(
-            address(weth), address(token), address(oracle), MCR, MIN_DEBT, GAS_RESERVE, RATE, POOL_SHARE_BPS
+            address(weth),
+            address(token),
+            address(oracle),
+            MCR,
+            MIN_DEBT,
+            GAS_RESERVE,
+            RATE,
+            POOL_SHARE_BPS,
+            200_000
         );
         vm.expectRevert(WiredBase.NotWired.selector);
         fresh.redeemCollateral(erin, 1, 0, PRICE, 1, 0, 0);

@@ -49,7 +49,7 @@ contract I13BoundCounterexampleTest is Test {
         MockLedgerViews ledger = new MockLedgerViews();
         // interest rate 0: the index stays at RAY, so normalised debt equals debt (as in the model)
         v = new VaultManagerHarness(
-            address(weth), address(token), address(oracle), 1.1e18, MIN_DEBT, 0.0375e18, 0, 7500
+            address(weth), address(token), address(oracle), 1.1e18, MIN_DEBT, 0.0375e18, 0, 7500, 200_000
         );
         address pool = makeAddr("pool");
         v.wire(address(sorted), pool, pool, address(0xDE11), address(ledger), address(0x5D));

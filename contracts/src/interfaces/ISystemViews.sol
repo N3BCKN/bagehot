@@ -14,10 +14,12 @@ interface IAuctionHouseViews {
 }
 
 /// @notice What accrual calls on the stability pool (deployment A): whether it takes its interest
-///         share (`totalDeposits ≥ MIN_DEPOSIT`, §6.6.5) and the lock-free notification (§5.10).
+///         share (`totalDeposits ≥ MIN_DEPOSIT`, a view for off-chain readers) and the lock-free hook
+///         (§5.10), which returns whether it booked the amount and declines, without changing state,
+///         below `MIN_DEPOSIT` (§6.6.5). Accrual calls only `onInterest`, guarded (§6.2, ADR-0033).
 interface IStabilityPoolInterest {
     function acceptsInterest() external view returns (bool);
-    function onInterest(uint256 amount) external;
+    function onInterest(uint256 amount) external returns (bool booked);
 }
 
 /// @notice What the stability pool calls on the DeficitLedger when its last current-epoch depositor

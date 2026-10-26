@@ -35,7 +35,7 @@ contract VaultManagerPendingTest is Test {
         sorted = new SortedPositions(30);
         MockLedgerViews ledger = new MockLedgerViews();
         v = new VaultManagerHarness(
-            address(weth), address(token), address(oracle), 1.1e18, 2000e18, 0.0375e18, 0, 7500
+            address(weth), address(token), address(oracle), 1.1e18, 2000e18, 0.0375e18, 0, 7500, 200_000
         );
         address pool = makeAddr("pool");
         v.wire(address(sorted), pool, pool, address(0xDE11), address(ledger), address(0x5D));

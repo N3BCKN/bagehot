@@ -65,7 +65,8 @@ abstract contract VaultFixture is Test {
             MIN_DEBT,
             GAS_RESERVE,
             RATE,
-            variantB ? 0 : POOL_SHARE_BPS
+            variantB ? 0 : POOL_SHARE_BPS,
+            200_000
         );
         vm_.wire(
             address(sorted), strategy, variantB ? address(0) : strategy, REDEMPTION, address(ledger), SHUTDOWN

@@ -126,8 +126,7 @@ def test_system_vector_deposit_after_idle_gets_no_back_interest() -> None:
         last_accrual=t0,
     )
     pool = sp.StabilityPool(vault, p["LIQUIDATION_PENALTY"], p["MIN_DEPOSIT"])
-    vault.accepts_interest = pool.accepts_interest
-    vault.pool_on_interest = pool.on_interest
+    vault.pool_hook = pool.on_interest
     weth0 = int(inputs["actorWeth"])
     for a in inputs["actors"]:
         vault.weth[a] = weth0

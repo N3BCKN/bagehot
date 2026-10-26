@@ -1,8 +1,14 @@
 # CHG-006: A failing stability pool must not stop accrual; its interest share falls back to the reserve
 
-- Status: **approved 2026-10-24 (option 1) — not yet applied.** Applied at P19 together with the
-  pool, with `docs/spec.md` unlocked by the human. ADR-0033 (proposed). The human attached three
-  conditions to the approval; they are acceptance criteria of P19 (§ "P19 acceptance criteria" below).
+- Status: **approved 2026-10-24 (option 1); applied at P19 on 2026-10-26** with `docs/spec.md` and
+  `spec/vectors/**` unlocked by the human: spec §3.1 (`POOL_HOOK_GAS = 200_000`, from a measured worst
+  case of 84,972 gas), §3.4 (VaultManager index 8), §5.3.4, §5.9, §5.10, §6.2, §6.6.3, §6.6.5, §11.1,
+  §11.2; `interest.json` gains `poolHook` and the vector `accrue_pool_hook_fails`. ADR-0033 accepted.
+  §3.3 needed no text: the range is a constructor check (constraint 6). The table below says "§5.7" for
+  the pool function table; it is §5.3.4. The `product_sum.json` note says "mint then onInterest"; under
+  ADR-0033 the pool books first and is minted after, with the same end state. Two sub-cases of
+  AC-CHG006-1 (liquidation, `ShutdownModule.check`) are deferred to P20 and the ShutdownModule prompt
+  (human decision 2026-10-26).
 - Raised: 2026-10-24, P15 (security-reviewer finding F4; open issue P15-1; threat T-24)
 - Affects: `docs/spec.md` §6.2 (accrual), §6.6.3 (the "Accepted" overflow paragraph), §6.6.5 and the
   pool function table (§5.7: `acceptsInterest` / `onInterest`), §3.1 / §3.3 / §3.4 (one new

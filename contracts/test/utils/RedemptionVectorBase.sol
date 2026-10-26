@@ -94,7 +94,8 @@ abstract contract RedemptionVectorBase is Test {
             _u(string.concat(p, ".MIN_DEBT")),
             _u(string.concat(p, ".GAS_RESERVE")),
             _u(string.concat(p, ".RATE_PER_SECOND")),
-            _u(string.concat(p, ".POOL_SHARE_BPS"))
+            _u(string.concat(p, ".POOL_SHARE_BPS")),
+            200_000
         );
         rm = new RedemptionModule(
             address(token),

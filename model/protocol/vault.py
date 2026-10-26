@@ -4,7 +4,8 @@ Spec §4.2, §5.1.1–5.1.12, §6.2, §6.5.3–6.5.4, §6.7.3. Integers only. Co
 accrual and its routing (P15), the redemption loop (P16), the shutdown hooks and the views;
 redistribution (P20) has not happened, so the accumulators are 0. Time is `now`, set by the caller
 (block.timestamp). The pool and the ledger are stand-ins: balances "pool" / "ledger" in `stable`,
-the pool's `acceptsInterest` as a callable, the hooks' effects recorded in `pool_interest` /
+the pool's `onInterest` as a callable `pool_hook` (ADR-0033: returns whether it booked; raising
+stands for a failed guarded call), the hooks' effects recorded in `pool_interest` /
 `ledger_reserve`, and the ledger and auction-house views that `systemColl` / `systemDebt` read as
 plain fields (`ledger_recovered_coll`, …). The P22 model extends this module rather than replacing
 it.
@@ -103,9 +104,10 @@ class Vault:
     rate_per_second: int = 0
     pool_share_bps: int = 0
     has_pool: bool = True  # deployment A; B has no stability pool
-    accepts_interest: Callable[[], bool] = lambda: False
-    # the pool's §6.6.5 booking, called after its share is minted (deployment A with a pool model)
-    pool_on_interest: Callable[[int], object] | None = None
+    # §6.2 / ADR-0033: the pool's `onInterest(offered) -> booked`. None is a pool that always
+    # declines (no deposits). An exception stands for a failed guarded call (revert, out of gas,
+    # malformed return); gas is not modelled, so `InsufficientGasForPoolHook` never arises here.
+    pool_hook: Callable[[int], bool] | None = None
     now: int = 0
     last_accrual: int = 0
     pool_interest: int = 0
@@ -146,7 +148,7 @@ class Vault:
         saved = {
             f.name: copy.deepcopy(getattr(self, f.name))
             for f in fields(self)
-            if f.name not in ("price_source", "sorted", "accepts_interest", "pool_on_interest")
+            if f.name not in ("price_source", "sorted", "pool_hook")
         }
         saved_sorted = (
             copy.deepcopy(self.sorted.nodes),
@@ -201,14 +203,21 @@ class Vault:
         interest = mul_div_up(self.total_norm_debt, new - old, RAY)
         self.index, self.last_accrual = new, self.now
         to_pool = 0
-        if self.has_pool and self.accepts_interest():
-            to_pool = mul_div_down(interest, self.pool_share_bps, BPS)
+        if self.has_pool:
+            offered = mul_div_down(interest, self.pool_share_bps, BPS)
+            if offered > 0:
+                try:
+                    ok, booked = True, bool(self.pool_hook(offered)) if self.pool_hook else False
+                except Exception:  # a failed guarded call: the pool's state is rolled back
+                    ok, booked = False, False
+                if ok and booked:
+                    to_pool = offered
+                elif not ok:
+                    self.events.append(("PoolInterestRedirected", offered))
         to_reserve = interest - to_pool
-        if to_pool > 0:
+        if to_pool > 0:  # after the pool booked it
             self._mint("pool", to_pool)
             self.pool_interest += to_pool
-            if self.pool_on_interest is not None:
-                self.pool_on_interest(to_pool)
         if to_reserve > 0:
             self._mint("ledger", to_reserve)
             self.ledger_reserve += to_reserve

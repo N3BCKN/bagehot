@@ -11,14 +11,11 @@ import {
 /// @notice LOCAL ONLY. Occupies the strategy role (StabilityPool in A, DutchAuctionHouse in B) until
 ///         those contracts exist (P19, P33), answering exactly what the VaultManager, the
 ///         RedemptionModule and the shutdown gate read: an empty pool that takes no interest
-///         (`acceptsInterest() == false`, §6.6.5, so accrual routes everything to the reserve), and
+///         (it declines every interest offer, §6.6.5, so accrual routes everything to the reserve), and
 ///         an auction house with no lot, no auction and no buyer callback. It holds no funds and
 ///         makes no calls. It has no `onLiquidation`: once P20 adds liquidation, liquidations in a
 ///         local deployment revert until P19/P33 replace it. Deploys on chain 31337 only.
 contract StandInStrategy is IStabilityPoolInterest, IAuctionHousePurchaseState, IAuctionHouseViews {
-    /// @notice `onInterest` reached, which accrual never does while `acceptsInterest()` is false.
-    error StandInNoPool();
-
     /// @notice Deployed outside chain 31337.
     error StandInLocalOnly();
 
@@ -31,9 +28,10 @@ contract StandInStrategy is IStabilityPoolInterest, IAuctionHousePurchaseState, 
         return false;
     }
 
-    /// @notice Never reached: accrual calls it only after `acceptsInterest()` returned true.
-    function onInterest(uint256) external pure {
-        revert StandInNoPool();
+    /// @notice An empty pool declines every offer (§6.6.5, ADR-0033), so accrual routes the whole
+    ///         interest to the reserve without a `PoolInterestRedirected` event.
+    function onInterest(uint256) external pure returns (bool) {
+        return false;
     }
 
     /// @notice No buyer callback ever runs (§6.8.4).

@@ -16,7 +16,8 @@
         "totalDeposits": "10000000000000000000",
         "RATE_PER_SECOND": "1547125957863212449",
         "POOL_SHARE_BPS": "7500",
-        "MIN_DEPOSIT": "1000000000000000000"
+        "MIN_DEPOSIT": "1000000000000000000",
+        "poolHook": "book"
       },
       "steps": [
         {
@@ -44,7 +45,8 @@
         "totalDeposits": "500000000000000000",
         "RATE_PER_SECOND": "1547125957863212449",
         "POOL_SHARE_BPS": "7500",
-        "MIN_DEPOSIT": "1000000000000000000"
+        "MIN_DEPOSIT": "1000000000000000000",
+        "poolHook": "decline"
       },
       "steps": [
         {
@@ -145,6 +147,36 @@
             "normFromBorrow_up": "952380952380952380941879044",
             "normFromRepay_down": "952380952380952380941879043",
             "debtOf(normFromBorrow)": "1000000000000000000000000001"
+          }
+        }
+      ],
+      "expected": {}
+    },
+    {
+      "name": "accrue_pool_hook_fails",
+      "level": "unit",
+      "note": "pool has >= MIN_DEPOSIT but its onInterest call fails (reverts, runs out of POOL_HOOK_GAS or answers malformed) with enough caller gas: the offered share goes to the reserve and PoolInterestRedirected(offered) is emitted; toPool + toReserve = interest (spec 6.2, ADR-0033)",
+      "inputs": {
+        "variant": "A",
+        "index": "1000000000000000000000000000",
+        "lastAccrual": "1000000",
+        "totalNormDebt": "1000000000000000000000000",
+        "totalDeposits": "10000000000000000000",
+        "RATE_PER_SECOND": "1547125957863212449",
+        "POOL_SHARE_BPS": "7500",
+        "MIN_DEPOSIT": "1000000000000000000",
+        "poolHook": "fail"
+      },
+      "steps": [
+        {
+          "op": "accrue",
+          "t": "1003600",
+          "result": {
+            "index": "1000005569668954547626347955",
+            "interest": "5569668954547626348",
+            "toPool": "0",
+            "toReserve": "5569668954547626348",
+            "redirected": "4177251715910719761"
           }
         }
       ],

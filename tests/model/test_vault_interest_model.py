@@ -20,8 +20,24 @@ MAX_RATE = 21_979_553_151_239_153_028
 MCR, MIN_DEBT, GAS, PRICE = 11 * 10**17, 2_000 * 10**18, 375 * 10**14, 2_000 * 10**18
 
 
+def _hook(mode: str, deposits: int):
+    """The pool's `onInterest` (ADR-0033): `book` books while deposits ≥ MIN_DEPOSIT and declines
+    below; `decline` always declines; `fail` raises, as a failed guarded call."""
+
+    def hook(_amount: int) -> bool:
+        if mode == "fail":
+            raise RuntimeError("guarded call failed")
+        return mode == "book" and deposits >= 10**18
+
+    return hook
+
+
 def vault(
-    rate: int = RATE, pool_share: int = 7_500, has_pool: bool = True, deposits: int = 0
+    rate: int = RATE,
+    pool_share: int = 7_500,
+    has_pool: bool = True,
+    deposits: int = 0,
+    pool_hook: str = "book",
 ) -> vm.Vault:
     v = vm.Vault(
         MCR,
@@ -32,14 +48,17 @@ def vault(
         rate_per_second=rate,
         pool_share_bps=pool_share,
         has_pool=has_pool,
-        accepts_interest=lambda: deposits >= 10**18,
+        pool_hook=_hook(pool_hook, deposits),
     )
     for who in ("alice", "bob"):
         v.weth[who] = 10**30
     return v
 
 
-@pytest.mark.parametrize("vec", VECTORS[:3], ids=[v["name"] for v in VECTORS[:3]])
+ACCRUE = [v for v in VECTORS if "variant" in v["inputs"]]
+
+
+@pytest.mark.parametrize("vec", ACCRUE, ids=[v["name"] for v in ACCRUE])
 def test_vectors_accrue(vec: dict) -> None:
     i = vec["inputs"]
     b = i["variant"] == "B"
@@ -48,6 +67,7 @@ def test_vectors_accrue(vec: dict) -> None:
         int(i["POOL_SHARE_BPS"]),
         not b,
         0 if b else int(i["totalDeposits"]),
+        i.get("poolHook", "book"),
     )
     v.index, v.last_accrual, v.total_norm_debt = (
         int(i["index"]),
@@ -67,6 +87,11 @@ def test_vectors_accrue(vec: dict) -> None:
         v.now,
     )
     assert (v.pool_interest, v.ledger_reserve) == (int(r["toPool"]), int(r["toReserve"]))
+    redirected = [e for e in v.events if e[0] == "PoolInterestRedirected"]
+    if "redirected" in r:
+        assert redirected == [("PoolInterestRedirected", int(r["redirected"]))]
+    else:
+        assert redirected == []
 
 
 def test_vector_frequency() -> None:

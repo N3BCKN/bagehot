@@ -253,6 +253,7 @@ where each one started.
 | `ANNUAL_RATE` | (deployment script) | decimal | `[0, 1]` | `0.05` | H | Annual compounded interest rate |
 | `RATE_PER_SECOND` | VaultManager | RAY | `[0, 21_979_553_151_239_153_028]` (= the derived value for `ANNUAL_RATE = 1`) | `1_547_125_957_863_212_449` | D | `round_half_even(((1 + ANNUAL_RATE)^(1/31_536_000) − 1) · RAY)` at ≥ 80 significant digits |
 | `POOL_SHARE_BPS` | VaultManager | bps | `[0, 10_000]` | `7_500` (A), `0` (B) | H | Share of accrued interest minted to the pool (A); must be 0 in B |
+| `POOL_HOOK_GAS` | VaultManager | gas | `[50_000, 1_000_000]` | `200_000` | E | Gas forwarded to the stability pool's `onInterest` in accrual (§6.2, ADR-0033). Derived at P19 from the real pool's worst-case `onInterest` — every slot cold, a fresh `(epoch, scale)` sum `G`, the carry and `interestGainsBalance` written from zero — measured at 84,972 gas including the cold account access (`StabilityPoolGasTest`); the value is at least twice that, rounded up. The post-failure floor `ceil(2·POOL_HOOK_GAS / 63)` (6,350) is derived, not a parameter. Range-checked but unused in B |
 | `MAX_HINT_STEPS` | SortedPositions | count | `[1, 1_000]` | `30` | E | Maximum nodes visited by a hint walk (§6.3) |
 | `LIQUIDATION_PENALTY` | StabilityPool / DutchAuctionHouse | WAD | `[0, 0.5e18]` | `0.05e18` | H | A: cap on seized value is debt × (1 + penalty). B: tab = debt × (1 + penalty). Equal in A and B |
 | `MIN_DEPOSIT` | StabilityPool | stable wei | `≥ 1e18` | `1e18` | H | Minimum non-zero deposit; minimum total deposits for the pool to receive interest |
@@ -332,7 +333,7 @@ the table says otherwise. `wire` first checks `msg.sender == deployer` (`NotDepl
 
 | Contract | Signature (argument index: check) |
 |---|---|
-| VaultManager | `constructor(address weth, address token, address oracle, uint256 MCR, uint256 MIN_DEBT, uint256 GAS_RESERVE, uint256 RATE_PER_SECOND, uint256 POOL_SHARE_BPS)` — 3: `WAD < MCR ≤ 2·WAD`; 4: `≥ 1e18`; 5: `> 0`; 6: `≤ 21_979_553_151_239_153_028`; 7: `≤ 10_000` |
+| VaultManager | `constructor(address weth, address token, address oracle, uint256 MCR, uint256 MIN_DEBT, uint256 GAS_RESERVE, uint256 RATE_PER_SECOND, uint256 POOL_SHARE_BPS, uint256 POOL_HOOK_GAS)` — 3: `WAD < MCR ≤ 2·WAD`; 4: `≥ 1e18`; 5: `> 0`; 6: `≤ 21_979_553_151_239_153_028`; 7: `≤ 10_000`; 8: `50_000 ≤ x ≤ 1_000_000` |
 | | `wire(address sorted, address strategy, address stabilityPool, address redemptionModule, address deficitLedger, address shutdownModule)` — 2: `stabilityPool ∈ {address(0), strategy}`, and `stabilityPool == address(0) ⇒ POOL_SHARE_BPS == 0` |
 | SortedPositions | `constructor(uint256 MAX_HINT_STEPS)` — 0: `1 ≤ x ≤ 1_000` · `wire(address vaultManager)` |
 | StabilityPool | `constructor(address weth, address token, uint256 LIQUIDATION_PENALTY, uint256 MIN_DEPOSIT)` — 2: `≤ 0.5e18`; 3: `≥ 1e18` · `wire(address vaultManager, address deficitLedger)` |
@@ -802,8 +803,8 @@ if swept > 0: emit PoolDustSwept(swept)
 | Function | Caller | Algorithm |
 |---|---|---|
 | `onLiquidation(positionId, owner, debt, coll, price) returns (debtAbsorbed, collReturned)` | VaultManager | §6.6.4 |
-| `onInterest(amount)` | VaultManager | §6.6.5 |
-| `acceptsInterest() view returns (bool)` | anyone | `totalDeposits >= MIN_DEPOSIT` |
+| `onInterest(amount) returns (bool booked)` | VaultManager | §6.6.5 (ADR-0033): books and returns `true`, or declines with `false` and no state change when `totalDeposits < MIN_DEPOSIT` |
+| `acceptsInterest() view returns (bool)` | anyone | `totalDeposits >= MIN_DEPOSIT`; for off-chain readers — accrual does not call it (ADR-0033) |
 
 Views: `compoundedDeposit(a)`, `gains(a)`, `getTotalDeposits()`.
 
@@ -906,7 +907,12 @@ function belowCritical(price) view returns (bool):
 | `wire(vaultManager, strategy, deficitLedger, shutdownModule)` | deployer, once | §3.4, §9 |
 
 The supply cap (`2^128 − 1 ≈ 3.4·10^38` wei) is ~10^11 times any realistic supply; if it were ever
-reached, `accrue` would revert and with it every operation that accrues — accepted as unreachable.
+reached, `accrue` would revert and with it every operation that accrues. It is reachable only by
+compounding interest: borrowing cannot get there (debt is at most collateral value / MCR, and all ETH
+in existence at `MAX_PRICE` is worth ~1.2·10^38 wei), while interest needs ~38 years at 100 %/yr from
+a 1B-token supply and centuries at 5 % — a fixed horizon no caller can bring closer, like the index
+overflow (§2.2). Since ADR-0033 it is accrual's only remaining revert path; a failing pool no longer
+is one (§6.2). Accepted.
 
 ### 5.10 Cross-contract call graph and reentrancy
 
@@ -918,7 +924,7 @@ is consistent:
 | Path | Notes |
 |---|---|
 | `StabilityPool.deposit/withdraw/claimGains → VaultManager.accrue → StabilityPool.onInterest` | `onInterest` is lock-free (onlyVault). It runs before the pool reads any deposit state in the outer call |
-| `VaultManager.* → VaultManager.accrue → StabilityPool.onInterest / DeficitLedger.onInterest` | |
+| `VaultManager.* → VaultManager.accrue → StabilityPool.onInterest / DeficitLedger.onInterest` | the pool call is the guarded, gas-capped call of §6.2 (ADR-0033): a pool that reverts, runs out of gas or answers malformed cannot revert accrual. The ledger call is not guarded; it stays call-free and lock-free |
 | `VaultManager.liquidate → strategy.onLiquidation` | A: pool locked normally (not lock-free); B: house locked |
 | `DutchAuctionHouse.buy → who.onAuctionPurchase(...)` | arbitrary external call (§6.8.4); the house lock is held, so the callback cannot re-enter the house, and therefore cannot complete a liquidation in deployment B |
 | `RedemptionModule.redeem → OracleAdapter.fetchPrice, VaultManager.accrue, VaultManager.redeemCollateral` (state-changing), plus the views named in §6.7.2: `VaultManager.shutdown`, `token.balanceOf/totalSupply`, `DutchAuctionHouse.inPurchase` (B), `ShutdownModule.belowCritical` | the views change nothing and cannot re-enter; `belowCritical` reads `VaultManager.systemColl/systemDebt`, which read the ledger and (in B) the house |
@@ -955,10 +961,15 @@ function accrue():
     interest = mulDivUp(totalNormDebt, newIndex − index, RAY)
     index = newIndex; lastAccrual = block.timestamp
     toPool = 0
-    if stabilityPool != address(0) and stabilityPool.acceptsInterest():
-        toPool = mulDivDown(interest, POOL_SHARE_BPS, BPS)
+    if stabilityPool != address(0):
+        offered = mulDivDown(interest, POOL_SHARE_BPS, BPS)
+        if offered > 0:
+            (ok, booked) = guardedCall(stabilityPool.onInterest(offered), POOL_HOOK_GAS)
+            if ok and booked: toPool = offered
+            else if not ok: require(gasleft() ≥ ceil(2·POOL_HOOK_GAS / 63), InsufficientGasForPoolHook)
+                            emit PoolInterestRedirected(offered)
     toReserve = interest − toPool
-    if toPool > 0:    token.mint(stabilityPool, toPool);   stabilityPool.onInterest(toPool)
+    if toPool > 0:    token.mint(stabilityPool, toPool)   // after the pool booked it
     if toReserve > 0: token.mint(deficitLedger, toReserve); deficitLedger.onInterest(toReserve)
     emit InterestAccrued(newIndex, interest, toPool, toReserve, block.timestamp)
 ```
@@ -966,6 +977,35 @@ function accrue():
 Notes. The index grows even when `totalNormDebt == 0` (then `interest = 0`). Positions' debts are
 never written by accrual: `debtOf(n)` reads the index. Debt in auctions and the deficit do not accrue
 interest. Vectors: `interest.json`.
+
+**The pool hook is non-fatal (ADR-0033, CHG-006).** Accrual makes one call to the pool,
+`onInterest(offered) returns (bool booked)`; the pool returns `false` without changing state when
+`totalDeposits < MIN_DEPOSIT` and books the amount otherwise.
+
+- `guardedCall` is a fixed-shape assembly `call` (the ADR-0029 pattern): it forwards `POOL_HOOK_GAS`,
+  copies return data only if it is exactly 32 bytes, and decodes it only if that word is 0 or 1.
+  `ok = false` when the call reverts, runs out of gas, returns any other size or any other word.
+  Solidity `try/catch` is not used: it reverts the caller on malformed return data.
+- Outcomes: *booked* — the pool is minted `offered` after it booked it; *declined* — `offered` goes to
+  the reserve, no event; *failed* — `offered` goes to the reserve and `PoolInterestRedirected(offered)`
+  is emitted. `toPool + toReserve = interest` in every branch (I2), and nothing is minted to a pool
+  that did not book (I1, pool). Between booking and minting no external call runs.
+- **Gas rule.** The call forwards `F = min(POOL_HOOK_GAS, ⌊63/64 · available⌋)`. A call that failed
+  because the caller supplied too little gas leaves the VaultManager its own reserve `< F/63` plus at
+  most `F/63` handed back by any chain of nested calls (the pool makes none; the bound does not rely
+  on it), so `gasleft() < 2·POOL_HOOK_GAS/63`. The check after a failed call turns every starved call
+  into a revert of the whole transaction instead of a redirection, so a caller cannot strip
+  depositors of their interest by choosing a gas limit. A genuine failure either reverts early
+  (handing back almost all of `F`) or burns the whole cap while the caller supplied more than
+  `POOL_HOOK_GAS · 64/63 + ceil(2·POOL_HOOK_GAS/63)`; both pass the check and are redirected. This is
+  §6.10.3's argument (ADR-0030) applied to this call. It assumes a starved `onInterest` fails by running
+  out of gas, not by reverting early: a pool that branched on `gasleft()` and reverted when short would
+  hand the gas back and pass the check. §6.6.5's `onInterest` never reads `gasleft()` and makes no
+  external call (P19's caller-gas sweep against a pool that branched on it found exactly that
+  redirection; against the real pool and an honest heavy pool it found none).
+- The remaining calls — `deficitLedger.onInterest` and the two mints — have closed revert causes that
+  no caller can reach (ADR-0033 §3); accrual's only remaining revert path is `SupplyCapExceeded`
+  (§5.9).
 
 ### 6.3 Sorted list
 
@@ -1256,7 +1296,11 @@ Write `perUnit_k = (c_k·DP + err_{k−1}) / T_k` with `DP = DECIMAL_PRECISION` 
 `S` or `G` (checked arithmetic) can therefore only overflow after ≥ 338 adversarial events within one
 `(epoch, scale)`, each requiring either an interest accrual near the supply cap or a full-supply
 deposit-and-withdraw cycle. Under realistic sizes (`T ≤ 10^33`, interest `≤ 10^26`) every event adds
-`≤ 10^69`, and overflow would take `≥ 10^8` events in a single `(epoch, scale)`. Accepted.
+`≤ 10^69`, and overflow would take `≥ 10^8` events in a single `(epoch, scale)`. Accepted, with these consequences. A `G` overflow makes the pool's `onInterest` fail: accrual
+redirects the pool's share to the reserve for the rest of that `(epoch, scale)` and emits
+`PoolInterestRedirected` (§6.2, ADR-0033) — depositors lose that interest, and nothing else is
+blocked. An `S` overflow would make liquidations absorbed by the pool in that `(epoch, scale)` revert;
+it needs the same ≥ 338 adversarial events.
 
 #### 6.6.4 `onLiquidation` (pool)
 
@@ -1281,16 +1325,19 @@ function onLiquidation(positionId, owner, debt, coll, price):     // onlyVault; 
 #### 6.6.5 Interest
 
 ```
-function onInterest(amount):            // onlyVault, lock-free; precondition totalDeposits ≥ MIN_DEPOSIT
+function onInterest(amount) returns (booked):   // onlyVault, lock-free, call-free (ADR-0033)
+    if totalDeposits < MIN_DEPOSIT: return false    // declined: no state change
     num = amount * DECIMAL_PRECISION + lastInterestError
     perUnit = num / totalDeposits
     lastInterestError = num − perUnit * totalDeposits
     epochToScaleToG[currentEpoch][currentScale] += perUnit * P
     interestGainsBalance += amount
     emit PoolInterest(amount, perUnit, lastInterestError)
+    return true
 ```
 
-Interest income is a claimable gain; it does not compound into the deposit.
+Interest income is a claimable gain; it does not compound into the deposit. The VaultManager mints
+the booked amount to the pool after this call returns (§6.2).
 
 #### 6.6.6 Compounded deposit
 
@@ -2040,6 +2087,7 @@ Enumerations (numeric values are part of the ABI):
 | | `Redistributed` | `uint256 coll, uint256 normDebt, uint256 LColl, uint256 LDebt, uint256 errorColl, uint256 errorDebt, uint256 totalStakes` |
 | | `SystemSnapshotsUpdated` | `uint256 totalStakesSnapshot, uint256 totalCollateralSnapshot` |
 | | `InterestAccrued` | `uint256 index, uint256 interest, uint256 toPool, uint256 toReserve, uint256 timestamp` |
+| | `PoolInterestRedirected` | `uint256 amount` — the pool's offered share went to the reserve because its `onInterest` call failed (§6.2, ADR-0033) |
 | | `PositionRedeemed` | `uint256 indexed id, uint256 debtRedeemed, uint256 collToRedeemer, uint256 surplusToOwner, bool closed` |
 | | `GasReserveReclaimed` | `uint256 indexed id, address indexed owner, uint256 amount` |
 | | `VaultShutdown` | `uint256 index` |
@@ -2095,6 +2143,7 @@ function that can raise the error from this spec's own checks.
 | `NotSettled()` | settlement required | `reclaimGasReserve`, `claim` |
 | `PriceUnusable()` | required price not usable | per §7 |
 | `InsufficientGasForOracle()` | `gasleft() < ORACLE_POST_FAILURE_GAS` after a failed feed call | `fetchPrice` (and everything that calls it) |
+| `InsufficientGasForPoolHook()` | `gasleft() < ceil(2·POOL_HOOK_GAS / 63)` after a failed pool `onInterest` call (§6.2) | every operation that accrues (deployment A) |
 | `PositionNotActive()` | status ≠ Active | position functions, `liquidate`, `reclaimGasReserve` |
 | `DebtBelowMinimum()` | `debt < MIN_DEBT` at opening | `openPosition` |
 | `IcrBelowMcr()` | resulting ICR below MCR | `openPosition`, `withdrawCollateral`, `borrow` |

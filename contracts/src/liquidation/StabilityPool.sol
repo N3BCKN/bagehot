@@ -3,7 +3,7 @@ pragma solidity 0.8.28;
 
 import {IPoolVault} from "../interfaces/IPoolVault.sol";
 import {IStableToken} from "../interfaces/IStableToken.sol";
-import {IDeficitLedgerPoolDust} from "../interfaces/ISystemViews.sol";
+import {IDeficitLedgerPoolDust, IStabilityPoolInterest} from "../interfaces/ISystemViews.sol";
 import {InsufficientBalance, InvalidParameter, Unauthorized, ZeroAmount} from "../lib/Errors.sol";
 import {Rounding} from "../lib/Rounding.sol";
 import {WiredBase} from "../lib/Wired.sol";
@@ -20,7 +20,7 @@ import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/Reentrancy
 /// @dev One transient lock over `deposit`, `withdraw`, `claimGains` and `onLiquidation`. `onInterest`
 ///      is the lock-free callback of §5.10: VaultManager only, call-free, reached from inside a locked
 ///      depositor call through `vaultManager.accrue()` before the pool reads any deposit state.
-contract StabilityPool is WiredBase, ReentrancyGuardTransient {
+contract StabilityPool is WiredBase, ReentrancyGuardTransient, IStabilityPoolInterest {
     using SafeERC20 for IERC20;
     using SafeERC20 for IStableToken;
 

@@ -26,8 +26,13 @@ contract VaultManagerHarness is VaultManager {
         uint256 minDebt,
         uint256 gasReserve,
         uint256 ratePerSecond,
-        uint256 poolShareBps
-    ) VaultManager(weth_, token_, oracle_, mcr, minDebt, gasReserve, ratePerSecond, poolShareBps) {}
+        uint256 poolShareBps,
+        uint256 poolHookGas
+    )
+        VaultManager(
+            weth_, token_, oracle_, mcr, minDebt, gasReserve, ratePerSecond, poolShareBps, poolHookGas
+        )
+    {}
 
     /// @dev The accrual state an `interest.json` vector starts from (§6.2). `totalNormDebt` set
     ///      without supply: I2 is not meaningful after this.
@@ -39,6 +44,11 @@ contract VaultManagerHarness is VaultManager {
 
     /// @dev A non-round index, so rounding directions R1 / R2 / R3 become observable (P15 makes the
     ///      index move for real; supply is not adjusted here, so I2 is not meaningful after this).
+    /// @notice The post-failure gas check of §6.2 with an injected `gasleft()` (CHG-006 boundary test).
+    function requirePoolHookGas(uint256 left) external view {
+        _requirePoolHookGas(left);
+    }
+
     function setIndex(uint256 index_) external {
         index = index_;
     }

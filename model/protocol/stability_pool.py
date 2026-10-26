@@ -399,16 +399,20 @@ class StabilityPool:
         return d_p, coll_returned
 
     def on_interest(self, amount: int) -> bool:
-        """§6.6.5 / ADR-0033: declines below MIN_DEPOSIT without changing state; R15 with carry."""
+        """§6.6.5 / ADR-0033: declines below MIN_DEPOSIT without changing state; R15 with carry.
+        Every value is computed before any is stored, so a failure (Overflow) leaves no trace —
+        as the reverted guarded call does in the contract."""
         t = self.total_deposits
         if t < self.min_deposit:
             return False
         num = _c(amount * DECIMAL_PRECISION + self.last_interest_error)
         per_unit = num // t  # R15: floor with carry
-        self.last_interest_error = num - per_unit * t
         key = (self.current_epoch, self.current_scale)
-        self.g[key] = _c(self.g.get(key, 0) + _c(per_unit * self.p))
-        self.interest_gains_balance = _c(self.interest_gains_balance + amount)
+        new_g = _c(self.g.get(key, 0) + _c(per_unit * self.p))
+        new_balance = _c(self.interest_gains_balance + amount)
+        self.last_interest_error = num - per_unit * t
+        self.g[key] = new_g
+        self.interest_gains_balance = new_balance
         self.events.append(("PoolInterest", amount, per_unit, self.last_interest_error))
         return True
 

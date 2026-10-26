@@ -247,8 +247,8 @@ contract DeployScriptsTest is Test {
     {
         p.weth = c.weth;
         (p.priceFeed, p.sequencerFeed) = (c.priceFeed, c.sequencerFeed);
-        (p.mcr, p.minDebt, p.gasReserve, p.ratePerSecond, p.poolShareBps) =
-        (c.mcr, c.minDebt, c.gasReserve, c.ratePerSecond, c.poolShareBps);
+        (p.mcr, p.minDebt, p.gasReserve, p.ratePerSecond, p.poolShareBps, p.poolHookGas) =
+        (c.mcr, c.minDebt, c.gasReserve, c.ratePerSecond, c.poolShareBps, c.poolHookGas);
         p.maxHintSteps = c.maxHintSteps;
         (p.staleness, p.gracePeriod, p.minPrice, p.maxPrice) =
         (c.staleness, c.gracePeriod, c.minPrice, c.maxPrice);

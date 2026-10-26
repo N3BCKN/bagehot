@@ -171,7 +171,8 @@ contract CoreHandler is Test {
             MIN_DEBT,
             GAS_RESERVE,
             RATE,
-            variantB ? 0 : POOL_SHARE_BPS
+            variantB ? 0 : POOL_SHARE_BPS,
+            200_000
         );
         rm = new RedemptionModule(address(token), address(counting), FEE_FLOOR, BETA, DECAY);
         gate = new MockShutdownGate(address(v), variantB ? address(house) : address(0), CRITICAL_TCR);
