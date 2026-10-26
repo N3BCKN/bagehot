@@ -20,7 +20,7 @@ contract StabilityPoolHarness is StabilityPool {
 
 /// @notice The test VaultManager of the `product_sum.json` unit vectors: `accrue()` is a no-op
 ///         (counted), `hook.offset(d, c)` sends `c` WETH to the pool and offsets, `hook.onInterest(g)`
-///         mints `g` to the pool and notifies it, `liquidate` sends `coll` WETH and calls
+///         lets the pool book `g` and mints it if booked (§6.2), `liquidate` sends `coll` WETH and calls
 ///         `onLiquidation`. It is the token's minter and reports the pool as its `stabilityPool`, which
 ///         the DeficitLedger stand-in authorises `onPoolDust` against.
 contract PoolTestVault {
@@ -73,19 +73,21 @@ contract PoolTestVault {
         pool.offsetForTest(d, c);
     }
 
-    /// @notice The vectors' `hook.onInterest`: mint, then book (the end state equals booking first).
+    /// @notice Accrual's pool step as spec §6.2 orders it (ADR-0033): the pool books, and only then is
+    ///         it minted the amount — a pool that declines is minted nothing. The vectors' note says
+    ///         "mint then onInterest"; for a booked amount the end state is the same.
     function interest(uint256 g) public returns (bool booked) {
-        token.mint(address(pool), g);
         booked = pool.onInterest(g);
+        if (booked) token.mint(address(pool), g);
     }
 
     /// @notice Gas used by `onInterest(g)` as accrual calls it (CHG-006's measurement): mint first,
     ///         then the call, timed around the call alone (the pool account access is included).
     function measureInterest(uint256 g) external returns (uint256 used, bool booked) {
-        token.mint(address(pool), g);
         uint256 before = gasleft();
         booked = pool.onInterest(g);
         used = before - gasleft();
+        if (booked) token.mint(address(pool), g);
     }
 
     function liquidate(uint256 id, address owner, uint256 debt, uint256 coll, uint256 price)

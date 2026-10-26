@@ -44,6 +44,12 @@ contract CoreInvariantsTest is Test {
         _assert(ok, why);
     }
 
+    /// @dev Deployment A's real pool (P19): I1 pool row, I3's exact inequalities and P range, U4.
+    function invariant_I3_poolSolvencyAndU4() public view {
+        (bool ok, string memory why) = handler.checkPool();
+        _assert(ok, why);
+    }
+
     function invariant_I2_supplyDriftBound() public view {
         (bool ok, string memory why) = handler.checkI2();
         _assert(ok, why);
@@ -124,6 +130,9 @@ contract CoreInvariantsTest is Test {
         for (uint256 i; i < 11; ++i) {
             emit log_named_uint(string.concat("ok: ", names[i]), handler.ok(bytes32(bytes(names[i]))));
         }
+        emit log_named_uint("ok: poolDeposit", handler.ok("poolDeposit"));
+        emit log_named_uint("ok: poolWithdraw", handler.ok("poolWithdraw"));
+        emit log_named_uint("ok: poolClaim", handler.ok("poolClaim"));
         // CHG-005: every campaign run reaches both regimes. A shrunk replay of a failure is not a
         // run (it may hold a single call), so it is held only to the failure it reproduces.
         if (handler.calls() >= 100) {

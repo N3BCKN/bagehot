@@ -51,6 +51,10 @@ contract CoreProperties is CoreHandler {
         (ok,) = checkI12();
     }
 
+    function property_I3_poolSolvency() external view returns (bool ok) {
+        (ok,) = checkPool();
+    }
+
     function property_I13_sortedOrder() external view returns (bool ok) {
         (ok,) = checkI13();
     }

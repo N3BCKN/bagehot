@@ -8,7 +8,8 @@ import {StableToken} from "../../../src/core/StableToken.sol";
 import {VaultManager} from "../../../src/core/VaultManager.sol";
 import {ISortKeySource} from "../../../src/interfaces/ISortKeySource.sol";
 import {ISortedPositions} from "../../../src/interfaces/ISortedPositions.sol";
-import {PriceUnusable, SystemSettled, SystemShutdown} from "../../../src/lib/Errors.sol";
+import {InsufficientBalance, PriceUnusable, SystemSettled, SystemShutdown} from "../../../src/lib/Errors.sol";
+import {StabilityPool} from "../../../src/liquidation/StabilityPool.sol";
 import {MockAggregator} from "../../../src/mocks/MockAggregator.sol";
 import {MockSequencerFeed} from "../../../src/mocks/MockSequencerFeed.sol";
 import {RedemptionModule} from "../../../src/redemption/RedemptionModule.sol";
@@ -17,7 +18,7 @@ import {I13HiddenKeys} from "../../utils/I13HiddenKeys.sol";
 import {RedemptionLastVisit} from "../../utils/RedemptionLastVisit.sol";
 import {MockPurchaseHouse, MockShutdownGate} from "../../utils/RedemptionMocks.sol";
 import {VaultManagerHarness} from "../../utils/VaultManagerHarness.sol";
-import {MockLedgerViews, MockPool, MockWETH} from "../../utils/VaultMocks.sol";
+import {MockLedgerViews, MockWETH} from "../../utils/VaultMocks.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Test} from "forge-std/Test.sol";
@@ -26,7 +27,8 @@ import {Vm} from "forge-std/Vm.sol";
 /// @notice The core handler (P17): deploys the core of one deployment (A or B) at the start
 ///         parameters and drives it with bounded actions — open, addCollateral, withdrawCollateral,
 ///         borrow, repay, close, redeem, redeemAcrossTail, warp, movePrice (±30 %), toggleOracle
-///         (all nine unusable reasons of §6.10.1), donate, togglePoolDeposits, the test-only
+///         (all nine unusable reasons of §6.10.1), donate, the real StabilityPool's deposit / withdraw /
+///         claim in deployment A (P19), the test-only
 ///         redistribute (I13's tolerance regime before P20) and rare shutdown / settlement through the
 ///         wired shutdown address (before the ShutdownModule exists). `claimSurplus` from the prompt is
 ///         superseded by the P16 push model (no such function).
@@ -68,7 +70,7 @@ contract CoreHandler is Test {
     CountingOracle public counting;
     SortedPositions public sorted;
     MockLedgerViews public ledger;
-    MockPool public pool;
+    StabilityPool public pool; // deployment A only (P19); address(0) in B
     MockPurchaseHouse public house;
     VaultManagerHarness public v;
     RedemptionModule public rm;
@@ -94,6 +96,7 @@ contract CoreHandler is Test {
     bytes4 public lastUnexpected;
     string public lastUnexpectedAction;
     uint256 public i9Violations;
+    uint256 public poolEntitlementViolations; // I3: withdraw paid other than min(x, compounded)
     uint256 public i12Violations;
     uint256 public oracleModeMismatches;
     uint256 public i5Violations;
@@ -160,7 +163,7 @@ contract CoreHandler is Test {
         counting = new CountingOracle(oracle);
         sorted = new SortedPositions(HINT_STEPS);
         ledger = new MockLedgerViews();
-        pool = new MockPool();
+        if (!variantB) pool = new StabilityPool(address(weth), address(token), 0.05e18, 1e18);
         house = new MockPurchaseHouse();
         address strategy = variantB ? address(house) : address(pool);
         v = new VaultManagerHarness(
@@ -188,6 +191,7 @@ contract CoreHandler is Test {
         sorted.wire(address(v));
         token.wire(address(v), strategy, address(ledger), address(gate));
         rm.wire(address(v), address(gate), variantB ? address(house) : address(0));
+        if (!variantB) pool.wire(address(v), address(ledger));
     }
 
     function _seedOpen(address who, uint256 coll, uint256 debt) internal {
@@ -427,9 +431,65 @@ contract CoreHandler is Test {
         }
     }
 
-    /// @notice Deployment A: the pool crosses MIN_DEPOSIT, switching its interest share (P15-2).
-    function togglePoolDeposits(bool on) external action {
-        if (!variantB) pool.setDeposits(on ? 10e18 : 0);
+    /// @notice Deployment A: a stability-pool deposit from an actor's stablecoin (P19). Sizes span the
+    ///         minimum, so the pool's interest share switches on and off (P15-2).
+    function poolDeposit(uint256 actorSeed, uint256 amountSeed) external action {
+        if (variantB) return;
+        address a = _actor(actorSeed);
+        uint256 bal = token.balanceOf(a);
+        if (bal == 0) return;
+        uint256 amount = bound(amountSeed, 1, bal);
+        vm.prank(a);
+        try pool.deposit(amount) {
+            ++ok["poolDeposit"];
+        } catch (bytes memory err) {
+            _allow(err, StabilityPool.DepositTooSmall.selector, InsufficientBalance.selector, "poolDeposit");
+        }
+    }
+
+    /// @notice Deployment A: a partial or full (`type(uint256).max`) pool withdrawal. I3's entitlement
+    ///      clause is checked exactly through `totalDeposits`: accrual inside the call can add interest
+    ///      gain (paid in the same transfer), but never changes the compounded deposit, so the amount
+    ///      withdrawn is `T before − T after − swept dust`, and must equal `min(x, compounded before)`.
+    function poolWithdraw(uint256 actorSeed, uint256 amountSeed, bool all) external action {
+        if (variantB) return;
+        address a = _actor(actorSeed);
+        (uint256 initial,,,,,) = pool.deposits(a);
+        if (initial == 0) return;
+        uint256 x = all ? type(uint256).max : bound(amountSeed, 1, 2 * initial);
+        uint256 compounded = pool.compoundedDeposit(a);
+        uint256 t0 = pool.totalDeposits();
+        uint256 dust0 = ledger.poolDust();
+        vm.prank(a);
+        try pool.withdraw(x) {
+            ++ok["poolWithdraw"];
+            uint256 w = t0 - pool.totalDeposits() - (ledger.poolDust() - dust0);
+            if (w != (x < compounded ? x : compounded)) ++poolEntitlementViolations;
+        } catch (bytes memory err) {
+            _allow(
+                err, StabilityPool.DepositTooSmall.selector, StabilityPool.NoDeposit.selector, "poolWithdraw"
+            );
+        }
+    }
+
+    /// @notice Deployment A: claim pool gains.
+    function poolClaim(uint256 actorSeed) external action {
+        if (variantB) return;
+        address a = _actor(actorSeed);
+        (uint256 initial,,,,,) = pool.deposits(a);
+        if (initial == 0) return;
+        vm.prank(a);
+        try pool.claimGains() {
+            ++ok["poolClaim"];
+        } catch (bytes memory err) {
+            _allow(err, StabilityPool.NoDeposit.selector, StabilityPool.NoDeposit.selector, "poolClaim");
+        }
+    }
+
+    function _allow(bytes memory err, bytes4 a, bytes4 b, string memory what) internal {
+        bytes4 sel = bytes4(err);
+        if (sel != a && sel != b) _unexpected(sel, what);
+        _discardLogs();
     }
 
     /// @notice Test-only redistribution of one position (deployment A, live phase), standing in for a
@@ -1042,6 +1102,32 @@ contract CoreHandler is Test {
         if (token.balanceOf(address(rm)) != donatedToken[address(rm)]) {
             return (false, "I1: RedemptionModule token");
         }
+        return (true, "");
+    }
+
+    /// @dev Deployment A's pool (P19): I1 (pool row, no donations to the pool in this handler), I3's
+    ///      exact inequalities over the actors (the only depositors), the `P` range, the empty-epoch
+    ///      clause (the mock ledger never settles), withdraw entitlement, and U4.
+    function checkPool() public view returns (bool, string memory) {
+        if (variantB) return (true, "");
+        if (weth.balanceOf(address(pool)) != pool.collGainsBalance()) return (false, "I1: pool WETH");
+        uint256 bal = token.balanceOf(address(pool));
+        if (bal != pool.totalDeposits() + pool.interestGainsBalance()) return (false, "I1: pool stablecoin");
+        (uint256 compounded, uint256 collGains, uint256 interestGains) = (0, 0, 0);
+        for (uint256 i; i < 5; ++i) {
+            compounded += pool.compoundedDeposit(actors[i]);
+            (uint256 c, uint256 g) = pool.gains(actors[i]);
+            (collGains, interestGains) = (collGains + c, interestGains + g);
+        }
+        if (compounded > pool.totalDeposits()) return (false, "I3: sum of compounded > totalDeposits");
+        if (collGains > pool.collGainsBalance()) return (false, "I3: collateral gains > balance");
+        if (interestGains > pool.interestGainsBalance()) return (false, "I3: interest gains > balance");
+        if (pool.P() < pool.P_MIN() || pool.P() > pool.P_PRECISION()) return (false, "I3: P out of range");
+        if (pool.depositorCount(pool.currentEpoch()) == 0 && pool.totalDeposits() != 0) {
+            return (false, "I3: empty current epoch holds deposits");
+        }
+        if (poolEntitlementViolations != 0) return (false, "I3: withdraw entitlement");
+        if (compounded + pool.interestGainsBalance() > bal) return (false, "U4: deposits not covered");
         return (true, "");
     }
 

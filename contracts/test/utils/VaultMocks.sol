@@ -20,10 +20,22 @@ contract MockLedgerViews {
     uint256 public deficit;
     uint256 public reserve;
     uint256 public interestCalls;
+    uint256 public poolDust;
 
     function onInterest(uint256 amount) external {
         reserve += amount;
         ++interestCalls;
+    }
+
+    /// @notice The stability pool's dust sweep (§5.3.1 `leave`): never settled; the swept residual,
+    ///         already transferred here, joins the reserve.
+    function settled() external pure returns (bool) {
+        return false;
+    }
+
+    function onPoolDust(uint256 amount) external {
+        reserve += amount;
+        poolDust += amount;
     }
 
     function set(uint256 recoveredColl_, uint256 auctionDebt_, uint256 deficit_) external {
