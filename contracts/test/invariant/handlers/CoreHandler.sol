@@ -578,7 +578,8 @@ contract CoreHandler is Test {
             ++ok["reclaim"];
             ++gY; // §5.1.10 emits PositionUpdated(OP_CLOSE), which the event rule counts (I2 is not checked
             // once settled)
-            _forget(id);
+            // no _forget: §5.1.10 changes the status but leaves the node in the (frozen) sorted list, so
+            // its I13 exactness stays as it was (regression test_regression_I13_reclaimKeepsListMembers)
         } catch (bytes memory err) {
             _discardLogs();
             _unexpected(bytes4(err), "reclaim");

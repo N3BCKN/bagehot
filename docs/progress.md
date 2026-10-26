@@ -86,7 +86,18 @@ matrix), I-4 (gas figure refreshed) fixed; I-2 → P21 carry-forward. spec-audit
 pool unwind, I11 pool coverage, sweep counting and reach wording, the CHG-006-scope spec text, the
 model's `Underflow` and hook-answer handling fixed; the rest listed as P19-A.
 
-**Next.** P20 (plan first): the plan is ready for the human together with CHG-010, P19-L1, CHG-011.
+**Nightly (2026-10-26).** `invariant_I13_sortedByNicrWithinTolerance` failed with "I13: exact order".
+Root cause: a harness bug since P17 — the core handler's `reclaimGasReserve` action forgot the
+position's I13 exactness as if it had left the list, while §5.1.10 leaves the node in the frozen list;
+once every non-exact member had reclaimed, the handler applied the exact rule to two drifted near-ties
+(which satisfy CHG-009's bound). Fix: the action no longer forgets the node's exactness (cites §5.1.10).
+Regression: `I13ExactOrderAfterSettleTest.test_regression_I13_reclaimKeepsListMembers` (red before the
+fix). Replay under the nightly profile: 4,096 × 500, green. **Correction:** the identical failure the
+blueprint agent saw earlier that day was this bug, not the temporary interface change I blamed it on
+(that change produced a different error, `EvmError: Revert`).
+
+**Next.** P20 (plan approved with the human's decisions a–d, 2026-10-26); CHG-010, P19-L1 and CHG-011
+await the human.
 
 ### 2026-10-25 · P18 · Local deployment, factory and manifest
 
@@ -1120,6 +1131,9 @@ obligations a later prompt must carry that are not in that prompt's text yet (ro
 | CHG-006-SM | **ShutdownModule prompt: `check()` joins the failing-pool matrix** (the other deferred AC-CHG006-1 sub-case, next to P16-F5). | ShutdownModule prompt |
 | P19-I2 | **P21 requirement (P19 security review I-2):** the real DeficitLedger's `settled()` never reverts and `onPoolDust` accepts from the pool without reverting in every phase while not settled — otherwise the last current-epoch depositor cannot exit (`_leave` runs before their transfer). Test: `onPoolDust` never reverts live and in the window; the last depositor exits during the window. | P21 |
 | P19-T26 | **P20: measure the JIT liquidation sandwich (threat T-26, review L-2):** `test_liquidate_jitDepositWithdraw_sameTx` records the sandwicher's profit and standing depositors' dilution; P26's depositor agent and S3 model it. | P20, P26 |
+| P20-SD | **Test stand-in to re-validate (same category as P16-F5, P17-H1, P17-H2): the DeficitLedger stub's storage-backed `recordDeficit` (P20, human decision b 2026-10-26).** When P21 replaces the stand-in with the real ledger, re-run every P20 test and vector that reaches the no-stakes DEFICIT path against it, and confirm `deficit`/`recoveredColl` and I1's ledger row agree. | P21 |
+| P20-B | **Test stand-in to re-validate: the core handler's B-variant house mock `onLiquidation` per §6.8.2 (P20, human decision c 2026-10-26),** so I4/I6/I7 run on B before the DutchAuctionHouse exists. At P33 re-run the B campaign against the real house and compare. | P33 |
+| P20-SIZE | **VaultManager size (human note 2026-10-26):** after P20 about 2–3 kB of EIP-170 headroom remains (the binding limit is the 0xFE blueprint). Anything P21/P33 would add to the VaultManager itself must be measured before it is written, not after. | P21, P33 |
 
 ## Open issues
 
