@@ -1,15 +1,23 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {IDeficitLedgerInterest, IDeficitLedgerViews} from "../interfaces/ISystemViews.sol";
+import {IPoolVault} from "../interfaces/IPoolVault.sol";
+import {
+    IDeficitLedgerInterest,
+    IDeficitLedgerPoolDust,
+    IDeficitLedgerViews
+} from "../interfaces/ISystemViews.sol";
 import {Unauthorized} from "../lib/Errors.sol";
 
 /// @title StandInDeficitLedger
 /// @notice LOCAL ONLY. Occupies the DeficitLedger role until P21: no recovered collateral, no
 ///         auction debt, no deficit (§5.1.12), and the reserve share of interest recorded as §5.6
 ///         does (`reserve += amount`, the tokens having been minted to this address). Only the
-///         VaultManager may notify it. Its constructor reverts outside chain 31337.
-contract StandInDeficitLedger is IDeficitLedgerViews, IDeficitLedgerInterest {
+///         VaultManager may notify it. In deployment A it also takes the stability pool's swept dust
+///         (§5.3.1 `leave`): never settled, and `onPoolDust` records `reserve += amount` for the pool
+///         the VaultManager was wired with (the stand-in reads it there instead of taking its own
+///         `wire`). Its constructor reverts outside chain 31337.
+contract StandInDeficitLedger is IDeficitLedgerViews, IDeficitLedgerInterest, IDeficitLedgerPoolDust {
     address public immutable vaultManager;
     uint256 public reserve;
 
@@ -25,6 +33,19 @@ contract StandInDeficitLedger is IDeficitLedgerViews, IDeficitLedgerInterest {
     function onInterest(uint256 amount) external {
         if (msg.sender != vaultManager) revert Unauthorized();
         reserve += amount;
+    }
+
+    /// @notice §5.6: the pool's swept residual, the tokens having been transferred to this address.
+    ///         Only the VaultManager's stability pool (deployment A).
+    function onPoolDust(uint256 amount) external {
+        address pool = IPoolVault(vaultManager).stabilityPool();
+        if (pool == address(0) || msg.sender != pool) revert Unauthorized();
+        reserve += amount;
+    }
+
+    /// @notice Settlement does not exist before P21's ShutdownModule (§4.7).
+    function settled() external pure returns (bool) {
+        return false;
     }
 
     function recoveredColl() external pure returns (uint256) {

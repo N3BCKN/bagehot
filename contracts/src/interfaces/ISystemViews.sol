@@ -20,6 +20,13 @@ interface IStabilityPoolInterest {
     function onInterest(uint256 amount) external;
 }
 
+/// @notice What the stability pool calls on the DeficitLedger when its last current-epoch depositor
+///         leaves a residual (§5.3.1 `leave`, §5.6).
+interface IDeficitLedgerPoolDust {
+    function settled() external view returns (bool);
+    function onPoolDust(uint256 amount) external;
+}
+
 /// @notice What accrual calls on the DeficitLedger: the reserve share (§5.6).
 interface IDeficitLedgerInterest {
     function onInterest(uint256 amount) external;

@@ -104,10 +104,13 @@ class Vault:
     pool_share_bps: int = 0
     has_pool: bool = True  # deployment A; B has no stability pool
     accepts_interest: Callable[[], bool] = lambda: False
+    # the pool's §6.6.5 booking, called after its share is minted (deployment A with a pool model)
+    pool_on_interest: Callable[[int], object] | None = None
     now: int = 0
     last_accrual: int = 0
     pool_interest: int = 0
     ledger_reserve: int = 0
+    settled_ledger: bool = False  # the stand-in ledger never settles before P21
     ledger_recovered_coll: int = 0
     ledger_auction_debt: int = 0
     ledger_deficit: int = 0
@@ -143,7 +146,7 @@ class Vault:
         saved = {
             f.name: copy.deepcopy(getattr(self, f.name))
             for f in fields(self)
-            if f.name not in ("price_source", "sorted", "accepts_interest")
+            if f.name not in ("price_source", "sorted", "accepts_interest", "pool_on_interest")
         }
         saved_sorted = (
             copy.deepcopy(self.sorted.nodes),
@@ -204,10 +207,19 @@ class Vault:
         if to_pool > 0:
             self._mint("pool", to_pool)
             self.pool_interest += to_pool
+            if self.pool_on_interest is not None:
+                self.pool_on_interest(to_pool)
         if to_reserve > 0:
             self._mint("ledger", to_reserve)
             self.ledger_reserve += to_reserve
         self.events.append(("InterestAccrued", new, interest, to_pool, to_reserve, self.now))
+
+    # ---- the DeficitLedger stand-in's pool-dust hook (§5.3.1 `leave`, §5.6) ----
+    def on_pool_dust(self, amount: int) -> None:
+        self.ledger_reserve += amount
+
+    def is_ledger_settled(self) -> bool:
+        return self.settled_ledger
 
     def accrue(self) -> None:
         """§5.1.8: anyone; any mode (no-op once shut down)."""
