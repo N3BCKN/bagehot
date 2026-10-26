@@ -9,8 +9,13 @@
 §6.4.1 relies on the strategy contract for `debtAbsorbed ≤ debt` and `collReturned ≤ coll`. If a
 future strategy (or an unforeseen path in one) broke either, `normAbsorbed` could exceed the
 position's normalised debt (underflow of `normRest`, or a silent over-reduction of `totalNormDebt`
-when `debtAbsorbed == debt` is not hit exactly), or a redistribution/deficit could be booked for
-collateral that never came back — silent corruption of the books instead of a revert.
+when `debtAbsorbed == debt` is not hit exactly), or more collateral than the position had could be
+booked as redistributed or recovered — silent corruption of the books instead of a revert.
+
+**Scope (corrected after the P20 security review, P20-L1).** These are range checks only. They do
+not verify that `collReturned` WETH actually arrived: a strategy that reports `collReturned ≤ coll`
+but transfers nothing passes both, and the books would then carry `pendingColl` (or `recoveredColl`)
+with no WETH behind it. A receipt check is proposed separately as CHG-014.
 
 ## Decision
 

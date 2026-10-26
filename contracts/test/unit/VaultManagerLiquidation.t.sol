@@ -328,4 +328,133 @@ contract VaultManagerLiquidationTest is LiquidationFixture {
         assertLt(aliceShared, aliceAlone, "the standing depositor is diluted");
         assertGt(pool.compoundedDeposit(alice), aliceDepositAlone, "but loses less deposit");
     }
+
+    // ------------------------------------------------------------------ P20 security review
+
+    /// @dev P20-M1 / T-27, measured not prevented: capital that opens a position just before a liquidation
+    ///      into an empty pool and closes right after captures part of the redistributed penalty.
+    function test_jitRedistributionSandwich_measuresCapture() public {
+        uint256 id = _base(); // alice 10 WETH / 10,000 (the honest staker), bob the target
+        _setPrice(1600e18); // bob at ICR 1.067: 1.96875 WETH seized for 3,000 of debt, 0.03125 surplus
+        uint256 snap = vm.snapshotState();
+        vm.prank(liq);
+        v.liquidate(id);
+        (uint256 aliceCollAlone,) = v.effective(1);
+        vm.revertToState(snap);
+        // carol opens 90 WETH against the minimum debt, waits for the liquidation, closes
+        uint256 wethBefore = weth.balanceOf(carol);
+        uint256 cid = _open(carol, 90e18, 2000e18);
+        vm.prank(liq);
+        v.liquidate(id);
+        uint256 owed = v.debtOf(cid);
+        uint256 have = token.balanceOf(carol);
+        if (have < owed) {
+            vm.prank(alice); // the amount is computed first: a call in the arguments would consume the prank
+            token.transfer(carol, owed - have);
+        }
+        vm.prank(carol);
+        v.close(cid);
+        int256 wethGain = int256(weth.balanceOf(carol)) - int256(wethBefore);
+        int256 debtTaken = int256(owed) - int256(2000e18); // the redistributed debt carol repaid
+        int256 profit = wethGain * 1600 - debtTaken; // WETH valued at 1,600, stablecoin at par
+        (uint256 aliceCollShared,) = v.effective(1);
+        emit log_named_int("sandwicher profit (stablecoin wei at the oracle price)", profit);
+        emit log_named_uint("honest staker's effective collateral alone", aliceCollAlone);
+        emit log_named_uint("honest staker's effective collateral when sandwiched", aliceCollShared);
+        assertGt(profit, 0, "the sandwich captures part of the redistributed penalty");
+        assertLt(aliceCollShared, aliceCollAlone, "the honest staker is diluted");
+    }
+
+    /// @dev P20-L2: the no-stakes path also runs with active positions whose stake is 0 (T-25), not only
+    ///      for the last position. A genuine zero stake needs the snapshot ratio collapsed over many
+    ///      liquidations (P17-1); this unit test sets the collapsed snapshots with the harness setter
+    ///      (`setRedistribution`, P14) and exercises the real `liquidate` branch on top. The core campaign
+    ///      counts the same state reached with real liquidations only (`ok("liqDeficitWithActive")`).
+    function test_liquidate_stakeZeroSurvivor_deficitWhileActive() public {
+        uint256 small = _open(alice, 3e18, 2000e18);
+        // a collapsed snapshot ratio: every new position is staked at floor(coll · 1 / 1e40) = 0
+        v.setRedistribution(0, 0, 0, 0, 1, 1e40);
+        uint256 carolId = _open(carol, 4e18, 2000e18);
+        assertEq(v.positions(carolId).stake, 0, "carol is staked 0");
+        assertEq(v.totalStakes(), v.positions(small).stake, "alice holds the only stake");
+        _setPrice(700e18); // alice at ICR 1.05; carol at 1.4
+        uint256 ledgerBefore = weth.balanceOf(address(ledger));
+        vm.recordLogs();
+        vm.prank(liq);
+        v.liquidate(small);
+        _assertPath(vm.getRecordedLogs(), 2);
+        assertEq(v.activeCount(), 1, "carol is still active");
+        assertEq(uint8(v.positions(carolId).status), uint8(VaultManager.Status.Active));
+        assertEq(v.totalStakesSnapshot(), 0, "the snapshots reset");
+        assertEq(v.totalCollateralSnapshot(), 0);
+        assertEq(
+            weth.balanceOf(address(ledger)) - ledgerBefore, ledger.recoveredColl(), "I1: the ledger holds it"
+        );
+        assertEq(
+            weth.balanceOf(address(v)),
+            v.totalCollateral() + v.pendingColl() + v.activeCount() * GAS_RESERVE,
+            "I1: the VaultManager row"
+        );
+        assertEq(v.positions(carolId).stake, 0, "carol keeps stake 0 until touched (P17-1 (e))");
+        _setPrice(2000e18);
+        vm.prank(carol);
+        v.addCollateral(carolId, 1, 0, 0);
+        assertEq(v.positions(carolId).stake, 4e18 + 1, "touched after the reset: staked 1:1");
+    }
+
+    /// @dev Review test gap: a full absorption that empties the pool exactly (`debt == totalDeposits`)
+    ///      moves the pool to a new epoch through the real `liquidate`.
+    function test_liquidate_fullAbsorptionEmptiesPoolExactly_newEpoch() public {
+        uint256 id = _base();
+        _deposit(alice, 3000e18); // exactly bob's debt (same block: no interest)
+        _setPrice(1500e18);
+        vm.prank(liq);
+        v.liquidate(id);
+        assertEq(pool.totalDeposits(), 0);
+        assertEq(pool.currentEpoch(), 1, "d == T: new epoch");
+        assertEq(v.pendingNormDebt(), 0, "fully absorbed: nothing redistributed");
+    }
+
+    /// @dev Review test gap: a partial absorption from a 1-wei-short pool at an index above RAY, so R34's
+    ///      floor is exercised (normAbsorbed = ⌊dP·RAY/I⌋) and the rest is redistributed.
+    function test_liquidate_partialAbsorption_indexAboveRay() public {
+        uint256 id = _base();
+        _deposit(alice, 3000e18);
+        vm.warp(block.timestamp + 30 days);
+        _setPrice(1500e18);
+        v.accrue();
+        uint256 debt = v.debtOf(id);
+        assertGt(debt, pool.totalDeposits(), "the pool is short after interest");
+        (, uint256 n) = v.effective(id);
+        uint256 index = v.index();
+        vm.recordLogs();
+        vm.prank(liq);
+        v.liquidate(id);
+        uint256 dP = 3000e18; // all the pool held
+        uint256 normAbsorbed = dP * 1e27 / index; // R34 (down)
+        assertEq(v.pendingNormDebt(), n - normAbsorbed, "normRest = n - floor(dP*RAY/I)");
+        _assertPath(vm.getRecordedLogs(), 1);
+    }
+
+    /// @dev Review test gap: T-10 underwater (ICR < 1) into an empty pool, and with the redistribution
+    ///      recipient also owned by the liquidated owner — self-liquidation is still worth exactly the gas
+    ///      reserve over a third party.
+    function test_selfLiquidation_underwater_ownerAlsoRecipient() public {
+        _open(bob, 10e18, 10_000e18); // bob owns the position the remainder is redistributed to
+        uint256 id = _open(bob, 2e18, 3000e18);
+        _setPrice(1400e18); // ICR 0.93
+        uint256 snap = vm.snapshotState();
+        vm.prank(bob);
+        v.liquidate(id);
+        (uint256 cSelf, uint256 nSelf) = v.effective(1);
+        uint256 wSelf = weth.balanceOf(bob);
+        vm.revertToState(snap);
+        vm.prank(liq);
+        v.liquidate(id);
+        (uint256 cThird, uint256 nThird) = v.effective(1);
+        assertEq(cSelf, cThird, "the same redistribution either way");
+        assertEq(nSelf, nThird);
+        assertEq(wSelf - weth.balanceOf(bob), GAS_RESERVE, "self = third party + the gas reserve");
+    }
 }
+

@@ -671,6 +671,7 @@ contract CoreHandler is Test {
             else ++ok["liqNoOffset"];
             if (l.path == 1) ++ok["liqRedistributed"];
             if (l.path == 2) ++ok["liqDeficit"];
+            if (l.path == 2 && v.activeCount() > 0) ++ok["liqDeficitWithActive"]; // P20-L2 / T-25
             if (l.coll * l.price < l.debt * WAD) ++ok["liqUnderwater"];
             if (v.totalStakesSnapshot() == 0) ++ok["snapshotReset"];
         }
