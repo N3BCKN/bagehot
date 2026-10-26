@@ -1113,6 +1113,8 @@ function liquidate(id):
     WETH.safeTransfer(msg.sender, GAS_RESERVE)                       // gas compensation
     WETH.safeTransfer(strategy, coll)
     (debtAbsorbed, collReturned) = strategy.onLiquidation(id, owner, debt, coll, price)
+    require(debtAbsorbed ≤ debt, DebtAbsorbedExceedsDebt)                 // defence in depth (CHG-012)
+    require(collReturned ≤ coll, CollReturnedExceedsColl)
     normAbsorbed = (debtAbsorbed == debt) ? n : mulDivDown(debtAbsorbed, RAY, index)
     normRest = n − normAbsorbed
     totalNormDebt −= normAbsorbed
@@ -1133,7 +1135,9 @@ function liquidate(id):
 ```
 
 The strategy receives `coll` before the call and transfers `collReturned` back to the VaultManager
-before returning. `collReturned ≤ coll` and `debtAbsorbed ≤ debt` always (strategy contract).
+before returning. `collReturned ≤ coll` and `debtAbsorbed ≤ debt` always (strategy contract); the
+VaultManager checks both anyway and reverts otherwise (CHG-012), so a faulty strategy cannot corrupt
+the books silently.
 
 #### 6.4.2 Deployment A — what `onLiquidation` does
 
@@ -2155,6 +2159,8 @@ function that can raise the error from this spec's own checks.
 | `AuctionCallbackActive()` | `check` or `redeem` called while the house is inside a buyer callback | `ShutdownModule.check`, `redeem` |
 | `InsufficientBalance()` | caller's stablecoin balance below the amount to burn or move | `repay`, `close`, `deposit`, `redeem`, `buy`, `claim` |
 | `NotLiquidatable()` | ICR ≥ MCR | `liquidate` |
+| `DebtAbsorbedExceedsDebt()` | the strategy returned `debtAbsorbed > debt` (CHG-012) | `liquidate` |
+| `CollReturnedExceedsColl()` | the strategy returned `collReturned > coll` (CHG-012) | `liquidate` |
 | `SupplyCapExceeded()` | total supply would exceed `2^128 − 1` | `StableToken.mint` |
 | `StaleHint()` | hint walk exceeded `MAX_HINT_STEPS` | `insert`, `reinsert` (all position operations) |
 | `NodeExists()` / `NodeNotFound()` | list misuse (unreachable through the VaultManager) | SortedPositions |

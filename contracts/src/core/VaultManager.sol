@@ -7,8 +7,10 @@ import {ISortedPositions} from "../interfaces/ISortedPositions.sol";
 import {IStableToken} from "../interfaces/IStableToken.sol";
 import {
     IAuctionHouseViews,
+    IDeficitLedgerDeficit,
     IDeficitLedgerInterest,
     IDeficitLedgerViews,
+    ILiquidationStrategy,
     IStabilityPoolInterest
 } from "../interfaces/ISystemViews.sol";
 import {
@@ -31,15 +33,13 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
-/// @title VaultManager (parts I–III: positions, interest and redemption)
+/// @title VaultManager
 /// @notice Holds every position's WETH collateral and gas reserve and mints the stablecoin against
-///         it (docs/spec.md §4.2, §5.1). Implemented: positions — open, add / withdraw collateral,
-///         borrow, repay, close (P14); interest accrual and its routing to the pool and the reserve
-///         (P15, §6.2); the redemption loop (P16, §6.7.3); the shutdown hooks and the views.
-///         Redistribution and liquidation arrive in P20.
-/// @dev State of §4.2 that P20 writes (the accumulators, snapshots and pending buckets) is declared
-///      now because the code already reads it, at its initial value; the redistribution error
-///      carries arrive with their writer at P20.
+///         it (docs/spec.md §4.2, §5.1). Positions — open, add / withdraw collateral, borrow, repay,
+///         close (P14); interest accrual and its routing to the pool and the reserve (P15, §6.2,
+///         ADR-0033); the redemption loop (P16, §6.7.3); liquidation through the strategy with
+///         redistribution of the remainder or, with no stakes left, a deficit (P20, §6.4, §6.5); the
+///         shutdown hooks and the views.
 ///      Every operation follows the spec's order: checks (in pseudocode order), fetch price where
 ///      required (§7), accrue, apply pending, act, update stake, reinsert, token transfers, events.
 ///      One transient lock guards every state-changing external function (§2.5, §5.10).
@@ -89,6 +89,11 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
     /// @notice The pool's `onInterest` call failed and less than `ceil(2·POOL_HOOK_GAS / 63)` gas is
     ///         left: the caller may have starved it on purpose (§6.2, ADR-0033).
     error InsufficientGasForPoolHook();
+    error NotLiquidatable();
+    /// @notice The strategy reported absorbing more debt than the position had (§6.4.1, CHG-012).
+    error DebtAbsorbedExceedsDebt();
+    /// @notice The strategy reported returning more collateral than it received (§6.4.1, CHG-012).
+    error CollReturnedExceedsColl();
 
     event PositionOpened(uint256 indexed id, address indexed owner, uint256 debtMinted);
     event PositionUpdated(
@@ -121,6 +126,28 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
     /// @notice The pool's offered interest share went to the reserve because its `onInterest` call
     ///         failed (§6.2, ADR-0033).
     event PoolInterestRedirected(uint256 amount);
+    event Liquidated(
+        uint256 indexed id,
+        address indexed owner,
+        address indexed liquidator,
+        uint256 debt,
+        uint256 coll,
+        uint256 debtAbsorbed,
+        uint256 collRemainder,
+        uint256 normRemainder,
+        uint8 remainderPath,
+        uint256 gasCompensation
+    );
+    event Redistributed(
+        uint256 coll,
+        uint256 normDebt,
+        uint256 LColl,
+        uint256 LDebt,
+        uint256 errorColl,
+        uint256 errorDebt,
+        uint256 totalStakes
+    );
+    event SystemSnapshotsUpdated(uint256 totalStakesSnapshot, uint256 totalCollateralSnapshot);
 
     // ------------------------------------------------------------------ constants
 
@@ -147,6 +174,11 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
     uint8 internal constant OP_REPAY = 5;
     uint8 internal constant OP_CLOSE = 6;
     uint8 internal constant OP_REDEEM = 7;
+    uint8 internal constant OP_LIQUIDATE = 8;
+    /// @notice `Liquidated.remainderPath` (§11.1).
+    uint8 internal constant PATH_NONE = 0;
+    uint8 internal constant PATH_REDISTRIBUTED = 1;
+    uint8 internal constant PATH_DEFICIT = 2;
 
     // ------------------------------------------------------------------ immutables
 
@@ -179,6 +211,9 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
     uint256 public LDebt;
     uint256 public pendingColl;
     uint256 public pendingNormDebt;
+    /// @notice §6.5.2's error carries of the redistribution accumulators (R9).
+    uint256 public lastErrorColl;
+    uint256 public lastErrorDebt;
     bool public shutdown;
     bool public settled;
 
@@ -415,6 +450,60 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
         WETH.safeTransfer(msg.sender, coll + GAS_RESERVE);
         emit PositionClosed(id, debt, coll, GAS_RESERVE);
         _emitUpdated(id, OP_CLOSE);
+    }
+
+    /// @notice Liquidates a position below MCR (§5.1.7, §6.4.1). Anyone; normal mode; price required.
+    ///         The caller receives the gas reserve; the strategy absorbs what it can (A: the pool
+    ///         offsets up to `totalDeposits` and pushes the surplus to the owner); the remainder is
+    ///         redistributed to the other positions (§6.5.2) or, if none is staked, recorded as a deficit
+    ///         with its collateral (§6.4.4). rounding: R1 (debt, up), R34 (normalised debt absorbed,
+    ///         down), R27 (deficit, up).
+    function liquidate(uint256 id) external whenWired nonReentrant {
+        if (shutdown) revert SystemShutdown();
+        Position storage p = _positions[id];
+        if (p.status != Status.Active) revert PositionNotActive();
+        uint256 price = _fetchRequiredPrice();
+        _accrue();
+        _applyPending(id);
+        uint256 debt = _debtOf(p.normDebt);
+        if (p.coll * price >= MCR * debt) revert NotLiquidatable();
+        sorted.remove(id);
+        totalStakes -= p.stake;
+        totalCollateral -= p.coll;
+        activeCount -= 1;
+        (uint256 n, uint256 coll, address owner) = (p.normDebt, p.coll, p.owner);
+        p.coll = 0;
+        p.normDebt = 0;
+        p.stake = 0;
+        p.status = Status.ClosedByLiquidation;
+        WETH.safeTransfer(msg.sender, GAS_RESERVE); // gas compensation
+        WETH.safeTransfer(strategy, coll);
+        (uint256 debtAbsorbed, uint256 collReturned) =
+            ILiquidationStrategy(strategy).onLiquidation(id, owner, debt, coll, price);
+        // defence in depth (CHG-012): the strategy contract guarantees both; a violation reverts
+        if (debtAbsorbed > debt) revert DebtAbsorbedExceedsDebt();
+        if (collReturned > coll) revert CollReturnedExceedsColl();
+        uint256 normAbsorbed = debtAbsorbed == debt ? n : Rounding.mulDivDown(debtAbsorbed, RAY, index); // R34
+        uint256 normRest = n - normAbsorbed;
+        totalNormDebt -= normAbsorbed;
+        uint8 path = PATH_NONE;
+        if (collReturned > 0 || normRest > 0) {
+            if (totalStakes > 0) {
+                _redistribute(collReturned, normRest);
+                path = PATH_REDISTRIBUTED;
+            } else {
+                uint256 debtRest = _debtOf(normRest); // R27 (up)
+                totalNormDebt -= normRest;
+                WETH.safeTransfer(deficitLedger, collReturned);
+                IDeficitLedgerDeficit(deficitLedger).recordDeficit(debtRest, collReturned);
+                path = PATH_DEFICIT;
+            }
+        }
+        _updateSystemSnapshots();
+        emit Liquidated(
+            id, owner, msg.sender, debt, coll, debtAbsorbed, collReturned, normRest, path, GAS_RESERVE
+        );
+        _emitUpdated(id, OP_LIQUIDATE);
     }
 
     /// @notice Accrues interest to now (§5.1.8, §6.2). Anyone; any mode (a no-op once shut down);
@@ -775,7 +864,7 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
         return Rounding.mulDivDown(p.stake, LDebt - p.snapLDebt, DECIMAL_PRECISION);
     }
 
-    /// @dev §6.5.3. With no redistribution yet (P20) the accumulators are 0 and nothing is pending.
+    /// @dev §6.5.3, rounding R8 (down); truncation dust stays in the pending buckets.
     function _applyPending(uint256 id) internal {
         Position storage p = _positions[id];
         uint256 pc = _pendingCollOf(p);
@@ -803,6 +892,36 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
         uint256 newStake = _computeStake(p.coll);
         totalStakes = totalStakes - p.stake + newStake;
         p.stake = newStake;
+    }
+
+    /// @dev §6.5.2, with the liquidated position already removed. Precondition `totalStakes > 0`.
+    ///      rounding: R9 — floor division with error carry (§2.2).
+    function _redistribute(uint256 collR, uint256 normR) internal {
+        uint256 stakes = totalStakes;
+        uint256 collNumerator = collR * DECIMAL_PRECISION + lastErrorColl;
+        uint256 normNumerator = normR * DECIMAL_PRECISION + lastErrorDebt;
+        uint256 dLColl = collNumerator / stakes; // R9: floor with carry
+        uint256 dLDebt = normNumerator / stakes; // R9: floor with carry
+        lastErrorColl = collNumerator - dLColl * stakes;
+        lastErrorDebt = normNumerator - dLDebt * stakes;
+        LColl += dLColl;
+        LDebt += dLDebt;
+        pendingColl += collR;
+        pendingNormDebt += normR;
+        emit Redistributed(collR, normR, LColl, LDebt, lastErrorColl, lastErrorDebt, stakes);
+    }
+
+    /// @dev §6.5.4, at the end of every liquidation. With no stake left the snapshots reset, so the
+    ///      next position is staked 1:1 instead of 0 against leftover pending dust.
+    function _updateSystemSnapshots() internal {
+        if (totalStakes == 0) {
+            totalStakesSnapshot = 0;
+            totalCollateralSnapshot = 0;
+        } else {
+            totalStakesSnapshot = totalStakes;
+            totalCollateralSnapshot = totalCollateral + pendingColl;
+        }
+        emit SystemSnapshotsUpdated(totalStakesSnapshot, totalCollateralSnapshot);
     }
 
     function _emitUpdated(uint256 id, uint8 op) internal {

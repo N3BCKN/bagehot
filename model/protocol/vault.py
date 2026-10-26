@@ -33,6 +33,8 @@ DECIMAL_PRECISION = 10**18
 NICR_PRECISION = 10**20
 OP_OPEN, OP_ADD_COLLATERAL, OP_WITHDRAW_COLLATERAL, OP_BORROW, OP_REPAY, OP_CLOSE = 1, 2, 3, 4, 5, 6
 OP_REDEEM = 7
+OP_LIQUIDATE = 8
+PATH_NONE, PATH_REDISTRIBUTED, PATH_DEFICIT = 0, 1, 2
 
 
 class Status(IntEnum):
@@ -79,6 +81,9 @@ AlreadySettled = _error("AlreadySettled")
 SupplyCapExceeded = _error("SupplyCapExceeded")
 WethTransferFailed = _error("WethTransferFailed")
 ERC20InsufficientBalance = _error("ERC20InsufficientBalance")
+NotLiquidatable = _error("NotLiquidatable")
+DebtAbsorbedExceedsDebt = _error("DebtAbsorbedExceedsDebt")
+CollReturnedExceedsColl = _error("CollReturnedExceedsColl")
 
 
 @dataclass
@@ -108,6 +113,11 @@ class Vault:
     # declines (no deposits). An exception stands for a failed guarded call (revert, out of gas,
     # malformed return); gas is not modelled, so `InsufficientGasForPoolHook` never arises here.
     pool_hook: Callable[[int], bool] | None = None
+    # §6.4.1: the liquidation strategy, an object with `on_liquidation(id, owner, debt, coll,
+    # price) -> (debt_absorbed, coll_returned)` moving WETH in this vault's `weth` balances at the
+    # account `strategy_account` (A: the StabilityPool model, "pool"). Rolled back with the vault.
+    strategy: object | None = None
+    strategy_account: str = "pool"
     now: int = 0
     last_accrual: int = 0
     pool_interest: int = 0
@@ -130,6 +140,8 @@ class Vault:
     l_debt: int = 0
     pending_coll: int = 0
     pending_norm_debt: int = 0
+    last_error_coll: int = 0  # §6.5.2 carries (R9)
+    last_error_debt: int = 0
     shutdown: bool = False
     settled: bool = False
     weth: dict[str, int] = field(default_factory=dict)  # balances; "vault" is the VaultManager
@@ -148,7 +160,7 @@ class Vault:
         saved = {
             f.name: copy.deepcopy(getattr(self, f.name))
             for f in fields(self)
-            if f.name not in ("price_source", "sorted", "pool_hook")
+            if f.name not in ("price_source", "sorted", "pool_hook", "strategy")
         }
         saved_sorted = (
             copy.deepcopy(self.sorted.nodes),
@@ -156,9 +168,12 @@ class Vault:
             self.sorted.tail,
             list(self.sorted.events),
         )
+        strategy_saved = self.strategy._save() if hasattr(self.strategy, "_save") else None
         try:
             return fn()
         except Exception:
+            if strategy_saved is not None:
+                self.strategy._restore(strategy_saved)
             self.__dict__.update(saved)
             self.sorted.nodes, self.sorted.head, self.sorted.tail, self.sorted.events = saved_sorted
             self.sorted.key_of = self.sort_key
@@ -447,6 +462,107 @@ class Vault:
             self._updated(pid, OP_CLOSE)
 
         self._atomic(run)
+
+    # ---- §5.1.7 / §6.4.1 ----
+    def liquidate(self, caller: str, pid: int) -> int:
+        """§6.4.1; returns the remainder path. Rounding R1, R34 (down), R27 (up)."""
+
+        def run() -> int:
+            if self.shutdown:
+                raise SystemShutdown()
+            p = self._active(pid)
+            price = self._fetch_required_price()
+            self._accrue()
+            self._apply_pending(pid)
+            debt = self._debt_of(p.norm_debt)
+            if p.coll * price >= self.mcr * debt:
+                raise NotLiquidatable()
+            self.sorted.remove(pid)
+            self.total_stakes -= p.stake
+            self.total_collateral -= p.coll
+            self.active_count -= 1
+            n, coll, owner = p.norm_debt, p.coll, p.owner
+            p.coll = p.norm_debt = p.stake = 0
+            p.status = Status.CLOSED_BY_LIQUIDATION
+            self._weth_move("vault", caller, self.gas_reserve)
+            self._weth_move("vault", self.strategy_account, coll)
+            absorbed, returned = self.strategy.on_liquidation(pid, owner, debt, coll, price)
+            if absorbed > debt:  # CHG-012
+                raise DebtAbsorbedExceedsDebt()
+            if returned > coll:
+                raise CollReturnedExceedsColl()
+            norm_absorbed = n if absorbed == debt else mul_div_down(absorbed, RAY, self.index)
+            norm_rest = n - norm_absorbed
+            self.total_norm_debt -= norm_absorbed
+            path = PATH_NONE
+            if returned > 0 or norm_rest > 0:
+                if self.total_stakes > 0:
+                    self._redistribute(returned, norm_rest)
+                    path = PATH_REDISTRIBUTED
+                else:
+                    debt_rest = self._debt_of(norm_rest)  # R27
+                    self.total_norm_debt -= norm_rest
+                    self._weth_move("vault", "ledger", returned)
+                    self.ledger_deficit += debt_rest
+                    self.ledger_recovered_coll += returned
+                    self.events.append(("DeficitRecorded", debt_rest, returned, 2))
+                    path = PATH_DEFICIT
+            self._update_system_snapshots()
+            self.events.append(
+                (
+                    "Liquidated",
+                    pid,
+                    owner,
+                    caller,
+                    debt,
+                    coll,
+                    absorbed,
+                    returned,
+                    norm_rest,
+                    path,
+                    self.gas_reserve,
+                )
+            )
+            self._updated(pid, OP_LIQUIDATE)
+            return path
+
+        return self._atomic(run)
+
+    def _redistribute(self, coll_r: int, norm_r: int) -> None:
+        """§6.5.2, R9: floor division with error carry. Precondition total_stakes > 0."""
+        stakes = self.total_stakes
+        coll_num = _c(coll_r * DECIMAL_PRECISION + self.last_error_coll)
+        norm_num = _c(norm_r * DECIMAL_PRECISION + self.last_error_debt)
+        d_coll, d_debt = coll_num // stakes, norm_num // stakes
+        self.last_error_coll = coll_num - d_coll * stakes
+        self.last_error_debt = norm_num - d_debt * stakes
+        self.l_coll = _c(self.l_coll + d_coll)
+        self.l_debt = _c(self.l_debt + d_debt)
+        self.pending_coll += coll_r
+        self.pending_norm_debt += norm_r
+        self.events.append(
+            (
+                "Redistributed",
+                coll_r,
+                norm_r,
+                self.l_coll,
+                self.l_debt,
+                self.last_error_coll,
+                self.last_error_debt,
+                stakes,
+            )
+        )
+
+    def _update_system_snapshots(self) -> None:
+        """§6.5.4: reset when no stake is left."""
+        if self.total_stakes == 0:
+            self.total_stakes_snapshot = self.total_collateral_snapshot = 0
+        else:
+            self.total_stakes_snapshot = self.total_stakes
+            self.total_collateral_snapshot = self.total_collateral + self.pending_coll
+        self.events.append(
+            ("SystemSnapshotsUpdated", self.total_stakes_snapshot, self.total_collateral_snapshot)
+        )
 
     # ---- §5.1.9 / §6.7.3 ----
     def redeem_collateral(

@@ -123,7 +123,8 @@ contract VaultManagerPoolHookTest is Test {
     ///      borrow, repay, close): the operation succeeds, the whole interest reaches the reserve,
     ///      `PoolInterestRedirected(offered)` is emitted, `toPool + toReserve = interest` (so I2's `E`
     ///      is unaffected by the redirect), and nothing is minted to the pool. Liquidation and `check`
-    ///      join at P20 / the ShutdownModule prompt; `redeem` accrues through the same `_accrue`.
+    ///      `liquidate` is op 6 (P20); `check` joins at the ShutdownModule prompt; `redeem` accrues through
+    /// the same `_accrue`.
     function test_failingPool_everyAccruingOperation_isRedirected() public {
         _deploy(false);
         HostilePool.Mode[8] memory modes = [
@@ -137,7 +138,7 @@ contract VaultManagerPoolHookTest is Test {
             HostilePool.Mode.HugeRevert
         ];
         for (uint256 m; m < modes.length; ++m) {
-            for (uint256 op; op < 6; ++op) {
+            for (uint256 op; op < 7; ++op) {
                 uint256 snap = vm.snapshotState();
                 hostile.setMode(modes[m]);
                 _warp(1 days);
@@ -173,8 +174,15 @@ contract VaultManagerPoolHookTest is Test {
         else if (op == 2) v.withdrawCollateral(1, 1e18, 0, 0);
         else if (op == 3) v.borrow(1, 100e18, 0, 0);
         else if (op == 4) v.repay(1, 100e18, 0, 0);
-        else v.close(1);
+        else if (op == 5) v.close(1);
         vm.stopPrank();
+        if (op == 6) {
+            // liquidation (P20, CHG-006's deferred sub-case): bob's position below MCR, liquidated by a
+            // third party; the failing pool absorbs nothing and the remainder is redistributed to alice
+            feed.setRound(1, int256(400e8), block.timestamp);
+            vm.prank(makeAddr("liquidator"));
+            v.liquidate(2);
+        }
     }
 
     function _accrual(Vm.Log[] memory logs)

@@ -44,3 +44,18 @@ interface IAuctionHousePurchaseState {
 interface IShutdownGate {
     function belowCritical(uint256 price) external view returns (bool);
 }
+
+/// @notice What `liquidate` calls on the strategy (§6.4.1): A's StabilityPool (§6.6.4), B's
+///         DutchAuctionHouse (§6.8.2). The strategy has received `coll` before the call and sends
+///         `collReturned` back before it returns.
+interface ILiquidationStrategy {
+    function onLiquidation(uint256 positionId, address owner, uint256 debt, uint256 coll, uint256 price)
+        external
+        returns (uint256 debtAbsorbed, uint256 collReturned);
+}
+
+/// @notice What `liquidate` calls on the DeficitLedger when no stake is left to redistribute to
+///         (§6.4.4, §5.6); the VaultManager has transferred `coll` first.
+interface IDeficitLedgerDeficit {
+    function recordDeficit(uint256 debt, uint256 coll) external;
+}

@@ -2,6 +2,11 @@
 pragma solidity 0.8.28;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+interface IHasWeth {
+    function WETH() external view returns (address);
+}
 
 /// @notice Plain WETH stand-in for tests: an ERC-20 anyone can mint.
 contract MockWETH is ERC20 {
@@ -21,6 +26,7 @@ contract MockLedgerViews {
     uint256 public reserve;
     uint256 public interestCalls;
     uint256 public poolDust;
+    uint256 public deficitRecords;
 
     function onInterest(uint256 amount) external {
         reserve += amount;
@@ -36,6 +42,13 @@ contract MockLedgerViews {
     function onPoolDust(uint256 amount) external {
         reserve += amount;
         poolDust += amount;
+    }
+
+    /// @notice §5.6 `recordDeficit` (P20): the VaultManager transferred `coll` first.
+    function recordDeficit(uint256 d, uint256 coll) external {
+        deficit += d;
+        recoveredColl += coll;
+        ++deficitRecords;
     }
 
     function set(uint256 recoveredColl_, uint256 auctionDebt_, uint256 deficit_) external {
@@ -152,6 +165,16 @@ contract HostilePool {
 
     function acceptsInterest() external pure returns (bool) {
         return true;
+    }
+
+    /// @notice A pool that absorbs nothing: it returns all the collateral it received, so the whole
+    ///         position is redistributed (CHG-006's liquidation case; deposits play no part here).
+    function onLiquidation(uint256, address, uint256, uint256 coll, uint256)
+        external
+        returns (uint256 debtAbsorbed, uint256 collReturned)
+    {
+        IERC20(IHasWeth(msg.sender).WETH()).transfer(msg.sender, coll);
+        return (0, coll);
     }
 
     function onInterest(uint256 amount) external returns (bool) {

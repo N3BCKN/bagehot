@@ -12,9 +12,8 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 contract VaultManagerHarness is VaultManager {
     using SafeERC20 for IERC20;
 
-    /// @dev §6.5.2's error carries; the real ones arrive with their writer at P20.
-    uint256 public lastErrorColl;
-    uint256 public lastErrorDebt;
+    // §6.5.2's error carries are the VaultManager's own since P20; the harness's redistribution below
+    // keeps an independent transcription of §6.5.2/§6.5.4 for the P17-H1 equivalence test.
 
     event HarnessRedistributed(uint256 indexed id, uint256 collR, uint256 normR, uint256 totalStakes);
 
@@ -47,6 +46,12 @@ contract VaultManagerHarness is VaultManager {
     /// @notice The post-failure gas check of §6.2 with an injected `gasleft()` (CHG-006 boundary test).
     function requirePoolHookGas(uint256 left) external view {
         _requirePoolHookGas(left);
+    }
+
+    /// @notice §6.5.2's real `_redistribute` from a given `totalStakes` (the `error_carry` unit vector).
+    function redistributeForTest(uint256 stakes, uint256 collR, uint256 normR) external {
+        totalStakes = stakes;
+        _redistribute(collR, normR);
     }
 
     function setIndex(uint256 index_) external {

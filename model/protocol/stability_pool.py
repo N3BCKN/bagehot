@@ -135,6 +135,15 @@ class StabilityPool:
         if self.liquidation_penalty > WAD // 2 or self.min_deposit < 10**18:
             raise ValueError("InvalidParameter")
 
+    # ---- save / restore, for the vault's transaction wrapper when the pool is its strategy ----
+    def _save(self) -> dict:
+        return {
+            f.name: copy.deepcopy(getattr(self, f.name)) for f in fields(self) if f.name != "bank"
+        }
+
+    def _restore(self, saved: dict) -> None:
+        self.__dict__.update(saved)
+
     # ---- transaction wrapper: the pool's own state, inside the bank's ----
     def _atomic(self, fn: Callable[[], object]) -> object:
         saved = {
