@@ -64,7 +64,7 @@
         ]
       },
       "targetFunctionSignatures": [],
-      "excludeFunctionSignatures": []
+      "excludeFunctionSignatures": ["CoreProperties.redistribute(uint256)"]
     },
     "chainConfig": {
       "codeSizeCheckDisabled": true,

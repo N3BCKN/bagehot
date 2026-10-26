@@ -38,10 +38,34 @@ contract MockShutdownGate {
 
 /// @notice A deployment-B auction house as far as the VaultManager (`totalLot`), the gate
 ///         (`activeAuctions`) and the redemption guard (`inPurchase`) can see it; settable.
+/// @notice The DeficitLedger hook the house calls at an auction start (§5.6).
+interface IAuctionDebtLedger {
+    function addAuctionDebt(uint256 d) external;
+}
+
 contract MockPurchaseHouse {
     uint256 public totalLot;
     uint256 public activeAuctions;
     bool public inPurchase;
+    address public ledger;
+
+    /// @notice TEST STAND-IN (P20, human decision c; re-validate at P33, carry-forward P20-B): §6.8.2's
+    ///         auction start as far as the VaultManager and the ledger see it — the lot grows by `coll`
+    ///         (the WETH already received), the auction debt moves to the ledger, and the house answers
+    ///         `(debt, 0)`. No auction record, price or `buy`.
+    function setLedger(address ledger_) external {
+        ledger = ledger_;
+    }
+
+    function onLiquidation(uint256, address, uint256 debt, uint256 coll, uint256)
+        external
+        returns (uint256 debtAbsorbed, uint256 collReturned)
+    {
+        totalLot += coll;
+        activeAuctions += 1;
+        IAuctionDebtLedger(ledger).addAuctionDebt(debt);
+        return (debt, 0);
+    }
 
     function set(uint256 totalLot_, uint256 activeAuctions_) external {
         totalLot = totalLot_;

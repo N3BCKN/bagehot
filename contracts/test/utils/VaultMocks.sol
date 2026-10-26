@@ -44,6 +44,11 @@ contract MockLedgerViews {
         poolDust += amount;
     }
 
+    /// @notice §5.6 `addAuctionDebt` (B's auction start, P20 test stand-in).
+    function addAuctionDebt(uint256 d) external {
+        auctionDebt += d;
+    }
+
     /// @notice §5.6 `recordDeficit` (P20): the VaultManager transferred `coll` first.
     function recordDeficit(uint256 d, uint256 coll) external {
         deficit += d;

@@ -29,6 +29,10 @@ contract CoreInvariantsTest is Test {
             [makeAddr("alice"), makeAddr("bob"), makeAddr("carol"), makeAddr("dave"), makeAddr("erin")];
         handler = new CoreHandler(_variantB(), true, a);
         targetContract(address(handler));
+        // replay-only since P20: the campaign liquidates for real
+        bytes4[] memory replayOnly = new bytes4[](1);
+        replayOnly[0] = CoreHandler.redistribute.selector;
+        excludeSelector(FuzzSelector({addr: address(handler), selectors: replayOnly}));
     }
 
     function _assert(bool ok, string memory why) internal pure {
@@ -48,6 +52,13 @@ contract CoreInvariantsTest is Test {
     /// @dev Deployment A's real pool (P19): I1 pool row, I3's exact inequalities and P range, U4.
     function invariant_I3_poolSolvencyAndU4() public view {
         (bool ok, string memory why) = handler.checkPool();
+        _assert(ok, why);
+    }
+
+    /// @dev I4 (bundle and full-absorption TCR, A1–A3 / B1–B2), I6 (conservation) and I7 (surplus to
+    ///      the owner, gas reserve to the caller), checked inside every liquidation (P20).
+    function invariant_I4_I6_I7_liquidations() public view {
+        (bool ok, string memory why) = handler.checkLiquidations();
         _assert(ok, why);
     }
 
@@ -122,7 +133,7 @@ contract CoreInvariantsTest is Test {
             "repay",
             "close",
             "redeem",
-            "redistribute",
+            "liquidate",
             "shutdown",
             "settle",
             "reclaim",
@@ -130,6 +141,18 @@ contract CoreInvariantsTest is Test {
         ];
         for (uint256 i; i < 11; ++i) {
             emit log_named_uint(string.concat("ok: ", names[i]), handler.ok(bytes32(bytes(names[i]))));
+        }
+        string[7] memory liq = [
+            "liqFull",
+            "liqPartial",
+            "liqNoOffset",
+            "liqRedistributed",
+            "liqDeficit",
+            "liqUnderwater",
+            "snapshotReset"
+        ];
+        for (uint256 i; i < 7; ++i) {
+            emit log_named_uint(string.concat("ok: ", liq[i]), handler.ok(bytes32(bytes(liq[i]))));
         }
         emit log_named_uint("ok: poolDeposit", handler.ok("poolDeposit"));
         emit log_named_uint("ok: poolWithdraw", handler.ok("poolWithdraw"));
@@ -146,7 +169,7 @@ contract CoreInvariantsTest is Test {
             // redemption is caught instead by the handler, which accepts a refusal only when the state
             // before the call justifies it
             if (!_variantB()) {
-                assertGt(handler.ok(bytes32("redistribute")), 0, "reach: a redistribution ran (A)");
+                assertGt(handler.ok(bytes32("liqRedistributed")), 0, "reach: a liquidation redistributed (A)");
             }
         }
         _unwind();

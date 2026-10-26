@@ -381,14 +381,14 @@ contract VaultManagerPoolHookTest is Test {
     function test_constructor_poolHookGasRange() public {
         weth = new MockWETH();
         vm.expectRevert(abi.encodeWithSelector(InvalidParameter.selector, 8));
-        new VaultManager(address(weth), address(1), address(2), 1.1e18, 2000e18, 1, 0, 0, 49_999);
+        new VaultManager(address(weth), address(1), address(2), 1.1e18, 2000e18, 1, 0, 0, 174_999);
         vm.expectRevert(abi.encodeWithSelector(InvalidParameter.selector, 8));
         new VaultManager(address(weth), address(1), address(2), 1.1e18, 2000e18, 1, 0, 0, 1_000_001);
         VaultManager lo =
-            new VaultManager(address(weth), address(1), address(2), 1.1e18, 2000e18, 1, 0, 0, 50_000);
+            new VaultManager(address(weth), address(1), address(2), 1.1e18, 2000e18, 1, 0, 0, 175_000);
         VaultManager hi =
             new VaultManager(address(weth), address(1), address(2), 1.1e18, 2000e18, 1, 0, 0, 1_000_000);
-        assertEq(lo.POOL_HOOK_FLOOR(), 1588, "ceil(100k/63)");
+        assertEq(lo.POOL_HOOK_FLOOR(), 5556, "ceil(350k/63), CHG-013");
         assertEq(hi.POOL_HOOK_FLOOR(), 31_747, "ceil(2M/63)");
     }
 }

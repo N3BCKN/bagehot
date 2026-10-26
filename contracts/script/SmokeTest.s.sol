@@ -291,8 +291,10 @@ contract SmokeTest is ConfigLoader {
     function _e(BagehotFactory f) internal view returns (int256) {
         VaultManager v = f.vaultManager();
         IDeficitLedgerViews l = IDeficitLedgerViews(f.deficitLedger());
-        uint256 backed = f.token().totalSupply() - l.auctionDebt() - l.deficit();
-        return int256(v.totalNormDebt() * v.index()) - int256(backed * RAY);
+        // E = n·I − (S − A − F)·RAY, without the unsigned S − A − F (it can be a few wei
+        // negative, P20)
+        return int256(v.totalNormDebt() * v.index()) + int256((l.auctionDebt() + l.deficit()) * RAY)
+            - int256(f.token().totalSupply() * RAY);
     }
 
     /// @dev I2's bound is a sum of per-sub-effect bounds, so one step's change of E lies within the

@@ -12,6 +12,9 @@ contract StabilityPoolGasTest is PoolFixture {
     address internal constant BOB = address(0xB0B);
     /// @notice The spec's value (§3.1): at least twice the worst case measured here.
     uint256 internal constant POOL_HOOK_GAS = 200_000;
+    /// @notice `VaultManager.MIN_POOL_HOOK_GAS` (CHG-013): the rule must hold at the bound, not only at
+    ///         the default.
+    uint256 internal constant MIN_HOOK_GAS = 175_000;
 
     function setUp() public {
         _deployPool(MIN_DEPOSIT);
@@ -34,6 +37,7 @@ contract StabilityPoolGasTest is PoolFixture {
         assertGt(pool.lastInterestError(), 0, "the carry was written non-zero");
         emit log_named_uint("onInterest worst case (fresh epoch, cold, 3 zero-to-non-zero writes)", used);
         assertLe(2 * used, POOL_HOOK_GAS, "POOL_HOOK_GAS is at least twice the worst case");
+        assertLe(2 * used, MIN_HOOK_GAS, "so is the constructor's lower bound (CHG-013)");
     }
 
     /// @dev The same after a scale change: `G[0][1]` fresh, the carry and balance zero.
@@ -50,6 +54,7 @@ contract StabilityPoolGasTest is PoolFixture {
         assertTrue(booked);
         emit log_named_uint("onInterest worst case (fresh scale, cold)", used);
         assertLe(2 * used, POOL_HOOK_GAS, "POOL_HOOK_GAS is at least twice the worst case");
+        assertLe(2 * used, MIN_HOOK_GAS, "so is the constructor's lower bound (CHG-013)");
     }
 
     /// @dev The declining path (`totalDeposits < MIN_DEPOSIT`) for comparison.

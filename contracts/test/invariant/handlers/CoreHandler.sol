@@ -53,6 +53,7 @@ contract CoreHandler is Test {
     uint256 internal constant DECAY = 999_983_955_055_097_432_543_272_791;
     uint256 internal constant CRITICAL_TCR = 1.05e18;
     uint256 internal constant MIN_PRICE = 10e18;
+    uint256 internal constant PENALTY = 0.05e18; // the pool's LIQUIDATION_PENALTY (A)
     uint256 internal constant MAX_PRICE = 1_000_000e18;
     uint256 internal constant STALENESS = 3600;
     uint256 internal constant GRACE = 3600;
@@ -97,6 +98,10 @@ contract CoreHandler is Test {
     string public lastUnexpectedAction;
     uint256 public i9Violations;
     uint256 public poolEntitlementViolations; // I3: withdraw paid other than min(x, compounded)
+    uint256 public i4Violations; // I4 (A1–A3, B1–B2), checked inside `liquidate`
+    uint256 public i6Violations; // I6, by state deltas inside `liquidate`
+    uint256 public i7Violations; // I7, per-actor WETH deltas inside `liquidate`
+    string public lastLiqViolation;
     uint256 public i12Violations;
     uint256 public oracleModeMismatches;
     uint256 public i5Violations;
@@ -163,7 +168,7 @@ contract CoreHandler is Test {
         counting = new CountingOracle(oracle);
         sorted = new SortedPositions(HINT_STEPS);
         ledger = new MockLedgerViews();
-        if (!variantB) pool = new StabilityPool(address(weth), address(token), 0.05e18, 1e18);
+        if (!variantB) pool = new StabilityPool(address(weth), address(token), PENALTY, 1e18);
         house = new MockPurchaseHouse();
         address strategy = variantB ? address(house) : address(pool);
         v = new VaultManagerHarness(
@@ -192,6 +197,7 @@ contract CoreHandler is Test {
         token.wire(address(v), strategy, address(ledger), address(gate));
         rm.wire(address(v), address(gate), variantB ? address(house) : address(0));
         if (!variantB) pool.wire(address(v), address(ledger));
+        house.setLedger(address(ledger));
     }
 
     function _seedOpen(address who, uint256 coll, uint256 debt) internal {
@@ -492,39 +498,265 @@ contract CoreHandler is Test {
         _discardLogs();
     }
 
-    /// @notice Test-only redistribution of one position (deployment A, live phase), standing in for a
-    ///         liquidation: like one, it needs a usable price, so the oracle recovers first. With fewer
-    ///         than two active positions it first opens one, so that every run can reach I13's
-    ///         tolerance regime (CHG-005) even after the actors closed everything.
+    /// @notice A real liquidation (P20; replaces P17's test-only `redistribute`, P17-H1). It picks the
+    ///         lowest-NICR position or a random one and, in modes 0–6, moves the price so the target is
+    ///         at ICR 1.09 / 1.04 / 0.95 — partial or full offsets, everything seized, the pool's loss —
+    ///         or, in mode 7, tries it on whatever the oracle reports (I12). With fewer than two active
+    ///         positions it opens one first unless `lastMode`, so the no-stakes DEFICIT path and the
+    ///         snapshot reset are reachable and every run can still reach I13's tolerance regime
+    ///         (CHG-005). The expected outcome is reconstructed from the pre-state with the spec's
+    ///         formulas (§6.4.1, §6.6.4, §6.8.2), so I4, I6 and I7 are checked without event logs too.
+    function liquidate(uint256 idSeed, uint8 mode, bool lastMode) external action {
+        if (v.shutdown()) return;
+        if (stepsAllExact == 0) return; // CHG-005: one exact step first (as the old action did)
+        mode %= 8; // 0–6: priced to a target ICR; 7: as the oracle stands (I12), rarer so runs liquidate
+        if (mode != 7 && _oracleUnusable()) {
+            oracleMode = 0;
+            _applyOracleMode();
+        }
+        // the last-position (DEFICIT) mode only once the run has redistributed (CHG-005 reach first)
+        if (!(lastMode && stepsNonExact > 0)) {
+            // two active positions, so the remainder has a stake to go to (the actors may have closed all)
+            for (uint256 k; k < 2 && v.activeCount() < 2; ++k) {
+                _openFiller(idSeed >> (8 * k)); // a different actor per filler, no overflow on any seed
+            }
+        }
+        uint256 id = idSeed % 2 == 0 ? sorted.getLast() : _pick(idSeed);
+        if (id == 0) return;
+        uint256[7] memory icr = [uint256(1.09e18), 1.04e18, 0.95e18, 1.09e18, 1.04e18, 1.09e18, 0.95e18];
+        if (mode != 7 && !_priceForIcr(id, icr[mode])) return;
+        // CHG-005 asks every run of A to reach I13's tolerance regime, which needs a redistribution: until
+        // it has, depositors withdraw first if the pool would absorb the whole debt (ordinary actions)
+        if (!variantB && stepsNonExact == 0) _thinPool(v.debtOf(id));
+        address caller = _actor(idSeed >> 8);
+        bool unusable = _oracleUnusable();
+        try v.accrue() {}
+        catch (bytes memory err) {
+            _discardLogs();
+            _unexpected(bytes4(err), "liquidate: accrue");
+            return;
+        }
+        Liq memory l = _liqBefore(id, caller);
+        // count what already happened (the filler open, the accrual) before the call: a reverting
+        // liquidation discards only its own logs
+        if (eventsAvailable) _countEvents();
+        vm.prank(caller);
+        try v.liquidate(id) {
+            if (unusable) ++i12Violations;
+            _liqAfter(l);
+            _forget(id);
+        } catch (bytes memory err) {
+            _discardLogs();
+            bytes4 sel = bytes4(err);
+            if (unusable) {
+                if (sel != PriceUnusable.selector) ++i12Violations;
+            } else if (sel != VaultManager.NotLiquidatable.selector) {
+                _unexpected(sel, "liquidate");
+            }
+        }
+    }
+
+    /// @dev What one liquidation is expected to do, from the pre-state (after accrue).
+    struct Liq {
+        uint256 id;
+        address owner;
+        address caller;
+        uint256 coll; // effective
+        uint256 n; // effective normalised debt
+        uint256 pc; // pending collateral the liquidation applies first
+        uint256 debt;
+        uint256 price;
+        uint256 cBefore;
+        uint256 dBefore;
+        uint256 pendingCollBefore;
+        uint256 pendingNormBefore;
+        uint256 ledgerCollBefore;
+        uint256 ledgerDeficitBefore;
+        uint256 ledgerAuctionDebtBefore;
+        uint256 lotBefore;
+        uint256 stakesAfterRemoval;
+        // A, from §6.6.4 and §6.4.1
+        uint256 seized;
+        uint256 surplus;
+        uint256 dP;
+        uint256 collP;
+        uint256 collReturned;
+        uint256 normRest;
+        uint8 path;
+        uint256[5] wethBefore;
+    }
+
+    function _liqBefore(uint256 id, address caller) internal view returns (Liq memory l) {
+        VaultManager.Position memory p = v.positions(id);
+        (l.id, l.owner, l.caller, l.price) = (id, p.owner, caller, price);
+        (l.coll, l.n) = v.effective(id);
+        l.pc = l.coll - p.coll;
+        l.debt = v.debtOf(id);
+        (l.cBefore, l.dBefore) = (v.systemColl(), v.systemDebt());
+        (l.pendingCollBefore, l.pendingNormBefore) = (v.pendingColl(), v.pendingNormDebt());
+        (l.ledgerCollBefore, l.ledgerDeficitBefore, l.ledgerAuctionDebtBefore) =
+        (ledger.recoveredColl(), ledger.deficit(), ledger.auctionDebt());
+        l.lotBefore = house.totalLot();
+        l.stakesAfterRemoval = v.totalStakes() - p.stake; // the stake after applyPending is unchanged
+        for (uint256 i; i < 5; ++i) {
+            l.wethBefore[i] = weth.balanceOf(actors[i]);
+        }
+        if (variantB) {
+            l.dP = l.debt; // §6.8.2 answers (debt, 0)
+            return l;
+        }
+        l.seized = Math.min(l.coll, Math.mulDiv(l.debt, WAD + PENALTY, l.price, Math.Rounding.Ceil)); // R11
+        l.surplus = l.coll - l.seized;
+        uint256 t = pool.totalDeposits();
+        l.dP = Math.min(l.debt, t);
+        l.collP = l.dP == l.debt ? l.seized : Math.mulDiv(l.seized, l.dP, l.debt); // R12
+        l.collReturned = l.seized - l.collP;
+        uint256 normAbsorbed = l.dP == l.debt ? l.n : Math.mulDiv(l.dP, RAY, v.index()); // R34
+        l.normRest = l.n - normAbsorbed;
+        if (l.collReturned > 0 || l.normRest > 0) l.path = l.stakesAfterRemoval > 0 ? 1 : 2;
+    }
+
+    function _liqAfter(Liq memory l) internal {
+        ++ok["liquidate"];
+        _countLiquidation(l);
+        uint256 cAfter = v.systemColl();
+        uint256 dAfter = v.systemDebt();
+        if (variantB) {
+            // I4 B1, B2
+            if (cAfter != l.cBefore) _liqFail(4, "I4 B1: C changed at an auction start");
+            if (dAfter < l.dBefore || dAfter > l.dBefore + 1) _liqFail(4, "I4 B2: D outside [D, D + 1]");
+            // I6 B: the whole collateral to the lot, the whole debt to auction debt
+            if (house.totalLot() - l.lotBefore != l.coll) _liqFail(6, "I6 B: lot != coll");
+            if (ledger.auctionDebt() - l.ledgerAuctionDebtBefore != l.debt) {
+                _liqFail(6, "I6 B: auction debt");
+            }
+        } else {
+            uint256 dc = l.surplus + l.collP;
+            // I4 A1, A2, A3
+            if (cAfter != l.cBefore - dc) _liqFail(4, "I4 A1: C != C - (surplus + collP)");
+            if (l.dP == l.debt && dc != l.coll) _liqFail(4, "I4 A2: full absorption removes all collateral");
+            if (
+                l.dP == l.debt && l.coll * l.dBefore <= l.debt * l.cBefore
+                    && cAfter * l.dBefore + l.cBefore < l.cBefore * dAfter
+            ) _liqFail(4, "I4 A3: TCR fell by more than one wei of debt");
+            // I6 A: collReturned and normRest accounted exactly once
+            if (l.coll != l.collP + l.surplus + l.collReturned) _liqFail(6, "I6 A: coll split");
+            if (l.path == 1) {
+                if (v.pendingColl() != l.pendingCollBefore - l.pc + l.collReturned) {
+                    _liqFail(6, "I6 A: collReturned not redistributed exactly");
+                }
+                if (ledger.recoveredColl() != l.ledgerCollBefore) {
+                    _liqFail(6, "I6 A: redistributed and recovered");
+                }
+            } else if (l.path == 2) {
+                if (ledger.recoveredColl() - l.ledgerCollBefore != l.collReturned) {
+                    _liqFail(6, "I6 A: collReturned not recovered exactly");
+                }
+                uint256 debtRest = Math.mulDiv(l.normRest, v.index(), RAY, Math.Rounding.Ceil); // R27
+                if (ledger.deficit() - l.ledgerDeficitBefore != debtRest) _liqFail(6, "I6 A: deficit");
+            } else if (ledger.recoveredColl() != l.ledgerCollBefore) {
+                _liqFail(6, "I6 A: nothing to account, but the ledger moved");
+            }
+        }
+        // I7: every actor's WETH delta is surplus·[owner] + GAS_RESERVE·[caller]
+        for (uint256 i; i < 5; ++i) {
+            uint256 want = l.wethBefore[i] + (actors[i] == l.owner ? l.surplus : 0)
+                + (actors[i] == l.caller ? GAS_RESERVE : 0);
+            if (weth.balanceOf(actors[i]) != want) _liqFail(7, "I7: an actor's WETH delta");
+        }
+        if (l.path == 1) ++redistributions;
+        if (!variantB) {
+            if (l.dP == l.debt) ++ok["liqFull"];
+            else if (l.dP > 0) ++ok["liqPartial"];
+            else ++ok["liqNoOffset"];
+            if (l.path == 1) ++ok["liqRedistributed"];
+            if (l.path == 2) ++ok["liqDeficit"];
+            if (l.coll * l.price < l.debt * WAD) ++ok["liqUnderwater"];
+            if (v.totalStakesSnapshot() == 0) ++ok["snapshotReset"];
+        }
+    }
+
+    /// @dev I2's counters for one liquidation (CHG-011): A — a partial pool offset (0 < dP < debt)
+    ///      counts X, a full one (dP == debt > 0) counts Y, a no-stakes deficit counts Y; B — the auction
+    ///      start counts Y.
+    function _countLiquidation(Liq memory l) internal {
+        if (variantB) {
+            ++gY;
+            return;
+        }
+        if (l.dP > 0 && l.dP < l.debt) ++gX;
+        else if (l.dP > 0) ++gY;
+        if (l.path == 2) ++gY;
+    }
+
+    function _liqFail(uint256 which, string memory why) internal {
+        if (which == 4) ++i4Violations;
+        else if (which == 6) ++i6Violations;
+        else ++i7Violations;
+        lastLiqViolation = why;
+    }
+
+    /// @dev Sets the oracle price so `id` is at `icr` (rounded to the feed's 8 decimals); false if the
+    ///      price would leave the oracle's bounds.
+    function _priceForIcr(uint256 id, uint256 icr) internal returns (bool) {
+        (uint256 c, uint256 n) = v.effective(id);
+        uint256 debt = Math.mulDiv(n, v.currentIndex(), RAY, Math.Rounding.Ceil); // R1 at the index liquidate
+        // uses
+        uint256 p = Math.mulDiv(debt, icr, c) / 1e10 * 1e10;
+        if (p < MIN_PRICE || p > MAX_PRICE) return false;
+        price = p;
+        _applyOracleMode();
+        return true;
+    }
+
+    /// @dev Depositors withdraw everything, one by one, until the pool holds less than `debt`.
+    function _thinPool(uint256 debt) internal {
+        for (uint256 i; i < 5 && pool.totalDeposits() >= debt; ++i) {
+            (uint256 initial,,,,,) = pool.deposits(actors[i]);
+            if (initial == 0) continue;
+            vm.prank(actors[i]);
+            try pool.withdraw(type(uint256).max) {
+                ++ok["poolWithdraw"];
+            } catch (bytes memory err) {
+                _discardLogs();
+                _unexpected(bytes4(err), "liquidate: thin the pool");
+            }
+        }
+    }
+
+    function _openFiller(uint256 seed) internal {
+        uint256 next = v.nextId();
+        uint256 I = v.currentIndex();
+        uint256 debtOf =
+            Math.mulDiv(Math.mulDiv(MIN_DEBT, RAY, I, Math.Rounding.Ceil), I, RAY, Math.Rounding.Ceil);
+        uint256 coll = 2 * Math.mulDiv(MCR, debtOf, price, Math.Rounding.Ceil); // ICR 2.2 at any price
+        vm.prank(actors[seed % actors.length]);
+        try v.openPosition(coll, MIN_DEBT, 0, 0) {
+            ++gX;
+            _placed(next);
+        } catch (bytes memory err) {
+            _discardLogs();
+            bytes4 sel = bytes4(err);
+            if (sel != PriceUnusable.selector) _unexpected(sel, "liquidate: filler open");
+        }
+    }
+
+    /// @notice REPLAY ONLY since P20: P17's test-only redistribution (`VaultManagerHarness.redistribute`),
+    ///         kept so the P17 regression tests can replay the sequences they pin. Excluded from the
+    ///         Foundry campaign (`excludeSelector`) and from Medusa (`excludeFunctionSignatures`): the
+    ///         campaigns liquidate for real (`liquidate`). Its equivalence with the real liquidation in
+    ///         the seize-everything case is `RedistributionHarnessEquivalenceTest` (P17-H1).
     function redistribute(uint256 idSeed) external action {
         if (variantB || v.shutdown()) return;
-        // CHG-005 asks every run to check the exact order on a list the run has changed, so the first
-        // redistribution waits for one exact step after an action. No state is lost: any action
-        // before it reaches the same states (the list is exact until something redistributes).
         if (stepsAllExact == 0) return;
-        // it stands in for a liquidation, which requires a usable price (§7): the oracle recovers first
         if (_oracleUnusable()) {
             oracleMode = 0;
             _applyOracleMode();
         }
-        if (v.activeCount() < 2) {
-            uint256 next = v.nextId();
-            uint256 I = v.currentIndex();
-            uint256 debtOf =
-                Math.mulDiv(Math.mulDiv(MIN_DEBT, RAY, I, Math.Rounding.Ceil), I, RAY, Math.Rounding.Ceil);
-            uint256 coll = 2 * Math.mulDiv(MCR, debtOf, price, Math.Rounding.Ceil); // ICR 2.2 at any price
-            vm.prank(actors[idSeed % actors.length]);
-            try v.openPosition(coll, MIN_DEBT, 0, 0) {
-                ++gX;
-                _placed(next);
-            } catch (bytes memory err) {
-                _discardLogs();
-                _unexpected(bytes4(err), "redistribute: open");
-            }
-        }
+        if (v.activeCount() < 2) _openFiller(idSeed);
         uint256 id = _pick(idSeed);
         if (id == 0 || v.totalStakes() <= v.positions(id).stake) return;
-        try v.redistribute(id) { // its preconditions are checked above: any revert is a failure
+        try v.redistribute(id) {
             ++redistributions;
             ++ok["redistribute"];
             _forget(id);
@@ -898,8 +1130,22 @@ contract CoreHandler is Test {
                 (,,, bool closed) = abi.decode(logs[i].data, (uint256, uint256, uint256, bool));
                 if (closed) ++eY;
                 else ++eX;
-            } else if (t == VaultManagerHarness.HarnessRedistributed.selector) {
+            } else if (
+                t == VaultManagerHarness.HarnessRedistributed.selector
+                    || t == VaultManager.Redistributed.selector
+            ) {
                 ++eRedistributions;
+            } else if (t == VaultManager.Liquidated.selector) {
+                // CHG-011: classified by the position; B's auction start counts once (Y)
+                (uint256 debt,, uint256 dA,,, uint8 path,) =
+                    abi.decode(logs[i].data, (uint256, uint256, uint256, uint256, uint256, uint8, uint256));
+                if (variantB) {
+                    ++eY;
+                } else {
+                    if (dA > 0 && dA < debt) ++eX;
+                    else if (dA > 0) ++eY;
+                    if (path == 2) ++eY;
+                }
             }
         }
     }
@@ -1103,6 +1349,10 @@ contract CoreHandler is Test {
         if (token.balanceOf(address(rm)) != donatedToken[address(rm)]) {
             return (false, "I1: RedemptionModule token");
         }
+        if (weth.balanceOf(address(ledger)) != ledger.recoveredColl()) {
+            return (false, "I1: DeficitLedger WETH");
+        }
+        if (variantB && weth.balanceOf(address(house)) != house.totalLot()) return (false, "I1: house WETH");
         return (true, "");
     }
 
@@ -1132,6 +1382,12 @@ contract CoreHandler is Test {
         return (true, "");
     }
 
+    /// @dev I4, I6, I7 — checked inside every successful `liquidate` (P20).
+    function checkLiquidations() public view returns (bool, string memory) {
+        if (i4Violations + i6Violations + i7Violations != 0) return (false, lastLiqViolation);
+        return (true, "");
+    }
+
     function checkI1Sums() public view returns (bool, string memory) {
         if (v.settled()) return (true, ""); // the supporting identities stop at settlement (I1)
         (uint256 stakes, uint256 norm, uint256 coll, uint256 active) = (0, 0, 0, 0);
@@ -1154,8 +1410,12 @@ contract CoreHandler is Test {
     function checkI2() public view returns (bool, string memory) {
         if (v.settled()) return (true, "");
         uint256 I = v.index();
-        uint256 lhs = v.totalNormDebt() * I;
-        uint256 rhs = (token.totalSupply() - ledger.auctionDebt() - ledger.deficit()) * RAY;
+        // E = n·I − (S − A − F)·RAY, rearranged so nothing underflows: since P20, A + F can exceed S
+        // by
+        // a few wei of rounding (an auction start or a deficit records debt rounded up, R1/R27), which
+        // the bound allows — the old `(S − A − F)` form only worked while A = F = 0
+        uint256 lhs = v.totalNormDebt() * I + (ledger.auctionDebt() + ledger.deficit()) * RAY;
+        uint256 rhs = token.totalSupply() * RAY;
         if (lhs >= rhs) {
             uint256 e = lhs - rhs;
             if (gX + gY == 0 ? e != 0 : e >= gX * I + gY * RAY) return (false, "I2 upper");

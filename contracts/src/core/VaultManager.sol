@@ -164,7 +164,8 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
     uint256 public constant MAX_MCR = 2 * WAD;
     uint256 public constant MIN_MIN_DEBT = 1e18;
     uint256 public constant MAX_RATE_PER_SECOND = 21_979_553_151_239_153_028; // ANNUAL_RATE = 1.0
-    uint256 public constant MIN_POOL_HOOK_GAS = 50_000;
+    /// @notice ≥ 2 × the pool's measured worst-case `onInterest` (86,981 gas), CHG-006's rule (CHG-013).
+    uint256 public constant MIN_POOL_HOOK_GAS = 175_000;
     uint256 public constant MAX_POOL_HOOK_GAS = 1_000_000;
 
     uint8 internal constant OP_OPEN = 1;

@@ -60,7 +60,7 @@ class ExactDepositor:
     offsets: int = 0  # offsets since the snapshot (compounded bound)
     coll_bound: Fraction = Fraction(0)  # T_j/DP + Σ (T_k/DP + 1) over offset events
     interest_bound: Fraction = Fraction(0)  # the same over interest events
-    # CHG-010 (proposed): the exact share of gains booked while
+    # CHG-010: the exact share of gains booked while
     # currentScale > snapScale + SCALE_SPAN, which §6.6.7 ignores
     coll_ignored: Fraction = Fraction(0)
     interest_ignored: Fraction = Fraction(0)
@@ -122,7 +122,8 @@ class Exact:
 
 
 def check_I3_attribution(pool: StabilityPool, exact: Exact) -> list[str]:
-    """I3's two attribution bounds against the exact references; returns violations."""
+    """I3's two attribution bounds against the exact references (with CHG-010's ignored-scales term
+    on both gain bounds); returns violations."""
     bad = []
     for a, e in exact.depositors.items():
         comp = pool.compounded_deposit(a)
@@ -130,21 +131,21 @@ def check_I3_attribution(pool: StabilityPool, exact: Exact) -> list[str]:
         gap = e.share - comp
         if gap < 0 or gap > e.share * e.offsets / 10**27 + 1:
             bad.append(f"{a}: compounded {comp} vs exact {float(e.share):.6g}")
-        if abs(e.coll_gain - cg) > e.coll_bound:
+        if abs(e.coll_gain - cg) > e.coll_bound + e.coll_ignored:
             bad.append(f"{a}: collateral gain {cg} vs exact {float(e.coll_gain):.6g}")
-        if abs(e.interest_gain - ig) > e.interest_bound:
+        if abs(e.interest_gain - ig) > e.interest_bound + e.interest_ignored:
             bad.append(f"{a}: interest gain {ig} vs exact {float(e.interest_gain):.6g}")
     return bad
 
 
-def check_I3_attribution_chg010(pool: StabilityPool, exact: Exact) -> list[str]:
-    """CHG-010 (proposed, awaiting the human): I3's gain bounds plus the depositor's exact share of
-    gains booked in scales §6.6.7 ignores. The compounded bound is unchanged."""
+def check_I3_attribution_pre_chg010(pool: StabilityPool, exact: Exact) -> list[str]:
+    """I3's gain bounds as written before CHG-010 (without the ignored-scales term) — kept only to
+    pin the counterexample that motivated the change (`tests/model/test_sp_precision.py`)."""
     bad = []
     for a, e in exact.depositors.items():
         cg, ig = pool.gains(a)
-        if abs(e.coll_gain - cg) > e.coll_bound + e.coll_ignored:
+        if abs(e.coll_gain - cg) > e.coll_bound:
             bad.append(f"{a}: collateral gain {cg} vs exact {float(e.coll_gain):.6g}")
-        if abs(e.interest_gain - ig) > e.interest_bound + e.interest_ignored:
+        if abs(e.interest_gain - ig) > e.interest_bound:
             bad.append(f"{a}: interest gain {ig} vs exact {float(e.interest_gain):.6g}")
     return bad

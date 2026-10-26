@@ -31,7 +31,7 @@ from model.invariants import (
     Exact,
     check_I3,
     check_I3_attribution,
-    check_I3_attribution_chg010,
+    check_I3_attribution_pre_chg010,
     check_U4,
 )
 from model.protocol.stability_pool import DECIMAL_PRECISION, StabilityPool, Tokens
@@ -81,7 +81,7 @@ def run_case(seed: int, steps: int, record: bool) -> tuple[Worst, list[str], lis
     exact = Exact()
     worst = Worst()
     violations: list[str] = []
-    chg010: list[str] = []
+    pre: list[str] = []
     trace: list[dict] = []
     for a in ACTORS:
         pool.bank._mint(a, 10**33)
@@ -92,7 +92,7 @@ def run_case(seed: int, steps: int, record: bool) -> tuple[Worst, list[str], lis
         if not check_U4(pool, ACTORS):
             violations.append(f"{tag}: U4")
         violations.extend(f"{tag}: attribution {v}" for v in check_I3_attribution(pool, exact))
-        chg010.extend(f"{tag}: {v}" for v in check_I3_attribution_chg010(pool, exact))
+        pre.extend(f"{tag}: {v}" for v in check_I3_attribution_pre_chg010(pool, exact))
         worst.update(pool, exact, tag)
         if record:
             step["after"] = {
@@ -171,6 +171,7 @@ def run_case(seed: int, steps: int, record: bool) -> tuple[Worst, list[str], lis
                 exact.on_interest(t, g, pool)
             pool.hook_on_interest(g)
             after({"op": "interest", "g": str(g)})
+    violations.extend(f"pre-CHG-010 bound: {v}" for v in pre)
     return worst, violations, trace
 
 
@@ -249,11 +250,11 @@ def main() -> None:
                 json.dumps(_flat(seed, trace), separators=(",", ":")) + "\n"
             )
     print(f"cases {args.cases} × steps {args.steps}, seed {args.seed}")
-    current = [v for v in violations if not v.startswith("CHG-010")]
-    proposed = [v for v in violations if v.startswith("CHG-010")]
-    print(f"violations of the current I3 text: {len(current)}")
-    print(f"violations of the bound CHG-010 proposes: {len(proposed)}")
-    for v in (proposed or current)[:20]:
+    current = [v for v in violations if not v.startswith("pre-CHG-010")]
+    pre = [v for v in violations if v.startswith("pre-CHG-010")]
+    print(f"violations of I3 (with CHG-010): {len(current)}")
+    print(f"violations of I3's gain bounds as written before CHG-010: {len(pre)}")
+    for v in current[:20]:
         print("  ", v)
     print(
         f"max compounded error (exact − integer): {float(total.compounded):.6g} wei"
