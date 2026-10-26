@@ -24,7 +24,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | P17 | Invariant harness and Medusa | done | 2026-10-25 | `CoreHandler` over the whole system in A and B; I1, I2, I5, I8, I9, I11, I12, I13 and no unexpected revert; Medusa 30 min green; nightly green; I9∩I12 test; crytic-compile pinned with a CI check. CHG-008 applied to I13 (ADR-0034, proposed). security-reviewer: 5 surviving mutants found and now caught. **Open for the human: P17-1 (stake collapse, before P20) and P17-2 (I13 derivation)** |
 | P18 | Local deployment, factory and manifest | done | 2026-10-25 | `BagehotFactory` deploys and wires a whole variant in one transaction (local-only stand-ins for the modules P19–P33 build); `config/31337.toml` + `script/Config.s.sol`; `Deploy.s.sol` (chain guard, §3.3 + CREATE-provenance assertions before broadcast, variant-keyed manifest written only on broadcast); `SmokeTest.s.sol`. **Fresh anvil → `just deploy-local` → `just smoke http://127.0.0.1:8545` passes**; deploy on 1 / 8453 reverts (tested). security-reviewer: nothing critical; M/L findings fixed. Open: P18-1 (initcode, ADR before P19), P18-2, P18-3 |
 | P19 | StabilityPool (product-sum) | done | 2026-10-26 | `StabilityPool` (§6.6, §5.3; `onLiquidation`, dust sweep, `onInterest` returning `booked`) with its integer model; all 3 `product_sum.json` vectors bit-for-bit on both sides; 39 unit tests; CHG-006 / ADR-0033 applied (guarded, gas-capped pool hook, `POOL_HOOK_GAS = 200_000` from a measured 86,981 worst case; failing-pool matrix 8 modes × 6 operations; caller-gas sweeps with zero redirections); pool invariant campaign (I1, I3, U4) and the real pool in the core handler (Medusa `property_I3_poolSolvency`); precision study `model/tools/sp_precision.py` (200 × 300, replayed bit-for-bit by Foundry; docs/fuzzing.md); real pool deployed in A from its blueprint (ADR-0035 implemented, factory tx ≈ 10.2M gas), smoke tests A and B pass on a fresh anvil; CHG-009 applied to invariants. security-reviewer and spec-auditor: no high/critical. **Open: CHG-010 (I3 interest bound, human decision), P19-L1 (`MIN_POOL_HOOK_GAS` range), CHG-011 candidate (I2 counter rule).** |
-| P20 | Liquidation via pool and redistribution | in progress | | `liquidate` (§6.4.1) with redistribution (§6.5.2), snapshots and reset (§6.5.4), the no-stakes deficit, CHG-012's defensive checks; Python mirror; all 9 liquidation/redistribution vectors bit-for-bit on both sides; unit tests incl. T-10 self-liquidation fuzz, T-26 measurement, CHG-006 liquidation sub-case, P17-H1 equivalence (1,024 runs). Core campaign now liquidates for real (A and B; B through the §6.8.2 house stand-in, P20-B): I4 (A1–A3, B1–B2), I6, I7 checked in every liquidation, I2 counted per CHG-011, I1 ledger/house rows; P17's `redistribute` is replay-only. CHG-010 applied to the model's I3 check; CHG-013's `MIN_POOL_HOOK_GAS = 175_000`. Spec/invariant texts of CHG-010/011/013 await the protected-paths unlock. |
+| P20 | Liquidation via pool and redistribution | done | 2026-10-26 | `liquidate` (§6.4.1) with redistribution, snapshot reset and the no-stakes deficit; CHG-012's checks; Python mirror; all 9 liquidation/redistribution vectors bit-for-bit on both sides; unit tests (every revert and path, T-10, T-26, T-27, P17-H1 equivalence, CHG-006's liquidation case, the review's gaps); the core campaign liquidates for real in A and B (I4, I6, I7 per liquidation; I2 per CHG-011); smoke test liquidates on a fresh anvil; **nightly green** (4,096 runs × 500, A and B); security-reviewer: no critical/high. Open: the CHG-010/011/013 spec and invariant texts (approved, await the unlock), CHG-014 and CHG-015 (proposed), a per-path liquidation gas measurement for P24's cost model. |
 | P21 | DeficitLedger and invariant extension | todo | | |
 | P22 | Python protocol model | todo | | |
 | P23 | Differential testing harness | todo | | |
@@ -54,6 +54,32 @@ Claude updates this file at the end of every session. Status: todo · in progres
 ## Session log
 
 <!-- newest first: date · prompt · what changed · decisions · next -->
+
+### 2026-10-26 · P20 · Liquidation via the pool and redistribution
+
+**Changed.** `VaultManager.liquidate` per §6.4.1 with `_redistribute` (§6.5.2), `_updateSystemSnapshots`
+(§6.5.4, reset) and the no-stakes deficit (§6.4.4); CHG-012's checks on the strategy's answer; the
+DeficitLedger stand-in's storage-backed `recordDeficit` (P20-SD); the model mirrors all of it. All nine
+`liquidation_pool.json` / `redistribution.json` vectors pass on both sides. The core campaign liquidates
+for real in A and in B (through a §6.8.2 house stand-in, P20-B), checking I4, I6 and I7 in every
+liquidation and counting I2 per CHG-011; P17's `redistribute` is replay-only. The smoke test liquidates
+on a fresh anvil. CHG-010's term in the model's I3 check; CHG-013's `MIN_POOL_HOOK_GAS = 175_000`.
+
+**Decisions.** The human: no `batchLiquidate` (a), storage-backed stub on the re-validate list (b), a
+B house stand-in now (c), defensive checks (d, CHG-012); CHG-010, CHG-011 and CHG-013 approved.
+
+**Found.** CHG-011 (I2 counted pool offsets by the pool, not the position). Harness bugs fixed: I2's
+unsigned `S − A − F` (A + F can exceed S by rounding once auctions and deficits exist), a reverting
+liquidation discarding a filler's logs, a filler loop overflowing on large seeds, the reach rule needing
+two positions. P17-H1: the harness redistribution equals the real liquidation (1,024 runs).
+
+**Reviews.** security-reviewer: no critical/high. P20-M1 → T-27 (measured: 135 of a 150 penalty);
+P20-L1 → CHG-012's scope corrected, CHG-014 proposed (receipt check); P20-L2 → CHG-015 proposed
+(wording) and a zero-stake deficit test plus a campaign reach counter; P20-I3 → P21 carry-forward; the
+review's test gaps covered.
+
+**Next.** Apply the CHG-010/011/013 texts once `.claude/protected-paths.txt` unlocks them; decide CHG-014
+and CHG-015; P21 (DeficitLedger).
 
 ### 2026-10-26 · P19 · StabilityPool, the non-fatal pool hook, blueprints
 
