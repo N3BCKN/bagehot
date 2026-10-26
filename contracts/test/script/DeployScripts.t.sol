@@ -11,6 +11,7 @@ import {BagehotFactory} from "../../src/deploy/BagehotFactory.sol";
 import {StandInShutdownModule} from "../../src/mocks/StandInShutdownModule.sol";
 import {StandInStrategy} from "../../src/mocks/StandInStrategy.sol";
 import {MisWiredFactory} from "../utils/MisWiredFactory.sol";
+import {StabilityPoolHarness} from "../utils/PoolMocks.sol";
 import {Test} from "forge-std/Test.sol";
 
 /// @notice Forwards every getter of a real factory from a different address: the deployment it
@@ -250,6 +251,7 @@ contract DeployScriptsTest is Test {
         (p.mcr, p.minDebt, p.gasReserve, p.ratePerSecond, p.poolShareBps, p.poolHookGas) =
         (c.mcr, c.minDebt, c.gasReserve, c.ratePerSecond, c.poolShareBps, c.poolHookGas);
         p.maxHintSteps = c.maxHintSteps;
+        (p.liquidationPenalty, p.minDeposit) = (c.liquidationPenalty, c.minDeposit);
         (p.staleness, p.gracePeriod, p.minPrice, p.maxPrice) =
         (c.staleness, c.gracePeriod, c.minPrice, c.maxPrice);
         (p.oracleGas, p.oraclePostFailureGas) = (c.oracleGas, c.oraclePostFailureGas);
@@ -293,7 +295,7 @@ contract DeployScriptsTest is Test {
     function test_factory_offLocalChain_reverts() public {
         (BagehotFactory f, DeployConfig memory c) = _local(false);
         BagehotFactory.Params memory p = _paramsOf(f, c);
-        (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll();
+        (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll(false);
         vm.chainId(84_532);
         vm.expectRevert(abi.encodeWithSelector(BagehotFactory.StandInsAreLocalOnly.selector, 84_532));
         new BagehotFactory(p, b, h);
@@ -308,7 +310,7 @@ contract DeployScriptsTest is Test {
         assertLt(initcode, 8192, "factory initcode is small: it embeds no contract");
         (BagehotFactory f, DeployConfig memory c) = _local(false);
         BagehotFactory.Params memory p = _paramsOf(f, c);
-        (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll();
+        (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll(false);
         (BagehotFactory f2, uint256 execution) = new FactoryGasMeter().deploy(p, b, h);
         // plus the transaction's intrinsic cost (every calldata byte priced as nonzero, EIP-3860's 2 gas
         // per initcode word). An estimate under this test's EVM: anvil's receipt was 8,358,263 against
@@ -349,7 +351,7 @@ contract DeployScriptsTest is Test {
     function test_blueprint_noCode_revertsForEveryRole() public {
         BagehotFactory.Params memory p = _params();
         for (uint256 i; i < 9; ++i) {
-            (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll();
+            (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll(false);
             b[i] = makeAddr("empty");
             vm.expectRevert(abi.encodeWithSelector(BagehotFactory.BlueprintNoCode.selector, i));
             new BagehotFactory(p, b, h);
@@ -361,7 +363,7 @@ contract DeployScriptsTest is Test {
         BagehotFactory.Params memory p = _params();
         address callable = address(new StandInStrategy());
         for (uint256 i; i < 9; ++i) {
-            (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll();
+            (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll(false);
             (b[i], h[i]) = (callable, callable.codehash);
             vm.expectRevert(abi.encodeWithSelector(BagehotFactory.BlueprintNotInert.selector, i));
             new BagehotFactory(p, b, h);
@@ -371,7 +373,7 @@ contract DeployScriptsTest is Test {
     function test_blueprint_hashMismatch_revertsForEveryRole() public {
         BagehotFactory.Params memory p = _params();
         for (uint256 i; i < 9; ++i) {
-            (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll();
+            (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll(false);
             h[i] = bytes32(uint256(h[i]) ^ 1);
             vm.expectRevert(abi.encodeWithSelector(BagehotFactory.BlueprintMismatch.selector, i));
             new BagehotFactory(p, b, h);
@@ -382,20 +384,20 @@ contract DeployScriptsTest is Test {
     ///      the blueprint's), deploys the wrong code into two roles, and is refused by the checks.
     function test_blueprint_swappedRoles_failsChecks() public {
         (BagehotFactory f0, DeployConfig memory c) = _local(false);
-        (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll();
+        (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll(false);
         // the ledger and the strategy stand-ins: both construct, but in each other's role
         (b[5], b[6], h[5], h[6]) = (b[6], b[5], h[6], h[5]);
         vm.expectRevert(); // the ledger stand-in takes an argument the strategy's constructor does not
         new BagehotFactory(_paramsOf(f0, c), b, h);
     }
 
-    /// @dev A blueprint that is not today's build but deploys working code (StandInStrategy's creation
-    ///      code with a trailing byte, same runtime) passes the factory and every functional check,
-    ///      and is refused by the digest check.
+    /// @dev A blueprint that is not today's build but deploys working code — in A's strategy role, the
+    ///      pool test harness (a StabilityPool with one extra function, same constructor and `wire`) —
+    ///      passes the factory and every functional check, and is refused by the digest check.
     function test_blueprint_notTodaysBuild_failsDigestCheck() public {
         (BagehotFactory f0, DeployConfig memory c) = _local(false);
-        (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll();
-        bytes memory altered = abi.encodePacked(type(StandInStrategy).creationCode, hex"00");
+        (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll(false);
+        bytes memory altered = type(StabilityPoolHarness).creationCode;
         b[5] = Blueprints.deploy(5, altered);
         h[5] = Blueprints.codehash(altered);
         BagehotFactory bad = new BagehotFactory(_paramsOf(f0, c), b, h);
@@ -403,8 +405,8 @@ contract DeployScriptsTest is Test {
     }
 
     function test_blueprint_isInertAndDeployedOnce() public {
-        (address[9] memory b1, bytes32[9] memory h1) = Blueprints.deployAll();
-        (address[9] memory b2,) = Blueprints.deployAll();
+        (address[9] memory b1, bytes32[9] memory h1) = Blueprints.deployAll(false);
+        (address[9] memory b2,) = Blueprints.deployAll(false);
         for (uint256 i; i < 9; ++i) {
             assertEq(b1[i], b2[i], "a second run finds the same blueprint");
             assertEq(b1[i].codehash, h1[i], "the address holds the hashed code");
@@ -425,7 +427,7 @@ contract DeployScriptsTest is Test {
     function test_factory_revertingConstructor_bubbles() public {
         BagehotFactory.Params memory p = _params();
         p.criticalTcr = 1e18 - 1;
-        (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll();
+        (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll(false);
         vm.expectRevert(StandInShutdownModule.StandInInvalid.selector);
         new BagehotFactory(p, b, h);
     }

@@ -9,6 +9,7 @@ import {VaultManager} from "../../src/core/VaultManager.sol";
 import {BagehotFactory} from "../../src/deploy/BagehotFactory.sol";
 import {ISortKeySource} from "../../src/interfaces/ISortKeySource.sol";
 import {ISortedPositions} from "../../src/interfaces/ISortedPositions.sol";
+import {StabilityPool} from "../../src/liquidation/StabilityPool.sol";
 import {StandInDeficitLedger} from "../../src/mocks/StandInDeficitLedger.sol";
 import {StandInShutdownModule} from "../../src/mocks/StandInShutdownModule.sol";
 import {StandInStrategy} from "../../src/mocks/StandInStrategy.sol";
@@ -62,7 +63,8 @@ contract MisWiredFactory {
         redemptionModule = new RedemptionModule(
             address(token), address(oracle), p.redemptionFeeFloor, p.beta, p.baseRateDecay
         );
-        address strategy_ = address(new StandInStrategy());
+        address strategy_ =
+            address(new StabilityPool(p.weth, address(token), p.liquidationPenalty, p.minDeposit));
         strategy = strategy_;
         stabilityPool = strategy_;
         deficitLedger = address(new StandInDeficitLedger(address(vaultManager)));
@@ -76,6 +78,7 @@ contract MisWiredFactory {
         redemptionModule.wire(address(vaultManager), shutdownModule, mode == 2 ? strategy_ : address(0));
         address tokenStrategy = mode == 1 ? address(new StandInStrategy()) : strategy_;
         if (mode != 4) token.wire(address(vaultManager), tokenStrategy, deficitLedger, shutdownModule);
+        StabilityPool(strategy_).wire(address(vaultManager), deficitLedger);
         hintHelpers =
             new HintHelpers(ISortKeySource(address(vaultManager)), ISortedPositions(address(sorted)));
     }

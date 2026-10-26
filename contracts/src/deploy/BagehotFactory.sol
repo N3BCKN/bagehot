@@ -6,6 +6,7 @@ import {OracleAdapter} from "../core/OracleAdapter.sol";
 import {SortedPositions} from "../core/SortedPositions.sol";
 import {StableToken} from "../core/StableToken.sol";
 import {VaultManager} from "../core/VaultManager.sol";
+import {StabilityPool} from "../liquidation/StabilityPool.sol";
 import {RedemptionModule} from "../redemption/RedemptionModule.sol";
 
 /// @title BagehotFactory
@@ -19,8 +20,9 @@ import {RedemptionModule} from "../redemption/RedemptionModule.sol";
 ///         role: each blueprint must match the code hash passed with it, the deploy script derives
 ///         those hashes from the build artifacts, and `blueprintsDigest` lets the checks re-derive
 ///         them after the fact.
-///         Until StabilityPool (P19), DeficitLedger (P21), ShutdownModule and DutchAuctionHouse
-///         (P33) exist, those roles are filled by LOCAL-ONLY stand-ins (`src/mocks/StandIn*`), and
+///         The strategy is the real StabilityPool in deployment A (P19). Until the DeficitLedger
+///         (P21), ShutdownModule and DutchAuctionHouse (P33) exist, those roles are filled by LOCAL-ONLY
+///         stand-ins (`src/mocks/StandIn*`), and
 ///         the deployment script refuses to deploy this factory on any chain but 31337.
 ///         Cross-contract constraints (§3.3 1, 2, 5, 7, 8) are asserted by the deployment script and
 ///         the smoke test (`script/DeploymentChecks.sol`); each constructor and `wire` checks its own
@@ -61,6 +63,8 @@ contract BagehotFactory {
         uint256 ratePerSecond;
         uint256 poolShareBps;
         uint256 poolHookGas;
+        uint256 liquidationPenalty; // StabilityPool (A)
+        uint256 minDeposit; // StabilityPool (A)
         // SortedPositions
         uint256 maxHintSteps;
         // OracleAdapter
@@ -154,6 +158,7 @@ contract BagehotFactory {
             .wire(c[ROLE_VAULT_MANAGER], c[ROLE_SHUTDOWN_MODULE], house_);
         StableToken(c[ROLE_TOKEN])
             .wire(c[ROLE_VAULT_MANAGER], c[ROLE_STRATEGY], c[ROLE_DEFICIT_LEDGER], c[ROLE_SHUTDOWN_MODULE]);
+        if (!p.variantB) StabilityPool(pool_).wire(c[ROLE_VAULT_MANAGER], c[ROLE_DEFICIT_LEDGER]);
         emit Deployed(
             p.variantB,
             c[ROLE_TOKEN],
@@ -206,7 +211,11 @@ contract BagehotFactory {
             blueprints[ROLE_REDEMPTION_MODULE],
             abi.encode(c[ROLE_TOKEN], c[ROLE_ORACLE], p.redemptionFeeFloor, p.beta, p.baseRateDecay)
         );
-        c[ROLE_STRATEGY] = _create(blueprints[ROLE_STRATEGY], "");
+        // A: the real StabilityPool (P19); B: the stand-in until the DutchAuctionHouse (P33)
+        c[ROLE_STRATEGY] = _create(
+            blueprints[ROLE_STRATEGY],
+            p.variantB ? bytes("") : abi.encode(p.weth, c[ROLE_TOKEN], p.liquidationPenalty, p.minDeposit)
+        );
         address house_ = p.variantB ? c[ROLE_STRATEGY] : address(0);
         c[ROLE_DEFICIT_LEDGER] = _create(blueprints[ROLE_DEFICIT_LEDGER], abi.encode(c[ROLE_VAULT_MANAGER]));
         c[ROLE_SHUTDOWN_MODULE] = _create(

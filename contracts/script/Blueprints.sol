@@ -6,6 +6,7 @@ import {OracleAdapter} from "../src/core/OracleAdapter.sol";
 import {SortedPositions} from "../src/core/SortedPositions.sol";
 import {StableToken} from "../src/core/StableToken.sol";
 import {VaultManager} from "../src/core/VaultManager.sol";
+import {StabilityPool} from "../src/liquidation/StabilityPool.sol";
 import {StandInDeficitLedger} from "../src/mocks/StandInDeficitLedger.sol";
 import {StandInShutdownModule} from "../src/mocks/StandInShutdownModule.sol";
 import {StandInStrategy} from "../src/mocks/StandInStrategy.sol";
@@ -28,27 +29,28 @@ library Blueprints {
     uint256 internal constant MAX_CODE_SIZE = 24_576; // EIP-170, for the blueprint's own code
     Vm private constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
-    /// @notice Every role's creation code, in `BagehotFactory`'s role order.
-    function creationCodes() internal pure returns (bytes[9] memory c) {
+    /// @notice Every role's creation code, in `BagehotFactory`'s role order. The strategy is the real
+    ///         StabilityPool in deployment A (P19) and the stand-in in B until P33.
+    function creationCodes(bool variantB) internal pure returns (bytes[9] memory c) {
         c[0] = type(StableToken).creationCode;
         c[1] = type(OracleAdapter).creationCode;
         c[2] = type(VaultManager).creationCode;
         c[3] = type(SortedPositions).creationCode;
         c[4] = type(RedemptionModule).creationCode;
-        c[5] = type(StandInStrategy).creationCode;
+        c[5] = variantB ? type(StandInStrategy).creationCode : type(StabilityPool).creationCode;
         c[6] = type(StandInDeficitLedger).creationCode;
         c[7] = type(StandInShutdownModule).creationCode;
         c[8] = type(HintHelpers).creationCode;
     }
 
     /// @notice Every role's artifact, for the runtime-code comparison (`vm.getDeployedCode`).
-    function artifacts() internal pure returns (string[9] memory a) {
+    function artifacts(bool variantB) internal pure returns (string[9] memory a) {
         a[0] = "StableToken.sol:StableToken";
         a[1] = "OracleAdapter.sol:OracleAdapter";
         a[2] = "VaultManager.sol:VaultManager";
         a[3] = "SortedPositions.sol:SortedPositions";
         a[4] = "RedemptionModule.sol:RedemptionModule";
-        a[5] = "StandInStrategy.sol:StandInStrategy";
+        a[5] = variantB ? "StandInStrategy.sol:StandInStrategy" : "StabilityPool.sol:StabilityPool";
         a[6] = "StandInDeficitLedger.sol:StandInDeficitLedger";
         a[7] = "StandInShutdownModule.sol:StandInShutdownModule";
         a[8] = "HintHelpers.sol:HintHelpers";
@@ -73,16 +75,16 @@ library Blueprints {
         return keccak256(abi.encodePacked(hex"fe", creationCode));
     }
 
-    function codehashes() internal pure returns (bytes32[9] memory h) {
-        bytes[9] memory c = creationCodes();
+    function codehashes(bool variantB) internal pure returns (bytes32[9] memory h) {
+        bytes[9] memory c = creationCodes(variantB);
         for (uint256 i; i < 9; ++i) {
             h[i] = codehash(c[i]);
         }
     }
 
     /// @notice The digest `BagehotFactory.blueprintsDigest` must equal for today's build.
-    function digest() internal pure returns (bytes32) {
-        return keccak256(abi.encode(codehashes()));
+    function digest(bool variantB) internal pure returns (bytes32) {
+        return keccak256(abi.encode(codehashes(variantB)));
     }
 
     /// @notice Initcode that deploys `0xFE ‖ creationCode` as runtime code:
@@ -107,8 +109,11 @@ library Blueprints {
     }
 
     /// @notice Deploys (or finds) every role's blueprint; returns the factory's arguments.
-    function deployAll() internal returns (address[9] memory blueprints, bytes32[9] memory hashes) {
-        bytes[9] memory c = creationCodes();
+    function deployAll(bool variantB)
+        internal
+        returns (address[9] memory blueprints, bytes32[9] memory hashes)
+    {
+        bytes[9] memory c = creationCodes(variantB);
         for (uint256 i; i < 9; ++i) {
             blueprints[i] = deploy(i, c[i]);
             hashes[i] = codehash(c[i]);

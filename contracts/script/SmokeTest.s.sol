@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {VaultManager} from "../src/core/VaultManager.sol";
 import {BagehotFactory} from "../src/deploy/BagehotFactory.sol";
 import {IDeficitLedgerViews} from "../src/interfaces/ISystemViews.sol";
+import {StabilityPool} from "../src/liquidation/StabilityPool.sol";
 import {LocalWETH} from "../src/mocks/LocalWETH.sol";
 import {MockAggregator} from "../src/mocks/MockAggregator.sol";
 import {StandInDeficitLedger} from "../src/mocks/StandInDeficitLedger.sol";
@@ -38,6 +39,7 @@ contract SmokeTest is ConfigLoader {
         uint256 gN;
         uint256 gX;
         uint256 gY;
+        uint256 redirected; // PoolInterestRedirected (CHG-006)
     }
 
     function manifestPath(uint256 chainId) public view returns (string memory) {
@@ -94,7 +96,7 @@ contract SmokeTest is ConfigLoader {
             );
         }
         _manifestMatchesFactory(m, k, f);
-        _manifestBlueprints(m, k);
+        _manifestBlueprints(m, k, c.variantB);
         _req(
             m.readUint(string.concat(k, ".block")) <= f.deployBlock(), "manifest block <= factory deployBlock"
         );
@@ -102,9 +104,9 @@ contract SmokeTest is ConfigLoader {
     }
 
     /// @dev ADR-0035: every blueprint the manifest records holds today's build's code, under its hash.
-    function _manifestBlueprints(string memory m, string memory k) internal view {
+    function _manifestBlueprints(string memory m, string memory k, bool variantB) internal view {
         string[9] memory n = Blueprints.names();
-        bytes32[9] memory h = Blueprints.codehashes();
+        bytes32[9] memory h = Blueprints.codehashes(variantB);
         for (uint256 i; i < 9; ++i) {
             string memory r = string.concat(k, ".blueprints.", n[i]);
             _req(
@@ -157,8 +159,39 @@ contract SmokeTest is ConfigLoader {
         vm.prank(who);
         LocalWETH(c.weth).approve(address(v), type(uint256).max);
         uint256 id = _open(f, c, who);
+        if (!c.variantB) _poolDeposit(f, c, who);
         _accrue(f, c);
         _redeem(f, c, who, id);
+        if (!c.variantB) _poolWithdraw(f, c, who);
+    }
+
+    /// @dev Deployment A (P19): deposit 1,000 into the StabilityPool, so the next accrual books the
+    ///      pool's interest share through the guarded hook (§6.2).
+    function _poolDeposit(BagehotFactory f, DeployConfig memory c, address who) internal {
+        StabilityPool pool = StabilityPool(f.strategy());
+        uint256 balance = f.token().balanceOf(who);
+        vm.prank(who);
+        pool.deposit(1000e18);
+        _req(balance - f.token().balanceOf(who) == 1000e18, "pool deposit: 1,000 moved");
+        _req(pool.compoundedDeposit(who) == 1000e18, "pool deposit: recorded");
+        _req(pool.acceptsInterest(), "pool deposit: at or above MIN_DEPOSIT");
+        _checkViews(f, c);
+    }
+
+    /// @dev Deployment A: withdraw everything; the deposit comes back with its interest gain.
+    function _poolWithdraw(BagehotFactory f, DeployConfig memory c, address who) internal {
+        StabilityPool pool = StabilityPool(f.strategy());
+        (, uint256 interestGain) = pool.gains(who);
+        _req(interestGain > 0, "pool: the accrual booked an interest gain");
+        uint256 balance = f.token().balanceOf(who);
+        vm.prank(who);
+        pool.withdraw(type(uint256).max);
+        _req(
+            f.token().balanceOf(who) - balance >= 1000e18 + interestGain,
+            "pool withdraw: deposit and interest gain paid"
+        );
+        _req(pool.totalDeposits() == 0, "pool withdraw: empty");
+        _checkViews(f, c);
     }
 
     /// @dev Open 5 WETH against 5,000 (ICR 2 at 2,000).
@@ -177,13 +210,14 @@ contract SmokeTest is ConfigLoader {
         _checkViews(f, c);
     }
 
-    /// @dev A day later, accrue: interest to the reserve (the stand-in pool takes none).
+    /// @dev A day later, accrue: interest to the reserve, and in A the pool's share to the pool.
     function _accrue(BagehotFactory f, DeployConfig memory c) internal {
         VaultManager v = f.vaultManager();
         vm.warp(block.timestamp + 1 days);
         _freshPrice(c);
         uint256 indexBefore = v.index();
         uint256 reserveBefore = f.token().balanceOf(f.deficitLedger());
+        uint256 poolBefore = f.token().balanceOf(f.strategy());
         int256 eBefore = _e(f);
         vm.recordLogs();
         v.accrue();
@@ -198,6 +232,10 @@ contract SmokeTest is ConfigLoader {
             StandInDeficitLedger(f.deficitLedger()).reserve() == f.token().balanceOf(f.deficitLedger()),
             "accrue: reserve recorded"
         );
+        if (!c.variantB) {
+            _req(f.token().balanceOf(f.strategy()) > poolBefore, "accrue: pool share minted to the pool");
+            _req(g.redirected == 0, "accrue: the pool booked, nothing redirected");
+        }
         _checkI2Step(f, eBefore, g);
         _checkViews(f, c);
     }
@@ -239,6 +277,8 @@ contract SmokeTest is ConfigLoader {
                     abi.decode(logs[i].data, (uint256, uint256, uint256, uint256, uint256, uint8, uint8));
                 if (op == OP_OPEN || op == OP_BORROW || op == OP_REPAY) ++g.gX;
                 else if (op == OP_CLOSE) ++g.gY;
+            } else if (t == VaultManager.PoolInterestRedirected.selector) {
+                ++g.redirected;
             } else if (t == VaultManager.PositionRedeemed.selector) {
                 (,,, bool closed) = abi.decode(logs[i].data, (uint256, uint256, uint256, bool));
                 if (closed) ++g.gY;
@@ -276,7 +316,16 @@ contract SmokeTest is ConfigLoader {
         );
         _req(weth.balanceOf(address(f.redemptionModule())) == 0, "I1: RedemptionModule WETH");
         _req(f.token().balanceOf(address(f.redemptionModule())) == 0, "I1: RedemptionModule token");
-        _req(weth.balanceOf(f.strategy()) == 0, "I1: strategy WETH");
+        if (c.variantB) {
+            _req(weth.balanceOf(f.strategy()) == 0, "I1: strategy WETH");
+        } else {
+            StabilityPool pool = StabilityPool(f.strategy());
+            _req(weth.balanceOf(address(pool)) == pool.collGainsBalance(), "I1: pool WETH");
+            _req(
+                f.token().balanceOf(address(pool)) == pool.totalDeposits() + pool.interestGainsBalance(),
+                "I1: pool stablecoin"
+            );
+        }
         _req(
             weth.balanceOf(f.deficitLedger()) == IDeficitLedgerViews(f.deficitLedger()).recoveredColl(),
             "I1: ledger WETH"

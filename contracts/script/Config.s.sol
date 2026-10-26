@@ -26,6 +26,7 @@ struct DeployConfig {
     uint256 ratePerSecond;
     uint256 poolShareBps;
     uint256 poolHookGas;
+    uint256 minDeposit;
     uint256 maxHintSteps;
     uint256 liquidationPenalty;
     uint256 redemptionFeeFloor;
@@ -84,6 +85,7 @@ abstract contract ConfigLoader is Script {
         c.poolHookGas = t.readUint(".params.pool_hook_gas");
         c.maxHintSteps = t.readUint(".params.max_hint_steps");
         c.liquidationPenalty = _big(t, ".params.liquidation_penalty");
+        c.minDeposit = _big(t, ".params.min_deposit");
         c.redemptionFeeFloor = _big(t, ".params.redemption_fee_floor");
         c.beta = t.readUint(".params.beta");
         c.baseRateDecay = _big(t, ".params.base_rate_decay");

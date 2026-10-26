@@ -119,7 +119,7 @@ contract Deploy is ConfigLoader {
         if (block.chainid != ANVIL) revert StandInsAreLocalOnly(block.chainid);
         vm.startBroadcast();
         (c.weth, c.priceFeed, c.sequencerFeed) = _localMocks(c);
-        (address[9] memory blueprints, bytes32[9] memory hashes) = Blueprints.deployAll();
+        (address[9] memory blueprints, bytes32[9] memory hashes) = Blueprints.deployAll(c.variantB);
         f = new BagehotFactory(_factoryParams(c), blueprints, hashes);
         vm.stopBroadcast();
         DeploymentChecks.check(f, c);
@@ -141,6 +141,7 @@ contract Deploy is ConfigLoader {
         (p.mcr, p.minDebt, p.gasReserve, p.ratePerSecond, p.poolShareBps, p.poolHookGas) =
         (c.mcr, c.minDebt, c.gasReserve, c.ratePerSecond, c.poolShareBps, c.poolHookGas);
         p.maxHintSteps = c.maxHintSteps;
+        (p.liquidationPenalty, p.minDeposit) = (c.liquidationPenalty, c.minDeposit);
         (p.staleness, p.gracePeriod, p.minPrice, p.maxPrice) =
         (c.staleness, c.gracePeriod, c.minPrice, c.maxPrice);
         (p.oracleGas, p.oraclePostFailureGas) = (c.oracleGas, c.oraclePostFailureGas);
@@ -170,7 +171,7 @@ contract Deploy is ConfigLoader {
         vm.serializeBool(m, "standIns", true);
         vm.serializeString(m, "params", onChain);
         vm.serializeString(m, "configOnlyParams", configOnly);
-        vm.serializeString(m, "blueprints", _blueprintsJson());
+        vm.serializeString(m, "blueprints", _blueprintsJson(c.variantB));
         return vm.serializeString(m, "addresses", addrs);
     }
 
@@ -192,8 +193,8 @@ contract Deploy is ConfigLoader {
     }
 
     /// @dev ADR-0035 provenance: per role, the blueprint the factory read and its code hash.
-    function _blueprintsJson() internal returns (string memory out) {
-        bytes[9] memory codes = Blueprints.creationCodes();
+    function _blueprintsJson(bool variantB) internal returns (string memory out) {
+        bytes[9] memory codes = Blueprints.creationCodes(variantB);
         string[9] memory n = Blueprints.names();
         for (uint256 i; i < 9; ++i) {
             string memory r = string.concat("blueprint.", n[i]);
@@ -204,9 +205,10 @@ contract Deploy is ConfigLoader {
         }
     }
 
-    /// @dev Parameters held by deployed contracts, and those held by no contract yet
-    ///      (LIQUIDATION_PENALTY: the strategies, P19/P33; ORACLE_FAILURE_DURATION: the
-    ///      ShutdownModule) but used by the §3.3 checks.
+    /// @dev Parameters held by deployed contracts, and those held by no contract in every variant
+    ///      (LIQUIDATION_PENALTY: the StabilityPool in A since P19, the auction house in B from P33;
+    ///      ORACLE_FAILURE_DURATION: the ShutdownModule) but used by the §3.3 checks. MIN_DEPOSIT is
+    ///      held by A's StabilityPool and recorded for both variants, as the shared configuration.
     function _paramsJson(DeployConfig memory c)
         internal
         returns (string memory onChain, string memory configOnly)
@@ -218,6 +220,7 @@ contract Deploy is ConfigLoader {
         vm.serializeUint(k, "RATE_PER_SECOND", c.ratePerSecond);
         vm.serializeUint(k, "POOL_SHARE_BPS", c.poolShareBps);
         vm.serializeUint(k, "POOL_HOOK_GAS", c.poolHookGas);
+        vm.serializeUint(k, "MIN_DEPOSIT", c.minDeposit);
         vm.serializeUint(k, "MAX_HINT_STEPS", c.maxHintSteps);
         vm.serializeUint(k, "REDEMPTION_FEE_FLOOR", c.redemptionFeeFloor);
         vm.serializeUint(k, "BETA", c.beta);

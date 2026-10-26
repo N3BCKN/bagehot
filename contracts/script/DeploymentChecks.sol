@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {BagehotFactory} from "../src/deploy/BagehotFactory.sol";
+import {StabilityPool} from "../src/liquidation/StabilityPool.sol";
 import {StandInDeficitLedger} from "../src/mocks/StandInDeficitLedger.sol";
 import {StandInShutdownModule} from "../src/mocks/StandInShutdownModule.sol";
 import {Blueprints} from "./Blueprints.sol";
@@ -18,7 +19,8 @@ import {Vm} from "forge-std/Vm.sol";
 ///         runtime code is its artifact's (ADR-0035).
 ///         Constraints 2 (LIQUIDATION_PENALTY/MIN_DEBT across contracts) and 4 (oracle gas, feed
 ///         decimals) are checked as far as contracts exist: 4 by the OracleAdapter constructor and
-///         re-read here; 2 once the strategy contracts carry the parameters (P19, P33).
+///         re-read here; 2 for the StabilityPool in A (P19: its `LIQUIDATION_PENALTY` is the
+///         configured one, which both variants share) and for the auction house at P33.
 library DeploymentChecks {
     error DeploymentCheckFailed(string what);
 
@@ -33,14 +35,14 @@ library DeploymentChecks {
         _params(f, c);
         _constraints(f, c);
         _provenance(f);
-        _blueprints(f);
+        _blueprints(f, c);
     }
 
     /// @dev ADR-0035: the code hashes the factory checked its blueprints against are those of today's
     ///      build, and each role's runtime code is its artifact's (immutables aside, see
     ///      `Blueprints.runtimeMatches`).
-    function _blueprints(BagehotFactory f) private view {
-        _req(f.blueprintsDigest() == Blueprints.digest(), "blueprints: created from today's build");
+    function _blueprints(BagehotFactory f, DeployConfig memory c) private view {
+        _req(f.blueprintsDigest() == Blueprints.digest(c.variantB), "blueprints: created from today's build");
         address[9] memory roles = [
             address(f.token()),
             address(f.oracle()),
@@ -52,7 +54,7 @@ library DeploymentChecks {
             f.shutdownModule(),
             address(f.hintHelpers())
         ];
-        string[9] memory a = Blueprints.artifacts();
+        string[9] memory a = Blueprints.artifacts(c.variantB);
         string[9] memory n = Blueprints.names();
         for (uint256 i; i < 9; ++i) {
             _req(
@@ -127,6 +129,10 @@ library DeploymentChecks {
             f.redemptionModule().deployer() == fa && f.redemptionModule().wired(),
             "redemptionModule: deployer == factory and wired"
         );
+        if (f.stabilityPool() != address(0)) {
+            StabilityPool p = StabilityPool(f.stabilityPool());
+            _req(p.deployer() == fa && p.wired(), "stabilityPool: deployer == factory and wired");
+        }
     }
 
     /// @dev §3.3 constraint 8: each contract's wired peers are the factory's contracts for each role,
@@ -163,6 +169,11 @@ library DeploymentChecks {
         _req(f.token().strategy() == strategy, "token.strategy");
         _req(f.token().deficitLedger() == ledger, "token.deficitLedger");
         _req(f.token().shutdownModule() == shutdown, "token.shutdownModule");
+        // StabilityPool (A)
+        if (!c.variantB) {
+            _req(StabilityPool(pool).vaultManager() == vm_, "stabilityPool.vaultManager");
+            _req(address(StabilityPool(pool).deficitLedger()) == ledger, "stabilityPool.deficitLedger");
+        }
         // stand-ins (local only) read the same peers
         _req(StandInDeficitLedger(ledger).vaultManager() == vm_, "deficitLedger.vaultManager");
         _req(address(StandInShutdownModule(shutdown).vaultManager()) == vm_, "shutdownModule.vaultManager");
@@ -179,6 +190,10 @@ library DeploymentChecks {
         _req(address(f.vaultManager().token()) == address(f.token()), "vaultManager.token");
         _req(address(f.vaultManager().oracle()) == address(f.oracle()), "vaultManager.oracle");
         _req(address(f.redemptionModule().token()) == address(f.token()), "redemptionModule.token");
+        if (!c.variantB) {
+            _req(address(StabilityPool(f.strategy()).WETH()) == c.weth, "stabilityPool.WETH");
+            _req(address(StabilityPool(f.strategy()).token()) == address(f.token()), "stabilityPool.token");
+        }
         _req(address(f.redemptionModule().oracle()) == address(f.oracle()), "redemptionModule.oracle");
         _req(address(f.oracle().priceFeed()) == c.priceFeed, "oracle.priceFeed == configured");
         _req(address(f.oracle().sequencerFeed()) == c.sequencerFeed, "oracle.sequencerFeed == configured");
@@ -206,11 +221,16 @@ library DeploymentChecks {
         _req(f.oracle().ORACLE_GAS() == c.oracleGas, "ORACLE_GAS");
         _req(f.oracle().ORACLE_POST_FAILURE_GAS() == c.oraclePostFailureGas, "ORACLE_POST_FAILURE_GAS");
         _req(StandInShutdownModule(f.shutdownModule()).CRITICAL_TCR() == c.criticalTcr, "CRITICAL_TCR");
+        if (!c.variantB) _req(StabilityPool(f.strategy()).MIN_DEPOSIT() == c.minDeposit, "MIN_DEPOSIT");
     }
 
     /// @dev §3.3 constraints that span contracts or parameters and are enforced only here.
     function _constraints(BagehotFactory f, DeployConfig memory c) private view {
         _req(WAD + c.liquidationPenalty < c.mcr, "constraint 1: WAD + LIQUIDATION_PENALTY < MCR");
+        _req(
+            c.variantB || StabilityPool(f.strategy()).LIQUIDATION_PENALTY() == c.liquidationPenalty,
+            "constraint 2: LIQUIDATION_PENALTY as configured (shared by A and B)"
+        );
         _req(!c.variantB || f.vaultManager().POOL_SHARE_BPS() == 0, "constraint 3: POOL_SHARE_BPS = 0 in B");
         _req(f.oracle().FEED_DECIMALS() <= 18, "constraint 4: FEED_DECIMALS <= 18");
         _req(c.criticalTcr <= c.mcr && c.criticalTcr >= WAD, "constraint 5: WAD <= CRITICAL_TCR <= MCR");
