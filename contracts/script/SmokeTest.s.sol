@@ -8,6 +8,7 @@ import {LocalWETH} from "../src/mocks/LocalWETH.sol";
 import {MockAggregator} from "../src/mocks/MockAggregator.sol";
 import {StandInDeficitLedger} from "../src/mocks/StandInDeficitLedger.sol";
 import {RedemptionModule} from "../src/redemption/RedemptionModule.sol";
+import {Blueprints} from "./Blueprints.sol";
 import {ConfigLoader, DeployConfig} from "./Config.s.sol";
 import {DeploymentChecks} from "./DeploymentChecks.sol";
 import {stdJson} from "forge-std/StdJson.sol";
@@ -93,10 +94,28 @@ contract SmokeTest is ConfigLoader {
             );
         }
         _manifestMatchesFactory(m, k, f);
+        _manifestBlueprints(m, k);
         _req(
             m.readUint(string.concat(k, ".block")) <= f.deployBlock(), "manifest block <= factory deployBlock"
         );
         DeploymentChecks.check(f, c);
+    }
+
+    /// @dev ADR-0035: every blueprint the manifest records holds today's build's code, under its hash.
+    function _manifestBlueprints(string memory m, string memory k) internal view {
+        string[9] memory n = Blueprints.names();
+        bytes32[9] memory h = Blueprints.codehashes();
+        for (uint256 i; i < 9; ++i) {
+            string memory r = string.concat(k, ".blueprints.", n[i]);
+            _req(
+                m.readBytes32(string.concat(r, ".codehash")) == h[i],
+                string.concat("manifest blueprint hash: ", n[i])
+            );
+            _req(
+                m.readAddress(string.concat(r, ".address")).codehash == h[i],
+                string.concat("blueprint holds today's code: ", n[i])
+            );
+        }
     }
 
     function _manifestMatchesFactory(string memory m, string memory k, BagehotFactory f) internal view {

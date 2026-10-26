@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {BagehotFactory} from "../src/deploy/BagehotFactory.sol";
 import {StandInDeficitLedger} from "../src/mocks/StandInDeficitLedger.sol";
 import {StandInShutdownModule} from "../src/mocks/StandInShutdownModule.sol";
+import {Blueprints} from "./Blueprints.sol";
 import {DeployConfig} from "./Config.s.sol";
 import {Vm} from "forge-std/Vm.sol";
 
@@ -12,7 +13,9 @@ import {Vm} from "forge-std/Vm.sol";
 ///         constraint 8 (every wired address is the factory's contract for that role, the peer
 ///         graph agrees, every immutable `token`/`weth`/`oracle` is the deployment's, every wired
 ///         contract has `deployer() == factory` and `wired()`); the feeds have code and are the
-///         configured ones; every parameter equals the configuration; constraints 1, 3, 5 and 7.
+///         configured ones; every parameter equals the configuration; constraints 1, 3, 5 and 7;
+///         the blueprints the factory created from are today's build, and every deployed contract's
+///         runtime code is its artifact's (ADR-0035).
 ///         Constraints 2 (LIQUIDATION_PENALTY/MIN_DEBT across contracts) and 4 (oracle gas, feed
 ///         decimals) are checked as far as contracts exist: 4 by the OracleAdapter constructor and
 ///         re-read here; 2 once the strategy contracts carry the parameters (P19, P33).
@@ -30,6 +33,33 @@ library DeploymentChecks {
         _params(f, c);
         _constraints(f, c);
         _provenance(f);
+        _blueprints(f);
+    }
+
+    /// @dev ADR-0035: the code hashes the factory checked its blueprints against are those of today's
+    ///      build, and each role's runtime code is its artifact's (immutables aside, see
+    ///      `Blueprints.runtimeMatches`).
+    function _blueprints(BagehotFactory f) private view {
+        _req(f.blueprintsDigest() == Blueprints.digest(), "blueprints: created from today's build");
+        address[9] memory roles = [
+            address(f.token()),
+            address(f.oracle()),
+            address(f.vaultManager()),
+            address(f.sorted()),
+            address(f.redemptionModule()),
+            f.strategy(),
+            f.deficitLedger(),
+            f.shutdownModule(),
+            address(f.hintHelpers())
+        ];
+        string[9] memory a = Blueprints.artifacts();
+        string[9] memory n = Blueprints.names();
+        for (uint256 i; i < 9; ++i) {
+            _req(
+                Blueprints.runtimeMatches(roles[i], vm.getDeployedCode(a[i])),
+                string.concat("runtime code: ", n[i], " is its artifact")
+            );
+        }
     }
 
     /// @dev §3.3 constraint 8 "the contract the factory created for that role", also for contracts

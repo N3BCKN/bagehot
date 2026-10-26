@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
+import {Blueprints} from "../../script/Blueprints.sol";
 import {DeployConfig} from "../../script/Config.s.sol";
 import {Deploy} from "../../script/Deploy.s.sol";
 import {DeploymentChecks} from "../../script/DeploymentChecks.sol";
 import {SmokeTest} from "../../script/SmokeTest.s.sol";
+import {StableToken} from "../../src/core/StableToken.sol";
 import {BagehotFactory} from "../../src/deploy/BagehotFactory.sol";
+import {StandInShutdownModule} from "../../src/mocks/StandInShutdownModule.sol";
+import {StandInStrategy} from "../../src/mocks/StandInStrategy.sol";
 import {MisWiredFactory} from "../utils/MisWiredFactory.sol";
 import {Test} from "forge-std/Test.sol";
 
@@ -22,6 +26,33 @@ contract ImpostorFactory {
         (bool ok, bytes memory ret) = address(real).staticcall(data);
         require(ok);
         return ret;
+    }
+}
+
+/// @notice Exposes the blueprint library's internal functions to `vm.expectRevert`.
+contract BlueprintsCaller {
+    function initcode(uint256 role, bytes memory creationCode) external pure returns (bytes memory) {
+        return Blueprints.initcode(role, creationCode);
+    }
+}
+
+/// @notice Creates the factory from raw initcode so `gasleft()` sees the CREATE: forge's test
+///         preprocessor rewrites `new X(...)` in tests into the `deployCode` cheatcode, whose cost is
+///         not metered (the P18 reading of 1,998 gas was this artefact).
+contract FactoryGasMeter {
+    function deploy(BagehotFactory.Params memory p, address[9] memory b, bytes32[9] memory h)
+        external
+        returns (BagehotFactory f, uint256 used)
+    {
+        bytes memory init = abi.encodePacked(type(BagehotFactory).creationCode, abi.encode(p, b, h));
+        uint256 g = gasleft();
+        address a;
+        assembly ("memory-safe") {
+            a := create(0, add(init, 0x20), mload(init))
+        }
+        used = g - gasleft();
+        require(a != address(0), "factory creation failed");
+        f = BagehotFactory(a);
     }
 }
 
@@ -262,20 +293,167 @@ contract DeployScriptsTest is Test {
     function test_factory_offLocalChain_reverts() public {
         (BagehotFactory f, DeployConfig memory c) = _local(false);
         BagehotFactory.Params memory p = _paramsOf(f, c);
+        (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll();
         vm.chainId(84_532);
         vm.expectRevert(abi.encodeWithSelector(BagehotFactory.StandInsAreLocalOnly.selector, 84_532));
-        new BagehotFactory(p);
+        new BagehotFactory(p, b, h);
     }
 
-    /// @dev P18-1: the factory must stay deployable — EIP-3860 initcode limit and a 16,777,216 gas cap
-    ///      per transaction (EIP-7825). Fails here, in CI, before it fails a deployment.
+    /// @dev P18-1 / ADR-0035: the deployment must stay deployable. The factory's initcode no longer
+    ///      carries the protocol (EIP-3860 stops binding); the binding limit is the deployment
+    ///      transaction's gas against EIP-7825's 2^24 cap, kept with a 1M margin; every contract's
+    ///      runtime and every blueprint fits EIP-170. Fails here, in CI, before it fails a deployment.
     function test_factory_initcodeAndGasWithinLimits() public {
-        assertLt(type(BagehotFactory).creationCode.length + 1024, 49_152, "initcode (+1 KiB for arguments)");
+        uint256 initcode = type(BagehotFactory).creationCode.length;
+        assertLt(initcode, 8192, "factory initcode is small: it embeds no contract");
         (BagehotFactory f, DeployConfig memory c) = _local(false);
         BagehotFactory.Params memory p = _paramsOf(f, c);
-        uint256 g = gasleft();
-        new BagehotFactory(p);
-        assertLt(g - gasleft(), 16_777_216, "factory deployment gas");
+        (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll();
+        (BagehotFactory f2, uint256 execution) = new FactoryGasMeter().deploy(p, b, h);
+        // plus the transaction's intrinsic cost (every calldata byte priced as nonzero, EIP-3860's 2 gas
+        // per initcode word). An estimate under this test's EVM: anvil's receipt was 8,358,263 against
+        // 8,308,398 here (2026-10-26); the 1M margin absorbs such differences between hardforks.
+        uint256 calldataBytes = initcode + abi.encode(p, b, h).length;
+        uint256 used = execution + 21_000 + 16 * calldataBytes + 2 * ((calldataBytes + 31) / 32);
+        assertLt(used, 16_777_216 - 1_000_000, "deployment transaction gas (1M margin under 2^24)");
+        address[9] memory roles = [
+            address(f2.token()),
+            address(f2.oracle()),
+            address(f2.vaultManager()),
+            address(f2.sorted()),
+            address(f2.redemptionModule()),
+            f2.strategy(),
+            f2.deficitLedger(),
+            f2.shutdownModule(),
+            address(f2.hintHelpers())
+        ];
+        uint256 runtime;
+        for (uint256 i; i < 9; ++i) {
+            assertLe(roles[i].code.length, 24_576, "runtime within EIP-170");
+            assertLe(b[i].code.length, 24_576, "blueprint within EIP-170");
+            runtime += roles[i].code.length;
+        }
+        emit log_named_uint("factory initcode bytes", initcode);
+        emit log_named_uint("factory CREATE gas (execution + deposits)", execution);
+        emit log_named_uint("deployment transaction gas, estimate", used);
+        emit log_named_uint("runtime created bytes", runtime);
+    }
+
+    // ------------------------------------------------------------------ blueprints (ADR-0035)
+
+    function _params() internal returns (BagehotFactory.Params memory p) {
+        (BagehotFactory f, DeployConfig memory c) = _local(false);
+        p = _paramsOf(f, c);
+    }
+
+    function test_blueprint_noCode_revertsForEveryRole() public {
+        BagehotFactory.Params memory p = _params();
+        for (uint256 i; i < 9; ++i) {
+            (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll();
+            b[i] = makeAddr("empty");
+            vm.expectRevert(abi.encodeWithSelector(BagehotFactory.BlueprintNoCode.selector, i));
+            new BagehotFactory(p, b, h);
+        }
+    }
+
+    /// @dev A callable contract is refused even when the hash passed with it is its own.
+    function test_blueprint_notInert_revertsForEveryRole() public {
+        BagehotFactory.Params memory p = _params();
+        address callable = address(new StandInStrategy());
+        for (uint256 i; i < 9; ++i) {
+            (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll();
+            (b[i], h[i]) = (callable, callable.codehash);
+            vm.expectRevert(abi.encodeWithSelector(BagehotFactory.BlueprintNotInert.selector, i));
+            new BagehotFactory(p, b, h);
+        }
+    }
+
+    function test_blueprint_hashMismatch_revertsForEveryRole() public {
+        BagehotFactory.Params memory p = _params();
+        for (uint256 i; i < 9; ++i) {
+            (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll();
+            h[i] = bytes32(uint256(h[i]) ^ 1);
+            vm.expectRevert(abi.encodeWithSelector(BagehotFactory.BlueprintMismatch.selector, i));
+            new BagehotFactory(p, b, h);
+        }
+    }
+
+    /// @dev Swapping two blueprints with their hashes passes the factory's own check (each hash is
+    ///      the blueprint's), deploys the wrong code into two roles, and is refused by the checks.
+    function test_blueprint_swappedRoles_failsChecks() public {
+        (BagehotFactory f0, DeployConfig memory c) = _local(false);
+        (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll();
+        // the ledger and the strategy stand-ins: both construct, but in each other's role
+        (b[5], b[6], h[5], h[6]) = (b[6], b[5], h[6], h[5]);
+        vm.expectRevert(); // the ledger stand-in takes an argument the strategy's constructor does not
+        new BagehotFactory(_paramsOf(f0, c), b, h);
+    }
+
+    /// @dev A blueprint that is not today's build but deploys working code (StandInStrategy's creation
+    ///      code with a trailing byte, same runtime) passes the factory and every functional check,
+    ///      and is refused by the digest check.
+    function test_blueprint_notTodaysBuild_failsDigestCheck() public {
+        (BagehotFactory f0, DeployConfig memory c) = _local(false);
+        (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll();
+        bytes memory altered = abi.encodePacked(type(StandInStrategy).creationCode, hex"00");
+        b[5] = Blueprints.deploy(5, altered);
+        h[5] = Blueprints.codehash(altered);
+        BagehotFactory bad = new BagehotFactory(_paramsOf(f0, c), b, h);
+        _expectCheckFails(bad, c, "blueprints: created from today's build");
+    }
+
+    function test_blueprint_isInertAndDeployedOnce() public {
+        (address[9] memory b1, bytes32[9] memory h1) = Blueprints.deployAll();
+        (address[9] memory b2,) = Blueprints.deployAll();
+        for (uint256 i; i < 9; ++i) {
+            assertEq(b1[i], b2[i], "a second run finds the same blueprint");
+            assertEq(b1[i].codehash, h1[i], "the address holds the hashed code");
+            assertEq(uint8(b1[i].code[0]), 0xFE, "leading invalid opcode");
+            (bool ok,) = b1[i].call{gas: 100_000}("");
+            assertFalse(ok, "a blueprint cannot be called");
+        }
+    }
+
+    function test_blueprint_tooLarge_reverts() public {
+        BlueprintsCaller caller = new BlueprintsCaller();
+        caller.initcode(0, new bytes(24_575)); // 24,576 with the 0xFE byte: the limit
+        vm.expectRevert(abi.encodeWithSelector(Blueprints.BlueprintTooLarge.selector, 3, 24_577));
+        caller.initcode(3, new bytes(24_576));
+    }
+
+    /// @dev A constructor that reverts inside the factory re-throws its own error.
+    function test_factory_revertingConstructor_bubbles() public {
+        BagehotFactory.Params memory p = _params();
+        p.criticalTcr = 1e18 - 1;
+        (address[9] memory b, bytes32[9] memory h) = Blueprints.deployAll();
+        vm.expectRevert(StandInShutdownModule.StandInInvalid.selector);
+        new BagehotFactory(p, b, h);
+    }
+
+    function test_runtimeMatches_artifactAndMismatches() public {
+        (BagehotFactory f,) = _local(false);
+        address token = address(f.token());
+        assertTrue(Blueprints.runtimeMatches(token, vm.getDeployedCode("StableToken.sol:StableToken")));
+        assertFalse(
+            Blueprints.runtimeMatches(token, vm.getDeployedCode("OracleAdapter.sol:OracleAdapter")),
+            "another contract"
+        );
+        bytes memory code = token.code;
+        code[code.length / 2] = bytes1(uint8(code[code.length / 2]) ^ 0xFF);
+        vm.etch(token, code);
+        assertFalse(
+            Blueprints.runtimeMatches(token, vm.getDeployedCode("StableToken.sol:StableToken")),
+            "one byte changed"
+        );
+    }
+
+    function test_check_runtimeCodeChanged_fails() public {
+        (BagehotFactory f, DeployConfig memory c) = _local(false);
+        address hints = address(f.hintHelpers());
+        bytes memory code = hints.code;
+        code[code.length - 1] = bytes1(uint8(code[code.length - 1]) ^ 0xFF);
+        vm.etch(hints, code);
+        _expectCheckFails(f, c, "runtime code: hintHelpers is its artifact");
     }
 
     // ------------------------------------------------------------------ smoke and manifest

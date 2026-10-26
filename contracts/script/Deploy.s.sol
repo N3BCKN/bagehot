@@ -5,11 +5,13 @@ import {BagehotFactory} from "../src/deploy/BagehotFactory.sol";
 import {LocalWETH} from "../src/mocks/LocalWETH.sol";
 import {MockAggregator} from "../src/mocks/MockAggregator.sol";
 import {MockSequencerFeed} from "../src/mocks/MockSequencerFeed.sol";
+import {Blueprints} from "./Blueprints.sol";
 import {ConfigLoader, DeployConfig} from "./Config.s.sol";
 import {DeploymentChecks} from "./DeploymentChecks.sol";
 import {VmSafe} from "forge-std/Vm.sol";
 
-/// @notice Deploys one variant through `BagehotFactory` (one transaction: deploy + wire), asserts
+/// @notice Deploys one variant through `BagehotFactory` (one transaction: deploy + wire, from the
+///         blueprints of ADR-0035, deployed or found beforehand), asserts
 ///         spec §3.3 before anything is broadcast (forge broadcasts only if the run succeeds), and,
 ///         when broadcasting, records it in `deployments/<chainId>.json` under the variant's key, so A
 ///         and B of one chain sit side by side. `run()` deploys the config's variant; `runVariant("B")`
@@ -109,14 +111,16 @@ contract Deploy is ConfigLoader {
         return true;
     }
 
-    /// @notice Deploys mocks (31337 only), then the factory; asserts §3.3. Writes nothing to disk.
-    ///         Returns the configuration completed with the mocks' addresses.
+    /// @notice Deploys mocks (31337 only), the blueprints that do not exist yet (earlier transactions,
+    ///         ADR-0035), then the factory; asserts §3.3. Writes nothing to disk. Returns the
+    ///         configuration completed with the mocks' addresses.
     function deploy(DeployConfig memory c) public returns (BagehotFactory f, DeployConfig memory) {
         checkChain(block.chainid);
         if (block.chainid != ANVIL) revert StandInsAreLocalOnly(block.chainid);
         vm.startBroadcast();
         (c.weth, c.priceFeed, c.sequencerFeed) = _localMocks(c);
-        f = new BagehotFactory(_factoryParams(c));
+        (address[9] memory blueprints, bytes32[9] memory hashes) = Blueprints.deployAll();
+        f = new BagehotFactory(_factoryParams(c), blueprints, hashes);
         vm.stopBroadcast();
         DeploymentChecks.check(f, c);
         return (f, c);
@@ -166,6 +170,7 @@ contract Deploy is ConfigLoader {
         vm.serializeBool(m, "standIns", true);
         vm.serializeString(m, "params", onChain);
         vm.serializeString(m, "configOnlyParams", configOnly);
+        vm.serializeString(m, "blueprints", _blueprintsJson());
         return vm.serializeString(m, "addresses", addrs);
     }
 
@@ -184,6 +189,19 @@ contract Deploy is ConfigLoader {
         vm.serializeAddress(a, "weth", c.weth);
         vm.serializeAddress(a, "priceFeed", c.priceFeed);
         return vm.serializeAddress(a, "sequencerFeed", c.sequencerFeed);
+    }
+
+    /// @dev ADR-0035 provenance: per role, the blueprint the factory read and its code hash.
+    function _blueprintsJson() internal returns (string memory out) {
+        bytes[9] memory codes = Blueprints.creationCodes();
+        string[9] memory n = Blueprints.names();
+        for (uint256 i; i < 9; ++i) {
+            string memory r = string.concat("blueprint.", n[i]);
+            vm.serializeAddress(r, "address", Blueprints.predict(i, codes[i]));
+            out = vm.serializeString(
+                "blueprints", n[i], vm.serializeBytes32(r, "codehash", Blueprints.codehash(codes[i]))
+            );
+        }
     }
 
     /// @dev Parameters held by deployed contracts, and those held by no contract yet
