@@ -1,7 +1,8 @@
 # CHG-009: CHG-008's I13 bound is unsound; replace it with an exact per-pair tolerance derived from hidden ideal keys
 
-- Status: **proposed**, 2026-10-25. Replaces CHG-008's formula if approved. `docs/invariants.md`,
-  ADR-0034 and the optional §6.3.3 sentence below wait for this decision.
+- Status: **approved by the human 2026-10-26 and applied the same day** to `docs/invariants.md` I13
+  (with its Summary and Open-items rows) and, with the optional sentence below, to spec §6.3.3.
+  ADR-0034 accepted. Replaces CHG-008's formula; the core handler no longer asserts CHG-008.
 - Raised: P17 security review F3 (open issue P17-2). The human asked for a re-derivation, not a
   relabel. An independent `spec-auditor` pass checked the derivation and implementation; its
   findings are folded in below.

@@ -108,10 +108,10 @@ contract CoreHandler is Test {
     uint256 public stepsAllExact;
     uint256 public stepsNonExact;
     uint256 public maxNeededK; // the smallest k each observed list needed, maximised (k re-validation)
-    // CHG-008: m(p) = redistributions since p's last insertion
+    // CHG-008 (superseded; measured for comparison only): m(p) = redistributions since p's last insertion
     uint256 public redistributions;
     mapping(uint256 => uint256) internal redistAtPlacement;
-    // I13 hidden-key bound (CHG-009, proposed): h interval and ι per member, fixed at insertion
+    // I13 hidden-key bound (CHG-009): h and ι per member, fixed at insertion
     mapping(uint256 => I13HiddenKeys.Rat) internal hOf;
     mapping(uint256 => int256) internal iotaOf;
     uint256 public insertionViolations; // an insertion not exact against its neighbours' keys (§6.3.1)
@@ -1130,9 +1130,10 @@ contract CoreHandler is Test {
     }
 
     /// @dev I13: exact order while every member is exact (CHG-005). In every regime: the key identity,
-    ///      exact insertions (neighbours and stake) and the hidden-key pair condition (CHG-009,
-    ///      proposed). CHG-008's per-member bound is still asserted, as the approved text, until CHG-009
-    ///      is decided — `I13BoundCounterexampleTest` shows a correct VaultManager can break it.
+    ///      exact insertions (neighbours and stake) and the hidden-key pair condition (CHG-009, applied
+    ///      2026-10-26). CHG-008's per-member bound is superseded and no longer asserted —
+    ///      `I13BoundCounterexampleTest` shows a correct VaultManager can break it; it is still measured
+    ///      on the same pairs for docs/fuzzing.md's comparison (`maxChg008PairRelE18`).
     function checkI13() public view returns (bool, string memory) {
         if (insertionViolations != 0) {
             return (false, "I13: an insertion was not exact (neighbours' keys or the stake of 6.5.4)");
@@ -1148,12 +1149,8 @@ contract CoreHandler is Test {
             }
             (uint256 cA, uint256 nA) = v.sortKey(a);
             (uint256 cB, uint256 nB) = v.sortKey(b);
-            if (exactRegime) {
-                if (!(cA * nB > cB * nA || (cA * nB == cB * nA && a < b))) {
-                    return (false, "I13: exact order");
-                }
-            } else if ((cA + _kColl(a)) * (nB + _kNorm(b)) < cB * nA) {
-                return (false, "I13: order beyond the derived drift bound");
+            if (exactRegime && !(cA * nB > cB * nA || (cA * nB == cB * nA && a < b))) {
+                return (false, "I13: exact order");
             }
         }
         return (true, "");

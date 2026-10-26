@@ -1041,6 +1041,10 @@ and the snapshot rule keeps a common ratio by induction (a liquidation's snapsho
 arithmetic stakes and rewards are rounded down, so the ratios differ slightly between positions —
 in particular for positions staked before the last snapshot — and the property holds only
 approximately; two positions with almost equal NICR can swap.
+The snapshot itself is only approximately the common ratio: `totalCollateralSnapshot` includes the
+carry remainders and undistributed dust in `pendingColl`, so a position staked after a snapshot can
+differ from older ones by more than one unit of stake. Under stake collapse the swaps are no longer
+limited to near-equal NICRs; I13 (CHG-009) derives the tolerance per pair.
 Measured on the reference implementation: no violation in random sequences; under adversarial
 near-ties, inversions of relative size up to `7.1·10^-19`, about `1 / min(effColl)` in wei. This
 does not affect determinism (insertion and hint validation are exact) nor safety (redemption checks

@@ -46,7 +46,7 @@ can agree with a buggy contract; an event field cannot.
 | I10 | After the trigger no new debt; after settlement claims are pro rata and bounded | 0 | both, window + settled | §6.11 |
 | I11 | Parameters, wiring and strategy never change after deployment | 0 | both, all phases | §3, §9 |
 | I12 | Operations that need a usable price do not execute without one | 0 | both, all phases | §7, §6.10.1 |
-| I13 | The list is ordered by effective NICR within a per-member tolerance derived from the rounding each member has accumulated; weak once stakes collapse (P17-1) | derived per member (CHG-008) | both, all phases | §6.3 |
+| I13 | The list is ordered by effective NICR within a per-pair tolerance derived exactly from each member's drift since insertion and what it inherited at insertion (hidden-key bound) | derived per pair (CHG-009) | both, all phases | §6.3 |
 | I14 | Mutable state rebuilt from events equals contract state | 0 | both, all phases | §11.1 |
 | I15 | `redeem` reverts `TCRBelowCritical` exactly when the gate condition holds | 0 | both, live | §5.8, §6.7.2 |
 | I16 | Every active auction is well formed | 0 | B, live + window | §10.3, §6.8 |
@@ -745,63 +745,68 @@ every unusable reason; a usable price that goes stale within the same block.
 
 ## I13 — Sorted order under redistribution
 
-**Statement.** The list is ordered by effective NICR, descending, ties by lower id. Lazy redistribution perturbs effective keys by rounding, so the order holds within a per-member
-tolerance derived from the rounding each member can actually have accumulated since it was last
-inserted, rather than exactly. The tolerance is tight while stakes are large and weak once they
-collapse (see "Weak regime").
+**Statement.** The list is ordered by effective NICR, descending, ties by lower id. Lazy redistribution moves effective keys between insertions. Each adjacent pair is held to the
+tolerance that its two members' drift since insertion, and what each inherited at insertion, allow,
+computed exactly against a hidden order that no redistribution can change.
 
-**Formula.** For every adjacent pair `(A, B)` in the list — `A` nearer the head — with keys `(cA, nA)`, `(cB, nB)`
-from `sortKey` (§5.1.12):
+**Formula.** Every member `p` carries `h_p` and `ι_p`, fixed at its last insertion. At that moment its pending
+rewards are applied, its stake is recomputed, and `c_p`, `n_p`, `L_p = snapLColl_p` and
+`D_p = snapLDebt_p` are recorded. For every adjacent pair `(A, B)` in the list — `A` nearer the
+head — with keys `(C, N)` from `sortKey`:
 
 ```
-(cA + kc(A)) · (nB + kn(B))   ≥   cB · nA
+h_obs,A − h_obs,B   ≤   (d_A − d_B) + ι_A + ι_B          (equivalently  h_A − ι_A ≤ h_B + ι_B)
 
-kc(p) = 1 + ⌈(ΔLColl(p) + m(p) + stake(p)·m(p)) / DECIMAL_PRECISION⌉
-kn(p) = 1 + ⌈(ΔLDebt(p) + m(p) + stake(p)·m(p)) / DECIMAL_PRECISION⌉
+h_p      = n_p · (DECIMAL_PRECISION + L_p) / c_p − D_p
+h_obs,q  = N_q · (DECIMAL_PRECISION + LColl) / C_q − LDebt          d_q = h_obs,q − h_q
+ι_p      = max(0,  ι_X + ⌈h_X − h_obs,X⌉,  ι_Y + ⌈h_obs,Y − h_Y⌉)   X, Y: p's neighbours at its insertion
 ```
 
-where, since `p` was last inserted into the list (every reinsert applies pending rewards, recomputes
-the stake and records the key): `ΔLColl(p) = LColl − snapLColl(p)`, `ΔLDebt(p) = LDebt − snapLDebt(p)`,
-and `m(p)` is the number of `Redistributed` events since `p`'s last `PositionUpdated`.
+All values are exact rationals; a side with no neighbour contributes nothing. In addition, exactly:
+1. `sortKey(q) = (c_q + ⌊s_q (LColl − L_q)/DP⌋, n_q + ⌊s_q (LDebt − D_q)/DP⌋)` for every member;
+2. at every insertion, the predecessor `precedes` `p` and `p` `precedes` the successor (§6.3.1), by the
+   keys read at that moment;
+3. at every insertion, `s_p = computeStake(c_p)` against the current snapshots (§6.5.4).
 
-**Derivation of the form.** Each effective value is an exact value minus a non-negative error: `c = c* − δc`, `n = n* − δn`, where
-the exact value is the one with unfloored stakes and rewards. For a member `p`, since its last
-insertion:
+**Derivation of the form.** Give every member the ideal stake `s*_p = c_p·DP/(DP + L_p)` on one common ratio. This is a choice of
+coordinates: any common ratio works, and this one equals the real ratio until the first liquidation.
 
-- the pending floor (`pending = ⌊stake · ΔL / DP⌋`, R8) loses less than 1 wei;
-- the stake floor (R10, `stake ≥ stake* − 1`) loses less than `ΔL* / DP`, with `ΔL* < ΔL + m` the
-  unfloored accumulator;
-- the redistribution floors (`dL = ⌊num / totalStakes⌋`, §6.5.2) lose less than 1 L-unit each, i.e.
-  less than `stake · m / DP` over `m` redistributions; the error carry can only reduce this.
+With the real accumulators, which every member shares, its hidden keys are
+`C* = c_p + s*_p(LColl − L_p)/DP` and `N* = n_p + s*_p(LDebt − D_p)/DP`. Then `C*/s* = (DP + LColl)/DP`
+for every member and `N*/s* = (h_p + LDebt)/DP`, so the hidden NICR is `(DP + LColl)/(h_p + LDebt)`.
+The hidden order — ascending `h` — is invariant under every redistribution, independent of the real
+stakes, of every rounding in §6.5 and of the §6.5.4 reset.
 
-So `δc(p) < kc(p)` and `δn(p) < kn(p)`. In exact arithmetic snapshot-corrected stakes preserve the
-order (every member receives the same reward per unit of effective collateral, §6.5.4). An observed
-pair is therefore consistent with a correct exact order exactly when some admissible errors make it
-so: `(cA + δcA)(nB + δnB) ≥ (cB + δcB)(nA + δnA) ≥ cB · nA`, and maximising the left side gives the
-check above. Only `A`'s collateral and `B`'s debt carry tolerance terms; adding them to both sides
-would be strictly weaker. A member with no redistribution since its insertion has `kc = kn = 1`, and
-such a member is exact anyway.
+An observed key maps to `h_obs`, which orders observed keys exactly as their NICR does. Insertion is
+exact against observed keys, so `h_obs,X ≤ h_p ≤ h_obs,Y` for the new member's neighbours. Taking
+`Z_p = clamp(h_p, Z_X, Z_Y)` by induction gives values that order the list exactly at all times, with
+`|Z_p − h_p| ≤ ι_p`. Hence the pair condition, which a correct implementation never fails.
 
-**Weak regime (P17-1).** A member's own rewards are part of its key (`c ≥ stake · ΔLColl / DP − 1`,
-likewise for debt), so its tolerance relative to its own key is bounded by roughly `1/stake`.
-Repeated redistributions drive the stake snapshot ratio of §6.5.4, and with it the stakes of newly
-inserted positions, toward zero.
+The bound does not depend on the stakes, so conditions 1–3 check them and the keys directly.
+Condition 1 checks `sortKey` against the stored state, not the stored state itself (I1 and the event
+reconstruction cover that). Condition 2 checks local exactness, not which of several valid slots was
+chosen.
 
-Measured over the P17 campaign (deployment A, 8 seeds × 256 runs × 200 calls, every member after
-every step):
+**Weak regime (P17-1).** The tolerance grows with the drift between members' observed and hidden keys, carried into `ι` at
+insertion. It is small while every member's stake follows the common ratio, and large once stakes
+collapse (P17-1). There is no a-priori limit. A member whose key stops following the common ratio —
+most clearly a zero-stake member, whose key never moves while the accumulators grow — can pass a gap
+of the order of a key onto members later inserted next to it, and the tolerance for those pairs is
+then vacuous.
 
-| member's stake | largest tolerance granted, relative to its own key |
+Observed in the P17 campaign (deployment A, 8 seeds × 256 runs × 200 calls), the largest per-pair
+tolerance relative to the NICR, by the smallest stake the run reached:
+
+| smallest stake in the run | largest tolerance |
 |---|---|
-| below 1,000 wei | above 0.1 % (up to 0.91 %) |
-| below 100 wei | above 1 % (up to 6.4 %) |
-| below 10 wei | up to 99 % |
-| 0 | up to 270 % |
-| 10¹⁸ wei and more | at most 3·10⁻¹⁸ |
+| below 1,000 wei | 4.4·10⁻³ |
+| 10³ – 10⁹ wei | 2.0·10⁻⁶ |
+| 10⁹ – 10¹³ wei | 3.4·10⁻¹¹ |
+| 10¹³ wei and more | 1.7·10⁻¹⁴ |
 
-**For members staked below 1,000 wei, I13 therefore detects only inversions larger than about 0.1 %
-of their keys; for members staked below 10 wei it checks essentially nothing.** The campaign reports
-the largest tolerance granted and the smallest stake seen in `docs/fuzzing.md`. This is a property of
-the snapshot design, not slack to be tuned: any change belongs to P17-1, through `/spec-change`.
+On the same pairs CHG-008 granted up to 0.48. The §6.5.4 reset branch is not reachable through the
+P17 harness and is measured from P20 on. Conditions 1–3 have no tolerance in any regime. Any change
+to the collapse itself belongs to P17-1.
 
 **Why absolute and not relative.** A relative tolerance of the form
 `τ = k(cA·nB + cB·nA)(1/cA + 1/cB + 1/nA + 1/nB)` — the first draft of this invariant — carries
@@ -809,24 +814,24 @@ cross terms like `k·cA·nB/cB`, which for a large `A` against a small `B` becom
 permissive and would wave through a gross inversion. It also cannot be evaluated: multiplying
 through needs `cA·cB·nA·nB`, far past `2^256`.
 
-**Overflow.** Each redistribution adds `dL ≤ x · DP + lastError` to an accumulator, with `x` the amount
-redistributed and `lastError < totalStakes`, since `totalStakes ≥ 1`. So `ΔLColl / DP` is at most the
-collateral ever redistributed plus `m · totalStakes / DP`, and `ΔLDebt / DP` likewise for normalised
-debt. With `stake ≤ coll`, `kc` is bounded by WETH's supply (~1.2·10²⁶ ≪ 2¹²⁷) and `kn` by the supply
-cap, for any realistic `m` (< 2⁶⁴). Both sides of the check therefore fit in `uint256` under §6.3.1's
-bounds, exactly as the base comparison does.
+**Overflow.** `h` and `h_obs` are exact rationals `x·y/den − off`, with `x·y` formed by full-width `mulDiv` and
+`mulmod` (512-bit intermediate), so `n·(DP + L)` never overflows. Differences are taken exactly:
+integer parts in `int256`, and fractional parts compared on 512-bit cross products. `h ≤ n·(DP + L)/c`
+is bounded by the supply cap times `(DP + LColl)` over one wei of collateral, far below `2²⁵⁵` for
+any realistic accumulator.
 
-**Validation (CHG-008).** This invariant used a constant `k = 4` until P17. It was calibrated on
-P02's observations (inversions up to `7.1·10⁻¹⁹` relative), and the P17 campaign exceeded it in
-deployment A: after repeated redistributions the stake snapshot ratio fell to `3.7·10⁻⁶`, `LColl`
-reached `2.7·10²³`, and an adjacent pair needed `k ≈ 8,125` wei (regression
+**Validation (CHG-008, CHG-009).** The constant `k = 4` used until P17 was exceeded in deployment A (`k ≈ 8,125`;
 `CoreHandlerRegressionsTest.test_regression_I13_toleranceAfterRedistributions`).
 
-The derived bound holds on that sequence, on the stake-collapse sequence
+CHG-008's per-member bound replaced it. The P17 review then found that its derivation omitted the
+snapshot-ratio error, and a correct VaultManager breaks it on a protocol-valid sequence
+(`I13BoundCounterexampleTest`; search in `scripts/analysis/i13_bound_search.py`).
+
+The hidden-key bound (CHG-009) holds on both sequences, on
 `test_regression_I13_derivedBound_stakeCollapse`, and on every pair after every step of the campaign.
 
-The list-only harness `SortedPositionsInvariant` (mock keys, P13) models drift directly — at most 4
-wei per key change — and checks with that constant, which is its `kc = kn`.
+The list-only harness `SortedPositionsInvariant` (mock keys, P13) and the Python list-model test
+model drift directly — at most 4 wei per key change — and keep that constant.
 
 **Ties and the exact regime (CHG-005).** Call a list member *exact* if its key has not changed
 since it was last inserted **and** every member of the list was exact at the moment of that
@@ -854,11 +859,11 @@ they read, so the list is exactly ordered in the exact regime. Once any key has 
 redistribution, the tolerance applies to every adjacent pair — including pairs whose own keys never
 changed, for the reason given under "Ties and the exact regime".
 
-**Checked in.** Foundry `invariant_I13_sortedByNicrWithinTolerance` over the core handler, with `m` counted from
-`Redistributed` events (one walk, O(size); every run of deployment A must reach both the exact and the
-tolerance-only regime; the largest tolerance granted and the smallest stake are reported), the CHG-005
-regression test above and the two CHG-008 regression tests; P13's list-only campaign
-`SortedPositionsInvariant` with its synthetic drift; Medusa `property_I13_sortedOrder`;
+**Checked in.** Foundry `invariant_I13_sortedByNicrWithinTolerance` over the core handler: `h` and `ι` recorded at
+every insertion; conditions 1–3 and the pair condition checked in one walk (O(size)); every run of
+deployment A must reach both the exact and the tolerance-only regime; the largest tolerance reported.
+Also: the CHG-005 regression test above, the CHG-008 and CHG-009 regression tests, P13's list-only
+campaign `SortedPositionsInvariant` with its synthetic drift, and Medusa `property_I13_sortedOrder`;
 Python `model.invariants.check_I13(state)` and `test_chg005_tie_reversed_through_a_drifted_neighbour_that_has_since_left`;
 differential: the full list order is in `snapshot()`
 and compared exactly between the two implementations — the tolerance is about reality, not about
@@ -1013,6 +1018,6 @@ because it is the single check the indexer monitor runs most often. Zero toleran
 | CHG-002 | Resolved: §6.7.3's partial-redemption post-check (ADR-0027) makes I5 hold unconditionally; vector `redemption.json#partial_cancelled_below_mcr`. | `docs/changes/CHG-002-partial-redemption-mcr-rounding.md` |
 | CHG-001 | `rpow`'s error bound, to be recorded in spec §2.3. Awaiting review. | `docs/changes/CHG-001-rpow-error-bound.md` |
 | P02-4 | No vector exercises `redeem` from inside an auction buyer callback (I15). | `docs/progress.md` |
-| I13 weak regime | CHG-008 replaced the calibrated `k = 4` with a derived per-member bound. It grants up to about `1/stake` of a member's own key, so once stakes collapse I13 checks little. Any change goes through P17-1 and `/spec-change`. | this file, I13; `docs/progress.md` P17-1 |
+| I13 weak regime | CHG-009's per-pair tolerance is exact and sound but has no a-priori limit: drift carried into `ι` at insertion grows with stake collapse (observed up to 4.4·10⁻³ of the NICR; vacuous in reachable zero-stake states). Measure again with P20's real liquidation and after any P17-1 change. | this file, I13; `docs/progress.md` P17-1, P17-H1 |
 | I4 partial | The TCR effect of a partial pool offset with surplus is measured, not asserted. The report must describe it, or it will read as a defect. | this file, I4 |
 | I4 wei | A full-absorption liquidation can lower TCR, and an auction start raise system debt, by one wei each — both from the same aggregate-ceiling split (R1/R28). Stated in A3 and B2; worth one line in the report so neither reads as a leak. | this file, I4 |

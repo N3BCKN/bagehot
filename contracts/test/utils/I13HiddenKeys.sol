@@ -4,7 +4,7 @@ pragma solidity 0.8.28;
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
-/// @notice I13's hidden-key bound (CHG-009, proposed). Every member is given an ideal stake on one
+/// @notice I13's hidden-key bound (CHG-009). Every member is given an ideal stake on one
 ///         common ratio, c·DP/(DP + L_p), so that with the real accumulators (shared by every member)
 ///         its hidden NICR is (DP + LColl)/(h_p + LDebt), where h_p = n_p·(DP + snapLColl_p)/c_p −
 ///         snapLDebt_p is constant while it stays in the list. Ordering by h is invariant under every

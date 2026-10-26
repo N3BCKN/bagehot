@@ -2,7 +2,7 @@
 
 - Status: **approved 2026-10-24 (option 1, without the slack ceiling first proposed); applied to
   `docs/invariants.md` I13 on 2026-10-24. Its formula is unsound — a correct VaultManager breaks it
-  (`I13BoundCounterexampleTest`) — and CHG-009 (proposed) replaces it.** The problem statement below
+  (`I13BoundCounterexampleTest`) — and CHG-009 replaced it on 2026-10-26.** The problem statement below
   (`k = 4` exceeded) stands.
 - Raised: 2026-10-24, P17 (the core invariant campaign, deployment A)
 - Affects: `docs/invariants.md` I13 ("Formula", "Derivation of the form", "The constant k = 4 is
