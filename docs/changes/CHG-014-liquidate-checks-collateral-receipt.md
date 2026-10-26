@@ -1,6 +1,6 @@
 # CHG-014: `liquidate` checks that the collateral the strategy reports returning actually arrived
 
-- Status: **proposed**, 2026-10-26 (P20 security review, finding P20-L1).
+- Status: **approved 2026-10-26** (the human delegated the decision; option 1 chosen as best for the project) — code, model and tests applied; the spec text awaits the protected-paths unlock.
 - Affects: `docs/spec.md` §6.4.1 (one balance check), §11.2 (one error); the VaultManager; the Python
   model; one unit test. No vector changes (no conforming strategy triggers it).
 

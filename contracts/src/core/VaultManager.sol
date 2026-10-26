@@ -94,6 +94,9 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
     error DebtAbsorbedExceedsDebt();
     /// @notice The strategy reported returning more collateral than it received (§6.4.1, CHG-012).
     error CollReturnedExceedsColl();
+    /// @notice The VaultManager's WETH did not grow by exactly `collReturned` across the strategy call
+    ///         (§6.4.1, CHG-014).
+    error CollReturnedNotReceived();
 
     event PositionOpened(uint256 indexed id, address indexed owner, uint256 debtMinted);
     event PositionUpdated(
@@ -479,11 +482,13 @@ contract VaultManager is ISortKeySource, WiredBase, ReentrancyGuardTransient {
         p.status = Status.ClosedByLiquidation;
         WETH.safeTransfer(msg.sender, GAS_RESERVE); // gas compensation
         WETH.safeTransfer(strategy, coll);
+        uint256 wethBefore = WETH.balanceOf(address(this));
         (uint256 debtAbsorbed, uint256 collReturned) =
             ILiquidationStrategy(strategy).onLiquidation(id, owner, debt, coll, price);
-        // defence in depth (CHG-012): the strategy contract guarantees both; a violation reverts
+        // defence in depth (CHG-012, CHG-014): the strategy contract guarantees all three
         if (debtAbsorbed > debt) revert DebtAbsorbedExceedsDebt();
         if (collReturned > coll) revert CollReturnedExceedsColl();
+        if (WETH.balanceOf(address(this)) != wethBefore + collReturned) revert CollReturnedNotReceived();
         uint256 normAbsorbed = debtAbsorbed == debt ? n : Rounding.mulDivDown(debtAbsorbed, RAY, index); // R34
         uint256 normRest = n - normAbsorbed;
         totalNormDebt -= normAbsorbed;

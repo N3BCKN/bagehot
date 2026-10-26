@@ -234,6 +234,20 @@ contract VaultManagerLiquidationTest is LiquidationFixture {
         assertEq(v.pendingNormDebt(), 0);
     }
 
+    /// @dev CHG-014: the reported `collReturned` must arrive exactly — nothing sent, one wei short and one
+    ///      wei over all revert; the exact amount is accepted (test_chg012_exactBounds_accepted).
+    function test_chg014_collReturnedNotReceived_reverts() public {
+        (ScriptedStrategy s, uint256 id) = _scripted();
+        s.script(0, 0, true); // reports collReturned == coll
+        int256[3] memory deltas = [-int256(2e18), -1, int256(1)];
+        for (uint256 k; k < 3; ++k) {
+            s.setSendDelta(deltas[k]);
+            vm.prank(liq);
+            vm.expectRevert(VaultManager.CollReturnedNotReceived.selector);
+            v.liquidate(id);
+        }
+    }
+
     /// @dev A strategy that calls back into any VaultManager mutator during `onLiquidation` hits the lock.
     function test_strategyReentry_hitsTheLock() public {
         (ScriptedStrategy s, uint256 id) = _scripted();

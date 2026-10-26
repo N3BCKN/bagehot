@@ -84,6 +84,7 @@ ERC20InsufficientBalance = _error("ERC20InsufficientBalance")
 NotLiquidatable = _error("NotLiquidatable")
 DebtAbsorbedExceedsDebt = _error("DebtAbsorbedExceedsDebt")
 CollReturnedExceedsColl = _error("CollReturnedExceedsColl")
+CollReturnedNotReceived = _error("CollReturnedNotReceived")
 
 
 @dataclass
@@ -486,11 +487,14 @@ class Vault:
             p.status = Status.CLOSED_BY_LIQUIDATION
             self._weth_move("vault", caller, self.gas_reserve)
             self._weth_move("vault", self.strategy_account, coll)
+            weth_before = self.weth.get("vault", 0)
             absorbed, returned = self.strategy.on_liquidation(pid, owner, debt, coll, price)
             if absorbed > debt:  # CHG-012
                 raise DebtAbsorbedExceedsDebt()
             if returned > coll:
                 raise CollReturnedExceedsColl()
+            if self.weth.get("vault", 0) != weth_before + returned:  # CHG-014
+                raise CollReturnedNotReceived()
             norm_absorbed = n if absorbed == debt else mul_div_down(absorbed, RAY, self.index)
             norm_rest = n - norm_absorbed
             self.total_norm_debt -= norm_absorbed

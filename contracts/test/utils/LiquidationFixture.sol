@@ -96,6 +96,7 @@ contract ScriptedStrategy {
     uint256 public extraDebt;
     uint256 public extraColl;
     bool public returnAll;
+    int256 public sendDelta; // CHG-014: send collReturned + sendDelta instead of collReturned
     bytes public reenterCall;
     bytes public innerRevert;
 
@@ -105,6 +106,10 @@ contract ScriptedStrategy {
 
     function script(uint256 extraDebt_, uint256 extraColl_, bool returnAll_) external {
         (extraDebt, extraColl, returnAll) = (extraDebt_, extraColl_, returnAll_);
+    }
+
+    function setSendDelta(int256 d) external {
+        sendDelta = d;
     }
 
     function setReenter(bytes calldata data) external {
@@ -121,8 +126,11 @@ contract ScriptedStrategy {
         }
         debtAbsorbed = returnAll ? 0 : debt + extraDebt;
         collReturned = returnAll ? coll + extraColl : extraColl;
-        if (collReturned > coll) weth.mint(address(this), collReturned - coll);
-        if (collReturned > 0) weth.transfer(vaultManager, collReturned);
+        uint256 send = uint256(int256(collReturned) + sendDelta);
+        if (send > weth.balanceOf(address(this))) {
+            weth.mint(address(this), send - weth.balanceOf(address(this)));
+        }
+        if (send > 0) weth.transfer(vaultManager, send);
     }
 
     // the stand-in role reads these in accrual; an empty pool declines

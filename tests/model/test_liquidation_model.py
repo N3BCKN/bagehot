@@ -260,3 +260,25 @@ def test_chg012_strategy_answer_bounds(extra_debt: int, extra_coll: int, error) 
     with pytest.raises(error):
         v.liquidate("liq", 2)
     assert (v.total_norm_debt, v.total_stakes, dict(v.weth), v.positions[2].status) == before
+
+
+class _SilentStrategy:
+    """Reports returning the whole collateral but sends nothing back (CHG-014)."""
+
+    def on_liquidation(self, pid, owner, debt, coll, price):  # noqa: ANN001, ANN201
+        return 0, coll
+
+
+def test_chg014_collateral_not_received_reverts_and_rolls_back() -> None:
+    price = [2_000 * WAD]
+    v = vm.Vault(11 * 10**17, 2_000 * WAD, 375 * 10**14, 30, lambda: (price[0], True))
+    for who in ("alice", "bob"):
+        v.weth[who] = 10**24
+    v.open_position("alice", 10 * WAD, 10_000 * WAD, 0, 0)
+    v.open_position("bob", 2 * WAD, 3_000 * WAD, 1, 0)
+    v.strategy = _SilentStrategy()
+    price[0] = 1_500 * WAD
+    before = (v.total_norm_debt, v.pending_coll, dict(v.weth), v.positions[2].status)
+    with pytest.raises(vm.CollReturnedNotReceived):
+        v.liquidate("liq", 2)
+    assert (v.total_norm_debt, v.pending_coll, dict(v.weth), v.positions[2].status) == before

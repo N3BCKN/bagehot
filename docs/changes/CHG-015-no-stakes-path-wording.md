@@ -1,6 +1,6 @@
 # CHG-015: the no-stakes path needs no stake left, not no position left; and the view window during `onLiquidation`
 
-- Status: **proposed**, 2026-10-26 (P20 security review, findings P20-L2 and P20-I2; P17-1 action (c)).
+- Status: **approved 2026-10-26** (the human delegated the decision) — spec text only; awaits the protected-paths unlock.
 - Affects: `docs/spec.md` §1.2, §6.4.4, §5.10 (text only). No code, model or vector change: the code
   already tests `totalStakes > 0`.
 
