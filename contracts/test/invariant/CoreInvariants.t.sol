@@ -5,6 +5,7 @@ import {SortedPositions} from "../../src/core/SortedPositions.sol";
 import {StableToken} from "../../src/core/StableToken.sol";
 import {VaultManager} from "../../src/core/VaultManager.sol";
 import {WiredBase} from "../../src/lib/Wired.sol";
+import {StabilityPool} from "../../src/liquidation/StabilityPool.sol";
 import {RedemptionModule} from "../../src/redemption/RedemptionModule.sol";
 import {CoreHandler} from "./handlers/CoreHandler.sol";
 import {Test} from "forge-std/Test.sol";
@@ -156,6 +157,7 @@ contract CoreInvariantsTest is Test {
         VaultManager v = handler.v();
         bool settled = v.settled();
         if (!settled) v.accrue();
+        _unwindPool(settled);
         for (uint256 id = 1; id < v.nextId(); ++id) {
             VaultManager.Position memory p = v.positions(id);
             if (p.status != VaultManager.Status.Active) continue;
@@ -181,11 +183,50 @@ contract CoreInvariantsTest is Test {
             handler.donatedWeth(address(v)) + residual,
             "I8 unwind: VaultManager holds donations plus pending dust"
         );
+        _assertPoolResidual(settled);
         assertEq(handler.weth().balanceOf(address(handler.rm())), handler.donatedWeth(address(handler.rm())));
         assertEq(
             handler.token().balanceOf(address(handler.rm())), handler.donatedToken(address(handler.rm()))
         );
         vm.revertToState(snap);
+    }
+
+    /// @dev I8 step 2, deployment A: every depositor claims, then withdraws everything — claimGains
+    ///      first, because withdraw(max) deletes the record and claimGains would then revert NoDeposit.
+    function _unwindPool(bool settled) internal {
+        if (_variantB() || settled) return; // the pool step belongs to the live and window phases
+        StabilityPool pool = handler.pool();
+        for (uint256 i; i < 5; ++i) {
+            address a = handler.actors(i);
+            (uint256 initial,,,,,) = pool.deposits(a);
+            if (initial == 0) continue;
+            vm.prank(a);
+            pool.claimGains(); // must succeed
+            (initial,,,,,) = pool.deposits(a);
+            if (initial == 0) continue; // a zero compounded deposit left on the claim
+            vm.prank(a);
+            pool.withdraw(type(uint256).max); // must succeed
+        }
+    }
+
+    /// @dev I8 step 3 for the pool: WETH == collGainsBalance, stablecoin == interestGainsBalance (plus
+    ///      totalDeposits once the ledger has settled; the mock ledger never does), and no depositor
+    ///      claim left unpaid. No donations reach the pool in this handler.
+    function _assertPoolResidual(bool settled) internal view {
+        if (_variantB()) return;
+        StabilityPool pool = handler.pool();
+        assertEq(handler.weth().balanceOf(address(pool)), pool.collGainsBalance(), "I8 unwind: pool WETH");
+        assertEq(
+            handler.token().balanceOf(address(pool)),
+            pool.interestGainsBalance() + pool.totalDeposits(),
+            "I8 unwind: pool stablecoin"
+        );
+        if (settled) return;
+        assertEq(pool.totalDeposits(), 0, "I8 unwind: deposits fully withdrawn or swept");
+        for (uint256 i; i < 5; ++i) {
+            (uint256 initial,,,,,) = pool.deposits(handler.actors(i));
+            assertEq(initial, 0, "I8 unwind: no depositor record left");
+        }
     }
 
     // ------------------------------------------------------------------ I11: wiring is one-shot
@@ -205,6 +246,7 @@ contract CoreInvariantsTest is Test {
         RedemptionModule rm = handler.rm();
         SortedPositions sorted = handler.sorted();
         StableToken token = handler.token();
+        StabilityPool pool = handler.pool();
         vm.startPrank(caller);
         vm.expectRevert(err);
         v.wire(address(1), address(1), address(0), address(1), address(1), address(1));
@@ -214,6 +256,10 @@ contract CoreInvariantsTest is Test {
         sorted.wire(address(1));
         vm.expectRevert(err);
         token.wire(address(1), address(1), address(1), address(1));
+        if (address(pool) != address(0)) {
+            vm.expectRevert(err);
+            pool.wire(address(1), address(1));
+        }
         vm.stopPrank();
     }
 }

@@ -22,6 +22,10 @@ class Overflow(ArithmeticError):
     """uint256 overflow — Solidity `Panic(0x11)`."""
 
 
+class Underflow(ArithmeticError):
+    """A checked subtraction below zero (Solidity `Panic(0x11)`, spec §2.2)."""
+
+
 class DivisionByZero(ArithmeticError):
     """Division by zero — Solidity `Panic(0x12)`."""
 

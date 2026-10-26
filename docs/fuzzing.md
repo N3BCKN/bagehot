@@ -280,7 +280,10 @@ every step.
 partial and full withdrawals, claims, offsets — random, exactly `T`, `T − 1`, near-emptying —
 interest, liquidations through `onLiquidation`, donations): I1 (pool row), I3's inequalities and
 `P` range, the withdraw-entitlement and empty-epoch clauses, U4 and no unexpected revert — all
-green, with epoch changes, scale changes and dust sweeps reached in every run. In the core campaign
+green. Epoch changes, scale changes and dust sweeps (residuals that reached the ledger) are logged at
+the end of every run, not asserted per run; the scale-change edge cases are pinned deterministically
+by the unit tests and the precision replay. The I8 unwind of the core campaign exits every depositor
+(claim, then withdraw everything) and checks the pool keeps only its named residual. In the core campaign
 (deployment A) the real pool replaces the mock, with deposit, withdraw and claim actions and the
 same checks (`invariant_I3_poolSolvencyAndU4`, Medusa `property_I3_poolSolvency`).
 

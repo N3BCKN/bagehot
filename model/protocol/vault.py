@@ -207,7 +207,9 @@ class Vault:
             offered = mul_div_down(interest, self.pool_share_bps, BPS)
             if offered > 0:
                 try:
-                    ok, booked = True, bool(self.pool_hook(offered)) if self.pool_hook else False
+                    answer = self.pool_hook(offered) if self.pool_hook else False
+                    # the contract decodes only a word of 0 or 1; anything else is a failed call
+                    ok, booked = isinstance(answer, bool), answer is True
                 except Exception:  # a failed guarded call: the pool's state is rolled back
                     ok, booked = False, False
                 if ok and booked:

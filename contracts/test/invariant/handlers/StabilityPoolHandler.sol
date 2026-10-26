@@ -74,14 +74,37 @@ contract StabilityPoolHandler is CommonBase, StdUtils {
         uint256 compounded = pool.compoundedDeposit(a);
         (, uint256 interestGain) = pool.gains(a);
         uint256 before = token.balanceOf(a);
+        uint256 reserveBefore = ledger.reserve();
         vm.prank(a);
         try pool.withdraw(x) {
             ++ok["withdraw"];
             uint256 want = x < compounded ? x : compounded;
             if (token.balanceOf(a) - before != want + interestGain) ++entitlementViolations;
-            if (pool.totalDeposits() == 0 && pool.depositorCount(pool.currentEpoch()) == 0) ++sweeps;
+            if (ledger.reserve() > reserveBefore) ++sweeps; // PoolDustSwept: the residual reached the ledger
         } catch (bytes memory err) {
             _expect(err, StabilityPool.DepositTooSmall.selector, ZeroAmount.selector);
+        }
+    }
+
+    /// @notice Every actor withdraws everything in turn — I3's targeted sequence "two depositors, one
+    ///         offset, both withdraw": the last current-epoch leaver sweeps the rounding residual.
+    function exitAll() external {
+        for (uint256 i; i < 5; ++i) {
+            address a = actors[i];
+            (uint256 initial,,,,,) = pool.deposits(a);
+            if (initial == 0) continue;
+            uint256 compounded = pool.compoundedDeposit(a);
+            (, uint256 interestGain) = pool.gains(a);
+            uint256 before = token.balanceOf(a);
+            uint256 reserveBefore = ledger.reserve();
+            vm.prank(a);
+            try pool.withdraw(type(uint256).max) {
+                ++ok["withdraw"];
+                if (token.balanceOf(a) - before != compounded + interestGain) ++entitlementViolations;
+                if (ledger.reserve() > reserveBefore) ++sweeps;
+            } catch (bytes memory err) {
+                _unexpected(err);
+            }
         }
     }
 

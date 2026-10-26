@@ -121,16 +121,20 @@ contract VaultManagerPoolHookTest is Test {
 
     /// @dev Every failure mode × every accruing operation (open, addCollateral, withdrawCollateral,
     ///      borrow, repay, close): the operation succeeds, the whole interest reaches the reserve,
-    ///      `PoolInterestRedirected(offered)` is emitted, nothing is minted to the pool, and the supply
-    ///      grows by exactly the interest plus the operation's own mint or burn (I2's `E` unchanged).
+    ///      `PoolInterestRedirected(offered)` is emitted, `toPool + toReserve = interest` (so I2's `E`
+    ///      is unaffected by the redirect), and nothing is minted to the pool. Liquidation and `check`
+    ///      join at P20 / the ShutdownModule prompt; `redeem` accrues through the same `_accrue`.
     function test_failingPool_everyAccruingOperation_isRedirected() public {
         _deploy(false);
-        HostilePool.Mode[5] memory modes = [
+        HostilePool.Mode[8] memory modes = [
             HostilePool.Mode.Revert,
             HostilePool.Mode.Panic,
             HostilePool.Mode.BurnAll,
             HostilePool.Mode.WrongSize,
-            HostilePool.Mode.NonBool
+            HostilePool.Mode.NonBool,
+            HostilePool.Mode.EmptyReturn,
+            HostilePool.Mode.HugeReturn,
+            HostilePool.Mode.HugeRevert
         ];
         for (uint256 m; m < modes.length; ++m) {
             for (uint256 op; op < 6; ++op) {

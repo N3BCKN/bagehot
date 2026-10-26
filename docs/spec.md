@@ -253,7 +253,7 @@ where each one started.
 | `ANNUAL_RATE` | (deployment script) | decimal | `[0, 1]` | `0.05` | H | Annual compounded interest rate |
 | `RATE_PER_SECOND` | VaultManager | RAY | `[0, 21_979_553_151_239_153_028]` (= the derived value for `ANNUAL_RATE = 1`) | `1_547_125_957_863_212_449` | D | `round_half_even(((1 + ANNUAL_RATE)^(1/31_536_000) − 1) · RAY)` at ≥ 80 significant digits |
 | `POOL_SHARE_BPS` | VaultManager | bps | `[0, 10_000]` | `7_500` (A), `0` (B) | H | Share of accrued interest minted to the pool (A); must be 0 in B |
-| `POOL_HOOK_GAS` | VaultManager | gas | `[50_000, 1_000_000]` | `200_000` | E | Gas forwarded to the stability pool's `onInterest` in accrual (§6.2, ADR-0033). Derived at P19 from the real pool's worst-case `onInterest` — every slot cold, a fresh `(epoch, scale)` sum `G`, the carry and `interestGainsBalance` written from zero — measured at 84,972 gas including the cold account access (`StabilityPoolGasTest`); the value is at least twice that, rounded up. The post-failure floor `ceil(2·POOL_HOOK_GAS / 63)` (6,350) is derived, not a parameter. Range-checked but unused in B |
+| `POOL_HOOK_GAS` | VaultManager | gas | `[50_000, 1_000_000]` | `200_000` | E | Gas forwarded to the stability pool's `onInterest` in accrual (§6.2, ADR-0033). Derived at P19 from the real pool's worst-case `onInterest` — every slot cold, a fresh `(epoch, scale)` sum `G`, the carry and `interestGainsBalance` written from zero — measured at 86,981 gas including the cold account access (`StabilityPoolGasTest`); the value is at least twice that, rounded up. The post-failure floor `ceil(2·POOL_HOOK_GAS / 63)` (6,350) is derived, not a parameter. Range-checked but unused in B |
 | `MAX_HINT_STEPS` | SortedPositions | count | `[1, 1_000]` | `30` | E | Maximum nodes visited by a hint walk (§6.3) |
 | `LIQUIDATION_PENALTY` | StabilityPool / DutchAuctionHouse | WAD | `[0, 0.5e18]` | `0.05e18` | H | A: cap on seized value is debt × (1 + penalty). B: tab = debt × (1 + penalty). Equal in A and B |
 | `MIN_DEPOSIT` | StabilityPool | stable wei | `≥ 1e18` | `1e18` | H | Minimum non-zero deposit; minimum total deposits for the pool to receive interest |
@@ -381,7 +381,7 @@ configured entirely by its constructor and has no `wire`).
 | `pendingColl`, `pendingNormDebt` | redistributed collateral and normalised debt not yet applied to positions, including truncation dust |
 | `shutdown` | `bool`; set when the shutdown triggers; freezes accrual |
 | `settled` | `bool`; set at settlement |
-| immutables | `WETH`, `token`, `oracle`, `MCR`, `MIN_DEBT`, `GAS_RESERVE`, `RATE_PER_SECOND`, `POOL_SHARE_BPS` |
+| immutables | `WETH`, `token`, `oracle`, `MCR`, `MIN_DEBT`, `GAS_RESERVE`, `RATE_PER_SECOND`, `POOL_SHARE_BPS`, `POOL_HOOK_GAS` |
 | wired | `sorted`, `strategy`, `stabilityPool` (A: = strategy; B: `address(0)`), `redemptionModule`, `deficitLedger`, `shutdownModule` |
 
 ### 4.3 SortedPositions
@@ -983,7 +983,8 @@ interest. Vectors: `interest.json`.
 `totalDeposits < MIN_DEPOSIT` and books the amount otherwise.
 
 - `guardedCall` is a fixed-shape assembly `call` (the ADR-0029 pattern): it forwards `POOL_HOOK_GAS`,
-  copies return data only if it is exactly 32 bytes, and decodes it only if that word is 0 or 1.
+  copies at most 32 bytes of return data, and decodes it only if the call returned exactly 32 bytes
+  and that word is 0 or 1.
   `ok = false` when the call reverts, runs out of gas, returns any other size or any other word.
   Solidity `try/catch` is not used: it reverts the caller on malformed return data.
 - Outcomes: *booked* — the pool is minted `offered` after it booked it; *declined* — `offered` goes to
@@ -2252,7 +2253,7 @@ drive one algorithm from an explicit state.
 | File | Covers |
 |---|---|
 | `math.json` | `mulDivDown/Up`, `rpow` with its multiplication trace, derived constants |
-| `interest.json` | accrual with pool share / below `MIN_DEPOSIT` / deployment B, frequency effect, conversions |
+| `interest.json` | accrual with pool share / below `MIN_DEPOSIT` / deployment B / a failing pool hook (`accrue_pool_hook_fails`, CHG-006), frequency effect, conversions |
 | `oracle.json` | every row of the decision table, boundaries, overflow-safe scaling, lazy reads |
 | `sorted_list.json` | order with ties, hint validation, walks, `StaleHint`, `excludeId` (head, hint, only node) |
 | `redistribution.json` | redistribution and snapshot stakes; stakes after the last liquidation (D-24); error carry |

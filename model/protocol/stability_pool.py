@@ -16,7 +16,7 @@ import copy
 from collections.abc import Callable
 from dataclasses import dataclass, field, fields
 
-from model.math import WAD, mul_div_down, mul_div_up
+from model.math import WAD, Underflow, mul_div_down, mul_div_up
 from model.protocol.vault import (
     ERC20InsufficientBalance,
     InsufficientBalance,
@@ -172,7 +172,7 @@ class StabilityPool:
             e = self.current_epoch
             self.depositor_count[e] = self.depositor_count.get(e, 0) - 1
             if self.depositor_count[e] < 0:
-                raise AssertionError("Underflow")
+                raise Underflow()
             if (
                 self.depositor_count[e] == 0
                 and self.total_deposits > 0
@@ -272,7 +272,7 @@ class StabilityPool:
     def _gain(self, r: Deposit, acc: dict[tuple[int, int], int], snap: int) -> int:
         total = acc.get((r.snap_epoch, r.snap_scale), 0) - snap
         if total < 0:
-            raise AssertionError("Underflow")
+            raise Underflow()
         for j in range(1, SCALE_SPAN + 1):
             total = _c(total + acc.get((r.snap_epoch, r.snap_scale + j), 0) // SCALE_FACTOR**j)
         return mul_div_down(r.initial, total, _c(r.snap_p * DECIMAL_PRECISION))  # R17

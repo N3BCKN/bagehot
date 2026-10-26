@@ -435,18 +435,37 @@ contract DeployScriptsTest is Test {
     function test_runtimeMatches_artifactAndMismatches() public {
         (BagehotFactory f,) = _local(false);
         address token = address(f.token());
-        assertTrue(Blueprints.runtimeMatches(token, vm.getDeployedCode("StableToken.sol:StableToken")));
-        assertFalse(
-            Blueprints.runtimeMatches(token, vm.getDeployedCode("OracleAdapter.sol:OracleAdapter")),
-            "another contract"
-        );
+        assertTrue(Blueprints.runtimeMatches(token, "StableToken.sol:StableToken"));
+        assertFalse(Blueprints.runtimeMatches(token, "OracleAdapter.sol:OracleAdapter"), "another contract");
         bytes memory code = token.code;
         code[code.length / 2] = bytes1(uint8(code[code.length / 2]) ^ 0xFF);
         vm.etch(token, code);
-        assertFalse(
-            Blueprints.runtimeMatches(token, vm.getDeployedCode("StableToken.sol:StableToken")),
-            "one byte changed"
-        );
+        assertFalse(Blueprints.runtimeMatches(token, "StableToken.sol:StableToken"), "one byte changed");
+    }
+
+    /// @dev Security review P19 I-1: a byte that is zero in the artifact but is not an immutable (a STOP,
+    ///      a zero PUSH operand, metadata) must match exactly; only the reported immutables are masked.
+    function test_runtimeMatches_zeroByteOutsideImmutables_isNotAWildcard() public {
+        (BagehotFactory f,) = _local(false);
+        address token = address(f.token());
+        bytes memory artifact = vm.getDeployedCode("StableToken.sol:StableToken");
+        (uint256[] memory starts, uint256[] memory lengths) =
+            Blueprints.immutableRanges("StableToken.sol:StableToken");
+        assertGt(starts.length, 0, "StableToken has immutables");
+        bytes memory code = token.code;
+        assertTrue(Blueprints.runtimeMatchesMasked(code, artifact, starts, lengths), "as deployed");
+        uint256 k;
+        for (; k < artifact.length; ++k) {
+            if (artifact[k] != 0) continue;
+            bool inImmutable;
+            for (uint256 r; r < starts.length; ++r) {
+                if (k >= starts[r] && k < starts[r] + lengths[r]) inImmutable = true;
+            }
+            if (!inImmutable) break;
+        }
+        assertLt(k, artifact.length, "found a zero byte outside the immutables");
+        code[k] = 0x01;
+        assertFalse(Blueprints.runtimeMatchesMasked(code, artifact, starts, lengths), "zero byte changed");
     }
 
     function test_check_runtimeCodeChanged_fails() public {

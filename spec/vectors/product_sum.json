@@ -7,7 +7,7 @@
     {
       "name": "sequence",
       "level": "unit",
-      "note": "pool driven by a test VaultManager: accrue() is a no-op, hook.offset(d, c) = offset with c WETH already received, hook.onInterest(g) = g minted to the pool then onInterest(g). Deposits, offsets, interest, a scale change, an epoch change, withdrawals (spec 6.6)",
+      "note": "pool driven by a test VaultManager: accrue() is a no-op, hook.offset(d, c) = offset with c WETH already received, hook.onInterest(g) = onInterest(g), then g minted to the pool if it booked (spec 6.2, ADR-0033). Deposits, offsets, interest, a scale change, an epoch change, withdrawals (spec 6.6)",
       "inputs": {
         "params": {
           "MIN_DEPOSIT": "1000000000000000000",

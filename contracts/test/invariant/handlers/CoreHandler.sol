@@ -1296,8 +1296,21 @@ contract CoreHandler is Test {
             oracle.MIN_PRICE(),
             oracle.MAX_PRICE()
         );
+        bytes memory d = variantB
+            ? bytes("")
+            : abi.encode(
+                v.POOL_HOOK_GAS(),
+                address(pool.WETH()),
+                address(pool.token()),
+                pool.LIQUIDATION_PENALTY(),
+                pool.MIN_DEPOSIT(),
+                pool.vaultManager(),
+                address(pool.deficitLedger())
+            );
         return keccak256(
-            abi.encode(a, b, c, oracle.ORACLE_GAS(), oracle.ORACLE_POST_FAILURE_GAS(), oracle.FEED_DECIMALS())
+            abi.encode(
+                a, b, c, d, oracle.ORACLE_GAS(), oracle.ORACLE_POST_FAILURE_GAS(), oracle.FEED_DECIMALS()
+            )
         );
     }
 }

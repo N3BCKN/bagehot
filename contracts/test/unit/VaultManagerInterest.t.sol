@@ -122,7 +122,14 @@ contract VaultManagerInterestTest is Test {
             _u(string.concat(r, ".toReserve")),
             block.timestamp
         );
+        vm.recordLogs();
         v.accrue();
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 redirects;
+        for (uint256 k; k < logs.length; ++k) {
+            if (logs[k].topics[0] == VaultManager.PoolInterestRedirected.selector) ++redirects;
+        }
+        assertEq(redirects, fails ? 1 : 0, "PoolInterestRedirected only when the pool hook fails");
         assertEq(v.index(), _u(string.concat(r, ".index")));
         assertEq(token.balanceOf(address(pool)), b ? 0 : _u(string.concat(r, ".toPool")));
         assertEq(token.balanceOf(address(ledger)), _u(string.concat(r, ".toReserve")));

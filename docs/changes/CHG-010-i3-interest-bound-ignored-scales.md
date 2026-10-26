@@ -21,7 +21,11 @@ remaining fraction is tiny, but the gain *per unit* is not bounded for interest:
 credits `g / T` per wei of deposit, and after a near-emptying offset `T` can be small while `g` is
 the pool's share of interest on the whole system's debt. (For collateral, `c ≤ 0.75·d + 1 ≤ T`
 (§6.6.3) keeps the per-unit gain near 1, so the omitted term is at most about the remaining share in
-wei; it never broke the bound in the study.)
+wei; it never broke the bound in the study, and the term is not needed for soundness there: under
+`c ≤ 0.75·d + 1` the omitted collateral telescopes to at most `0.75·s_entry + n_ignored`, with
+`s_entry ≤ 10^-18 · initial` the depositor's share on entering the ignored scales and `n_ignored` the
+number of such offsets — already covered by `T_first / DP ≥ initial / DP` and the `+1` per event.
+Option 1 adds it to both bounds for symmetry, so the two read alike.)
 
 No value is lost to anyone else: the unpaid part stays in `interestGainsBalance` (or
 `collGainsBalance`) as inert dust, and `Σ gains ≤ balance` holds exactly. The contract is correct;

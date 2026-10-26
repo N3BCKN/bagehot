@@ -120,25 +120,67 @@ library Blueprints {
         }
     }
 
-    /// @notice True if `a`'s runtime code is the artifact's: same length, and equal at every byte the
-    ///         artifact does not leave zero. Immutables are zero placeholders in the artifact and
-    ///         filled in on chain, so an exact hash cannot be compared; every other byte must match.
-    function runtimeMatches(address a, bytes memory artifact) internal view returns (bool) {
-        bytes memory code = a.code;
+    /// @notice True if `a`'s runtime code is the artifact's (`"File.sol:Contract"`): same length, and
+    ///         equal at every byte except the immutables the compiler reports in the artifact's
+    ///         `deployedBytecode.immutableReferences` — those are zero placeholders in the artifact and
+    ///         filled in on chain, so an exact hash cannot be compared. Every other byte, zero or not,
+    ///         must match (security review P19, I-1).
+    function runtimeMatches(address a, string memory artifact) internal view returns (bool) {
+        (uint256[] memory starts, uint256[] memory lengths) = immutableRanges(artifact);
+        return runtimeMatchesMasked(a.code, vm.getDeployedCode(artifact), starts, lengths);
+    }
+
+    /// @notice The byte comparison of `runtimeMatches`, with the immutable ranges given.
+    function runtimeMatchesMasked(
+        bytes memory code,
+        bytes memory artifact,
+        uint256[] memory starts,
+        uint256[] memory lengths
+    ) internal pure returns (bool) {
         if (code.length != artifact.length) return false;
-        for (uint256 i; i < code.length; i += 32) {
-            bytes32 wc;
-            bytes32 wa;
-            assembly ("memory-safe") {
-                wc := mload(add(add(code, 0x20), i))
-                wa := mload(add(add(artifact, 0x20), i))
-            }
-            if (wc == wa) continue;
-            uint256 end = i + 32 < code.length ? i + 32 : code.length;
-            for (uint256 k = i; k < end; ++k) {
-                if (artifact[k] != 0 && artifact[k] != code[k]) return false;
+        bytes memory masked = new bytes(code.length);
+        for (uint256 r; r < starts.length; ++r) {
+            for (uint256 k = starts[r]; k < starts[r] + lengths[r]; ++k) {
+                masked[k] = 0x01;
             }
         }
+        for (uint256 k; k < code.length; ++k) {
+            if (masked[k] == 0 && code[k] != artifact[k]) return false;
+        }
         return true;
+    }
+
+    /// @notice Every `{start, length}` of `deployedBytecode.immutableReferences` in the artifact's JSON
+    ///         under `out/` (`"File.sol:Contract"` → `out/File.sol/Contract.json`).
+    function immutableRanges(string memory artifact)
+        internal
+        view
+        returns (uint256[] memory starts, uint256[] memory lengths)
+    {
+        string[] memory parts = vm.split(artifact, ":");
+        string memory json = vm.readFile(string.concat("out/", parts[0], "/", parts[1], ".json"));
+        string memory base = ".deployedBytecode.immutableReferences";
+        if (!vm.keyExistsJson(json, base)) return (new uint256[](0), new uint256[](0)); // none
+        string[] memory ids = vm.parseJsonKeys(json, base);
+        uint256 n;
+        for (uint256 i; i < ids.length; ++i) {
+            n += _count(json, string.concat(base, ".", ids[i]));
+        }
+        (starts, lengths) = (new uint256[](n), new uint256[](n));
+        uint256 r;
+        for (uint256 i; i < ids.length; ++i) {
+            string memory id = string.concat(base, ".", ids[i]);
+            uint256 m = _count(json, id);
+            for (uint256 k; k < m; ++k) {
+                string memory e = string.concat(id, "[", vm.toString(k), "]");
+                starts[r] = vm.parseJsonUint(json, string.concat(e, ".start"));
+                lengths[r] = vm.parseJsonUint(json, string.concat(e, ".length"));
+                ++r;
+            }
+        }
+    }
+
+    function _count(string memory json, string memory path) private view returns (uint256 n) {
+        while (vm.keyExistsJson(json, string.concat(path, "[", vm.toString(n), "]"))) ++n;
     }
 }

@@ -58,7 +58,7 @@ library DeploymentChecks {
         string[9] memory n = Blueprints.names();
         for (uint256 i; i < 9; ++i) {
             _req(
-                Blueprints.runtimeMatches(roles[i], vm.getDeployedCode(a[i])),
+                Blueprints.runtimeMatches(roles[i], a[i]),
                 string.concat("runtime code: ", n[i], " is its artifact")
             );
         }

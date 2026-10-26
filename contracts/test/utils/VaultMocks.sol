@@ -131,7 +131,10 @@ contract HostilePool {
         BurnAll,
         WrongSize,
         NonBool,
-        Heavy
+        Heavy,
+        EmptyReturn,
+        HugeReturn,
+        HugeRevert
     }
 
     Mode public mode;
@@ -173,6 +176,22 @@ contract HostilePool {
             assembly ("memory-safe") {
                 mstore(0, 2)
                 return(0, 0x20)
+            }
+        }
+        if (m == Mode.EmptyReturn) {
+            assembly ("memory-safe") {
+                return(0, 0) // success with no data: an old `onInterest()` that returns nothing
+            }
+        }
+        if (m == Mode.HugeReturn) {
+            assembly {
+                mstore(0, 1) // first word 1, then 1 MB more: only an exactly-32-byte answer decodes
+                return(0, 0x100000)
+            }
+        }
+        if (m == Mode.HugeRevert) {
+            assembly {
+                revert(0, 0x100000) // 1 MB of revert data the caller must not copy
             }
         }
         if (m == Mode.Heavy) {
