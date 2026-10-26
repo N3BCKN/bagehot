@@ -427,10 +427,13 @@ class StabilityPool:
         self._atomic(run)
 
     def hook_on_interest(self, g: int) -> bool:
-        """`hook.onInterest(g)`: `g` minted to the pool, then §6.6.5."""
+        """`hook.onInterest(g)`: accrual's pool step as §6.2 orders it (ADR-0033) — the pool books
+        `g` (§6.6.5) and only then is it minted; a declining pool is minted nothing."""
 
         def run() -> bool:
-            self.bank._mint("pool", g)
-            return self.on_interest(g)
+            booked = self.on_interest(g)
+            if booked:
+                self.bank._mint("pool", g)
+            return booked
 
         return self._atomic(run)

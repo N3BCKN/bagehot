@@ -152,7 +152,7 @@ The handler's measurements for this file (`_measureK`, `_measureSlack`) run in F
 Medusa's 12.5M transaction gas limit their per-pair calls dropped long-list actions: 1,038 calls/s
 and 73,028 redemptions before they were gated, 1,400 calls/s and 88,451 after.
 
-### I13 hidden-key tolerance in deployment A (CHG-009, proposed)
+### I13 hidden-key tolerance in deployment A (CHG-009)
 
 Measured on 2026-10-25 with the final, exact handler, deployment A, 8 seeds × 256 runs × 200 calls;
 every run recorded through a temporary probe, removed afterwards. Each run also logs its own figures
@@ -179,7 +179,7 @@ These are observations, not a bound: no a-priori limit exists, and the tolerance
 reachable zero-stake states (CHG-009). The §6.5.4 reset branch is not reachable through this harness.
 Model search behind the counterexample: `python3 scripts/analysis/i13_bound_search.py`.
 
-### CHG-008's tolerance (superseded by CHG-009 if approved)
+### CHG-008's tolerance (superseded by CHG-009, 2026-10-26)
 
 Measured on 2026-10-24, before the review's harness fixes (which do not change what
 `redistribute` does), over 8 seeds × 256 runs × 200 calls, every list member after every step. The derived
@@ -251,3 +251,45 @@ Before the review's fixes, M11–M15 passed the entire P17 suite and Medusa. M7 
 
 The campaign size matters: the reviewer's mutant M7 (a stake that ignores the snapshot) survives
 32 runs × 150 calls and is caught at 256 × 200. PR CI must not run fewer than the default profile.
+
+## P19: stability pool (product–sum)
+
+### Precision study (`model/tools/sp_precision.py`, 2026-10-26)
+
+200 sequences × 300 steps (seed 19; four regimes: mixed sizes, `T ≈ 10^30`, small pools, and the
+adversarial "large carry, empty, come back small" case of I3). Each sequence runs the integer model
+(bit-for-bit with the contract: 8 of the sequences, 2,400 steps, are replayed against it by
+`StabilityPoolPrecisionTest` with every state field and every depositor's views equal) alongside the
+exact `Fraction` pro-rata reference of `model/invariants.py`, reset at every snapshot as I3 defines
+it. Largest error per depositor over all 60,000 steps:
+
+| quantity | largest error | I3 bound |
+|---|---|---|
+| compounded deposit, `exact − integer` (never negative) | 514 wei | holds everywhere |
+| collateral gain, `|exact − integer|` | 3.9·10^12 wei (at `T ≈ 10^30`; §6.6.7 reports 1.6·10^12) | holds everywhere |
+| interest gain, `|exact − integer|` | 2.1·10^13 wei | **broken in 170 steps** — see CHG-010 |
+
+Every interest violation is a gain booked while `currentScale > snapScale + SCALE_SPAN`, which
+§6.6.7 deliberately ignores; the unpaid part stays in `interestGainsBalance` as dust, so the totals
+stay exact. With the term CHG-010 proposes, 0 violations. I3's integer inequalities and U4 held at
+every step.
+
+### Pool invariant campaign (`StabilityPoolInvariantsTest`, default profile)
+
+256 runs × 200 calls over the real pool behind the test VaultManager (deposits at four size caps,
+partial and full withdrawals, claims, offsets — random, exactly `T`, `T − 1`, near-emptying —
+interest, liquidations through `onLiquidation`, donations): I1 (pool row), I3's inequalities and
+`P` range, the withdraw-entitlement and empty-epoch clauses, U4 and no unexpected revert — all
+green, with epoch changes, scale changes and dust sweeps reached in every run. In the core campaign
+(deployment A) the real pool replaces the mock, with deposit, withdraw and claim actions and the
+same checks (`invariant_I3_poolSolvencyAndU4`, Medusa `property_I3_poolSolvency`).
+
+### Pool hook gas (CHG-006)
+
+Caller-gas sweeps of `accrue()` (coarse step 199 over 10k–400k, step 1 for ±600 around the first
+limit that books): against the real pool, 3,161 probes, 1,732 booked and 1,429 reverted the whole
+transaction; against a pool that burns 150k of the 200k cap, 1,073 booked and 2,088 reverted. Zero
+redirections in both. A pool that reverts early when short of gas *is* redirectable
+(`test_gasleftBranchingPool_canBeRedirected_theAssumptionMatters`), which is why spec §6.2 states that
+`onInterest` never reads `gasleft()`.
+
