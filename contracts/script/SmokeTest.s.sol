@@ -163,6 +163,51 @@ contract SmokeTest is ConfigLoader {
         _accrue(f, c);
         _redeem(f, c, who, id);
         if (!c.variantB) _poolWithdraw(f, c, who);
+        if (!c.variantB) _liquidate(f, c, who);
+    }
+
+    /// @dev Deployment A (P20): a second position at ICR 1.2, the price down 10 % (ICR 1.08 < MCR, the
+    ///      first position stays at ICR 1.8), liquidated into the now-empty pool — the whole position is
+    ///      redistributed to the first one. B's local strategy is a stand-in without `onLiquidation`
+    ///      until P33.
+    function _liquidate(BagehotFactory f, DeployConfig memory c, address who) internal {
+        MockAggregator feed = MockAggregator(c.priceFeed);
+        (uint80 roundId, int256 answer,,,) = feed.latestRoundData();
+        uint256 id = _openNearMcr(f, c, who, uint256(answer) * 10 ** (18 - c.mockFeedDecimals));
+        feed.setRound(roundId + 2, answer * 9 / 10, block.timestamp);
+        _liquidateAndCheck(f, c, who, id);
+        feed.setRound(roundId + 3, answer, block.timestamp); // the price back for the view checks
+        _checkViews(f, c);
+    }
+
+    function _openNearMcr(BagehotFactory f, DeployConfig memory c, address who, uint256 price)
+        internal
+        returns (uint256 id)
+    {
+        _freshPrice(c);
+        VaultManager v = f.vaultManager(); // fetched before the prank: a call would consume it
+        vm.prank(who);
+        id = v.openPosition(1.2e18 * 2500e18 / price, 2500e18, 0, 0); // ICR 1.2
+    }
+
+    function _liquidateAndCheck(BagehotFactory f, DeployConfig memory c, address who, uint256 id) internal {
+        VaultManager v = f.vaultManager();
+        uint256 wethBefore = LocalWETH(c.weth).balanceOf(who);
+        uint256 pendingBefore = v.pendingNormDebt();
+        int256 eBefore = _e(f);
+        vm.recordLogs();
+        vm.prank(who);
+        v.liquidate(id);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        _checkI2Step(f, eBefore, _count(logs, address(v)));
+        _req(v.positions(id).status == VaultManager.Status.ClosedByLiquidation, "liquidate: closed");
+        // I7: `who` is both caller and owner here — gas reserve plus the surplus the pool pushed
+        _req(
+            LocalWETH(c.weth).balanceOf(who) - wethBefore == c.gasReserve + _surplus(logs, f.strategy()),
+            "liquidate: gas reserve and surplus to the caller-owner"
+        );
+        _req(v.pendingNormDebt() > pendingBefore, "liquidate: the debt was redistributed");
+        _req(v.totalStakesSnapshot() == v.totalStakes(), "liquidate: snapshots updated");
     }
 
     /// @dev Deployment A (P19): deposit 1,000 into the StabilityPool, so the next accrual books the
@@ -257,6 +302,16 @@ contract SmokeTest is ConfigLoader {
         _req(v.positions(id).status == VaultManager.Status.Active, "redeem: the position is still active");
         _checkI2Step(f, eBefore, g);
         _checkViews(f, c);
+    }
+
+    /// @dev `PoolLiquidation.surplus` from the pool's logs.
+    function _surplus(Vm.Log[] memory logs, address pool) internal pure returns (uint256 surplus) {
+        for (uint256 i; i < logs.length; ++i) {
+            if (logs[i].emitter == pool && logs[i].topics[0] == StabilityPool.PoolLiquidation.selector) {
+                (,,, surplus,,,) =
+                    abi.decode(logs[i].data, (uint256, uint256, uint256, uint256, uint256, uint256, uint256));
+            }
+        }
     }
 
     function _freshPrice(DeployConfig memory c) internal {
