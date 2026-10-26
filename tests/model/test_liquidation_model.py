@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from model.math import WAD
+from model.protocol import deficit_ledger as dl
 from model.protocol import stability_pool as sp
 from model.protocol import vault as vm
 
@@ -282,3 +283,43 @@ def test_chg014_collateral_not_received_reverts_and_rolls_back() -> None:
     with pytest.raises(vm.CollReturnedNotReceived):
         v.liquidate("liq", 2)
     assert (v.total_norm_debt, v.pending_coll, dict(v.weth), v.positions[2].status) == before
+
+
+def test_no_stakes_deficit_lands_in_the_real_ledger_then_cover_and_settlement() -> None:
+    """P21 (audit M3): the vault model's ledger is the DeficitLedger model. The no-stakes path
+    books through its caller-checked `record_deficit`, `cover` burns from the system's supply,
+    settlement hands the collateral on, and a settled ledger refuses the vault's next interest
+    (§5.6) with the whole vault operation rolled back."""
+    vec = FILES["liquidation_pool"]["no_stakes_deficit"]
+    sysm = System(vec["inputs"])
+    for step in vec["steps"]:
+        _step(sysm, step)
+    v = sysm.v
+    led = v.ledger
+    assert led.deficit > 0 and led.recovered_coll > 0
+    assert ("DeficitRecorded", led.deficit, led.recovered_coll, 2) in led.events
+    assert v.weth.get("ledger", 0) == led.recovered_coll  # I1's ledger row
+    assert v.stable.get("ledger", 0) == led.reserve
+    reserve, deficit, supply = led.reserve, led.deficit, v.total_supply
+    c = led.cover()
+    assert c == min(reserve, deficit)
+    assert (led.reserve, led.deficit, v.total_supply) == (reserve - c, deficit - c, supply - c)
+    # a fresh position, so interest accrues after settlement (the vector leaves none active)
+    v.weth["carol"] = 10**24
+    v.open_position("carol", 10 * WAD, 10_000 * WAD, 0, 0)
+    assert v.active_count > 0
+    coll = led.recovered_coll
+    assert led.on_settlement("shutdown") == coll
+    assert (v.weth.get("shutdown", 0), v.weth.get("ledger", 0), v.stable.get("ledger", 0)) == (
+        coll,
+        0,
+        0,
+    )
+    with pytest.raises(vm.Unauthorized):
+        led.record_deficit("alice", 1, 0)
+    # a settled ledger refuses `onInterest`, so the vault's accrual reverts as a whole
+    v.now += 365 * 86_400
+    before = (v.index, v.last_accrual, v.total_supply, v.pool_interest)
+    with pytest.raises(dl.SystemSettled):
+        v.accrue()
+    assert (v.index, v.last_accrual, v.total_supply, v.pool_interest) == before

@@ -19,7 +19,7 @@ import {Test} from "forge-std/Test.sol";
 /// forge-config: default.invariant.fail-on-revert = true
 /// forge-config: nightly.invariant.fail-on-revert = true
 contract CoreInvariantsTest is Test {
-    CoreHandler internal handler;
+    CoreHandler public handler; // public for `CoreHandlerRegressionsTest` (P21 unwind regression)
 
     function _variantB() internal pure virtual returns (bool) {
         return false;
@@ -56,10 +56,29 @@ contract CoreInvariantsTest is Test {
         _assert(ok, why);
     }
 
-    /// @dev I4 (bundle and full-absorption TCR, A1–A3 / B1–B2), I6 (conservation) and I7 (surplus to
-    ///      the owner, gas reserve to the caller), checked inside every liquidation (P20).
-    function invariant_I4_I6_I7_liquidations() public view {
-        (bool ok, string memory why) = handler.checkLiquidations();
+    /// @dev I4, I6 and I7 are checked inside every liquidation (P20) and asserted here under their
+    ///      invariants.md names; `lastLiqViolation` names the failing clause.
+    /// I4's bundle: A1, A2 (A), B1, B2 (B), with the terms cross-checked against the events.
+    function invariant_I4_liquidationBundle() public view {
+        (bool ok, string memory why) = handler.checkI4Bundle();
+        _assert(ok, ok ? why : handler.lastLiqViolation());
+    }
+
+    /// I4 A3: a full absorption does not lower the TCR (by more than one wei of debt).
+    function invariant_I4_fullAbsorptionDoesNotLowerTcr() public view {
+        (bool ok, string memory why) = handler.checkI4Tcr();
+        _assert(ok, why);
+    }
+
+    /// I6: collReturned and normRest accounted exactly once, with event provenance.
+    function invariant_I6_liquidationConservation() public view {
+        (bool ok, string memory why) = handler.checkI6();
+        _assert(ok, ok ? why : handler.lastLiqViolation());
+    }
+
+    /// I7: the surplus only to the owner, the gas reserve only to the caller.
+    function invariant_I7_surplusToOwnerOnly() public view {
+        (bool ok, string memory why) = handler.checkI7();
         _assert(ok, why);
     }
 
@@ -158,6 +177,9 @@ contract CoreInvariantsTest is Test {
         emit log_named_uint("ok: poolDeposit", handler.ok("poolDeposit"));
         emit log_named_uint("ok: poolWithdraw", handler.ok("poolWithdraw"));
         emit log_named_uint("ok: poolClaim", handler.ok("poolClaim"));
+        emit log_named_uint("ok: liqDeficitWithActive", handler.ok("liqDeficitWithActive"));
+        emit log_named_uint("ok: cover", handler.ok("cover"));
+        emit log_named_uint("ok: coverBurned", handler.ok("coverBurned"));
         // CHG-005: every campaign run reaches both regimes. A shrunk replay of a failure is not a
         // run (it may hold a single call), so it is held only to the failure it reproduces.
         if (handler.calls() >= 100) {

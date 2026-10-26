@@ -55,8 +55,20 @@ contract CoreProperties is CoreHandler {
         (ok,) = checkPool();
     }
 
-    function property_I4_I6_I7_liquidations() external view returns (bool ok) {
-        (ok,) = checkLiquidations();
+    function property_I4_liquidationBundle() external view returns (bool ok) {
+        (ok,) = checkI4Bundle();
+    }
+
+    function property_I4_fullAbsorptionDoesNotLowerTcr() external view returns (bool ok) {
+        (ok,) = checkI4Tcr();
+    }
+
+    function property_I6_liquidationConservation() external view returns (bool ok) {
+        (ok,) = checkI6();
+    }
+
+    function property_I7_surplusToOwnerOnly() external view returns (bool ok) {
+        (ok,) = checkI7();
     }
 
     function property_I13_sortedOrder() external view returns (bool ok) {

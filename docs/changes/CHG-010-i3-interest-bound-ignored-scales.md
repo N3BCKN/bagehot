@@ -1,7 +1,6 @@
 # CHG-010: I3's gain bounds omit the gains §6.6.7 ignores beyond SCALE_SPAN; a correct pool breaks the interest bound
 
-- Status: **proposed**, 2026-10-26 (P19 precision study). Needs the human's approval before
-  `docs/invariants.md` I3 changes.
+- Status: **approved by the human 2026-10-26** ("aproved, files unlocked, please proceed"; proposed the same day, P19 precision study). Code, model and tests applied; the spec/invariant text awaits the protected-paths unlock.
 - Raised: P19, `model/tools/sp_precision.py` (the precision study the P19 prompt requires).
 - Affects: `docs/invariants.md` I3 ("Per-depositor attribution", the two gain bounds). No spec
   algorithm, contract, model or vector change.

@@ -2,6 +2,8 @@
 pragma solidity 0.8.28;
 
 import {VaultManager} from "../../../src/core/VaultManager.sol";
+import {DeficitLedger} from "../../../src/safety/DeficitLedger.sol";
+import {CoreInvariantsTest} from "../../invariant/CoreInvariants.t.sol";
 import {CoreHandler} from "../../invariant/handlers/CoreHandler.sol";
 import {Test} from "forge-std/Test.sol";
 
@@ -135,6 +137,79 @@ contract CoreHandlerRegressionsTest is Test {
         assertGt(h.redistributions(), 0, "redistributions ran");
         assertGt(h.stepsNonExact(), 0, "tolerance regime reached");
         assertGt(h.maxNeededK(), 4, "k = 4 fails this sequence");
+        assertEq(h.unexpectedReverts(), 0, h.lastUnexpectedAction());
+    }
+
+    /// @dev P21, seeds 1–3, A, `afterInvariant`'s I8 unwind: once the handler could donate to the pool,
+    ///      the unwind still expected the pool's balances without donations (I8 step 3: D_w + residual).
+    function test_regression_I8_unwindCountsPoolDonations() public {
+        CoreInvariantsTest t = new CoreInvariantsTest();
+        t.setUp();
+        CoreHandler hh = t.handler();
+        hh.donate(3, 146e15, false); // k = 3: WETH to the pool (A)
+        assertEq(hh.donatedWeth(address(hh.pool())), 146e15);
+        t.afterInvariant();
+    }
+
+    /// @dev P21, seed 3, A, `afterInvariant`: I13's tolerance regime not reached by call 100 — the run's
+    ///      one `liquidate` was as-is (mode 7). `_reachTolerance` now runs a priced liquidation from call
+    ///      50 until the run has redistributed.
+    function test_regression_I13_toleranceReachedWithoutLiquidateCalls() public {
+        for (uint256 i; i < 60; ++i) {
+            h.toggleOracle(1); // healthy, a no-op
+        }
+        assertGt(h.stepsAllExact(), 0, "exact regime");
+        assertGt(h.stepsNonExact(), 0, "tolerance regime");
+        assertEq(h.unexpectedReverts(), 0, h.lastUnexpectedAction());
+    }
+
+    /// @dev P21 audit (M2), deterministic reach in A: a no-stakes deficit with its collateral, a `cover`
+    ///      that burns, then shutdown and settlement of the vault and the ledger — the handler's own
+    ///      checks (I1 holders and sums, the pool, I2, I4/I6/I7 with event provenance, I8) after each step.
+    function test_reach_deficitCoverSettle_checksHold() public {
+        h.toggleOracle(1); // healthy, a no-op: one exact step
+        h.liquidate(2, 2, false); // the tolerance regime first (pool thinned, redistributed)
+        assertGt(h.stepsNonExact(), 0, "tolerance regime");
+        for (uint256 i; i < 5; ++i) {
+            h.poolWithdraw(i, 0, true); // empty the pool, so the last liquidation leaves a remainder
+        }
+        for (uint256 i; i < 40 && h.v().activeCount() > 1; ++i) {
+            h.close(i);
+        }
+        assertEq(h.v().activeCount(), 1, "one position left");
+        h.warp(30 days); // interest for the reserve (the pool is empty: all of it to the ledger)
+        h.liquidate(2, 2, true); // the last position: path 2
+        assertEq(h.ok("liqDeficit"), 1, "no-stakes deficit");
+        _checkAll("after the deficit");
+        DeficitLedger led = h.ledger();
+        assertGt(led.deficit(), 0, "deficit recorded");
+        assertGt(led.recoveredColl(), 0, "collateral recovered");
+        assertGt(led.reserve(), 0, "reserve accrued");
+        h.cover();
+        assertEq(h.ok("coverBurned"), 1, "cover burned");
+        _checkAll("after cover");
+        h.triggerShutdown(0);
+        h.settle(0);
+        assertTrue(led.settled(), "ledger settled");
+        assertEq(led.recoveredColl(), 0, "collateral to the shutdown module");
+        _checkAll("after settlement");
+    }
+
+    function _checkAll(string memory when) internal view {
+        (bool ok, string memory why) = h.checkI1Holders();
+        assertTrue(ok, string.concat(when, ": ", why));
+        (ok, why) = h.checkI1Sums();
+        assertTrue(ok, string.concat(when, ": ", why));
+        (ok, why) = h.checkPool();
+        assertTrue(ok, string.concat(when, ": ", why));
+        (ok, why) = h.checkI2();
+        assertTrue(ok, string.concat(when, ": ", why));
+        (ok, why) = h.checkLiquidations();
+        assertTrue(ok, string.concat(when, ": ", why));
+        (ok, why) = h.checkI8();
+        assertTrue(ok, string.concat(when, ": ", why));
+        (ok, why) = h.checkEventsAgree();
+        assertTrue(ok, string.concat(when, ": ", why));
         assertEq(h.unexpectedReverts(), 0, h.lastUnexpectedAction());
     }
 

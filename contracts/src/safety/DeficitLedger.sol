@@ -78,7 +78,8 @@ contract DeficitLedger is
 
     // ------------------------------------------------------------------ modifiers
 
-    /// @dev §5.6: `wired` (whenWired), then the caller, then `!settled`.
+    /// @dev §5.6's caller and `!settled` checks. Every hook lists `whenWired` before it, so the order is
+    ///      wired, caller, not settled.
     modifier hook(address caller) {
         if (msg.sender != caller) revert Unauthorized();
         if (settled) revert SystemSettled();
@@ -118,6 +119,8 @@ contract DeficitLedger is
     }
 
     // ------------------------------------------------------------------ hooks (§5.6)
+    // The `int256(…)` casts in `AuctionDebtChanged` cannot wrap: every amount is bounded by the token's
+    // supply cap of 2^128 − 1 (StableToken), far below 2^255, and `auctionDebt += d` would overflow first.
 
     /// @notice The reserve share of accrued interest; the VaultManager minted `amount` here. Lock-free
     ///         and call-free: accrual relies on it (ADR-0033 §3).

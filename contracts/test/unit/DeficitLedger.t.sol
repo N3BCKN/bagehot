@@ -6,7 +6,7 @@ import {AlreadySettled, InvalidParameter, SystemSettled, Unauthorized} from "../
 import {WiredBase} from "../../src/lib/Wired.sol";
 import {DeficitLedger} from "../../src/safety/DeficitLedger.sol";
 import {MockWETH} from "../utils/VaultMocks.sol";
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm, stdError} from "forge-std/Test.sol";
 
 /// @notice DeficitLedger (spec §4.7, §5.6, §6.9, §6.11.3): construction and wiring, every hook's check
 ///         order (wired, caller, not settled), effects and events, `cover`, settlement, and ADR-0033's
@@ -154,8 +154,12 @@ contract DeficitLedgerTest is Test {
         emit DeficitLedger.ReserveIncreased(25e18, 2);
         l.onAuctionPayment(300e18, 25e18);
         vm.expectEmit(address(l));
+        emit DeficitLedger.AuctionDebtChanged(-int256(200e18), 0);
+        vm.expectEmit(address(l));
         emit DeficitLedger.DeficitRecorded(200e18, 0, 1);
         l.onAuctionShortfall(200e18);
+        vm.expectEmit(address(l));
+        emit DeficitLedger.ReserveDecreased(5e18, 1);
         l.payTip(alice, 5e18);
         vm.stopPrank();
         assertEq(l.auctionDebt(), 0);
@@ -167,6 +171,90 @@ contract DeficitLedgerTest is Test {
         vm.prank(HOUSE);
         vm.expectRevert(Unauthorized.selector);
         l.recordDeficit(1, 0);
+    }
+
+    /// @dev The B hooks never clamp (security review L-1): an amount beyond `auctionDebt` or `reserve`
+    ///      panics, so a house that drifts from the ledger fails loudly instead of hiding I2 drift.
+    function test_auctionHooks_B_beyondBalances_panic() public {
+        _deploy(true);
+        vm.prank(HOUSE);
+        l.addAuctionDebt(100e18);
+        _mintTo(address(l), 10e18);
+        vm.prank(HOUSE);
+        l.onAuctionPayment(0, 10e18); // reserve = 10e18
+        vm.startPrank(HOUSE);
+        vm.expectRevert(stdError.arithmeticError);
+        l.onAuctionPayment(100e18 + 1, 0);
+        vm.expectRevert(stdError.arithmeticError);
+        l.onAuctionShortfall(100e18 + 1);
+        vm.expectRevert(stdError.arithmeticError);
+        l.payTip(alice, 10e18 + 1);
+        // the exact boundaries pass
+        l.payTip(alice, 10e18);
+        l.onAuctionShortfall(100e18);
+        vm.stopPrank();
+        assertEq(l.reserve(), 0);
+        assertEq(l.auctionDebt(), 0);
+        assertEq(l.deficit(), 100e18);
+    }
+
+    /// @dev The B hooks: only the house; in A (no house) nobody can call them (§5.6, §9).
+    function test_auctionHooks_wrongCaller_revertUnauthorized() public {
+        for (uint256 b; b < 2; ++b) {
+            _deploy(b == 1);
+            address[2] memory callers = [alice, VM];
+            for (uint256 i; i < 2; ++i) {
+                vm.startPrank(callers[i]);
+                vm.expectRevert(Unauthorized.selector);
+                l.addAuctionDebt(1);
+                vm.expectRevert(Unauthorized.selector);
+                l.onAuctionPayment(0, 0);
+                vm.expectRevert(Unauthorized.selector);
+                l.onAuctionShortfall(0);
+                vm.expectRevert(Unauthorized.selector);
+                l.payTip(alice, 0);
+                vm.stopPrank();
+            }
+        }
+    }
+
+    /// @dev A payment with nothing for the reserve emits no `ReserveIncreased` (§5.6: only when > 0).
+    function test_onAuctionPayment_zeroToReserve_noReserveEvent() public {
+        _deploy(true);
+        vm.startPrank(HOUSE);
+        l.addAuctionDebt(10e18);
+        vm.recordLogs();
+        l.onAuctionPayment(4e18, 0);
+        vm.stopPrank();
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(logs.length, 1, "AuctionDebtChanged only");
+        assertEq(logs[0].topics[0], DeficitLedger.AuctionDebtChanged.selector);
+        assertEq(l.reserve(), 0);
+        assertEq(l.auctionDebt(), 6e18);
+    }
+
+    /// @dev B after settlement: every house hook reverts SystemSettled; a second `onSettlement` reverts
+    ///      Unauthorized from anyone else (the caller check first) and AlreadySettled from the module.
+    function test_afterSettlement_auctionHooksRevert_andSecondSettlement() public {
+        _deploy(true);
+        vm.prank(SHUTDOWN);
+        l.onSettlement();
+        vm.startPrank(HOUSE);
+        vm.expectRevert(SystemSettled.selector);
+        l.addAuctionDebt(1);
+        vm.expectRevert(SystemSettled.selector);
+        l.onAuctionPayment(0, 0);
+        vm.expectRevert(SystemSettled.selector);
+        l.onAuctionShortfall(0);
+        vm.expectRevert(SystemSettled.selector);
+        l.payTip(alice, 0);
+        vm.stopPrank();
+        vm.prank(alice);
+        vm.expectRevert(Unauthorized.selector);
+        l.onSettlement();
+        vm.prank(SHUTDOWN);
+        vm.expectRevert(AlreadySettled.selector);
+        l.onSettlement();
     }
 
     // ------------------------------------------------------------------ cover (§6.9.2)
@@ -222,6 +310,8 @@ contract DeficitLedgerTest is Test {
         vm.prank(VM);
         l.recordDeficit(1000e18, 4e18);
         vm.prank(SHUTDOWN);
+        vm.expectEmit(address(l));
+        emit DeficitLedger.LedgerSettled(0, 1000e18, 4e18);
         assertEq(l.onSettlement(), 4e18);
         assertEq(weth.balanceOf(SHUTDOWN), 4e18, "joins the claim pool");
         assertEq(l.recoveredColl(), 0);

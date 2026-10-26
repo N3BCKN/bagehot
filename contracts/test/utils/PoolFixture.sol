@@ -8,7 +8,7 @@ import {MockWETH} from "./VaultMocks.sol";
 import {Test} from "forge-std/Test.sol";
 
 /// @notice A wired pool (harness) behind the test VaultManager, the real StableToken (pool as burner
-///         and mover) and the DeficitLedger stand-in. The shutdown role is an inert address.
+///         and mover) and the real DeficitLedger (P21). The shutdown role is an inert address.
 abstract contract PoolFixture is Test {
     uint256 internal constant PENALTY = 0.05e18;
     uint256 internal constant MIN_DEPOSIT = 1e18;

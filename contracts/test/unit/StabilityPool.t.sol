@@ -490,9 +490,9 @@ contract StabilityPoolTest is PoolFixture {
         pool.claimGains();
     }
 
-    // ------------------------------------------------------------------ dust ledger stand-in
+    // ------------------------------------------------------------------ the ledger's dust hook
 
-    function test_standInLedger_onPoolDust_onlyThePool() public {
+    function test_ledger_onPoolDust_onlyThePool() public {
         vm.expectRevert(Unauthorized.selector);
         ledger.onPoolDust(1);
         assertFalse(ledger.settled());

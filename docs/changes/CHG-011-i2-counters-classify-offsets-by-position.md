@@ -1,7 +1,6 @@
 # CHG-011: I2's counter table classifies pool offsets by the pool's state; spec §10.2 classifies them by the position
 
-- Status: **proposed**, 2026-10-26. Found by the P20 plan; verified against spec §10.2. Needs the
-  human's approval before `docs/invariants.md` I2 changes. Blocks P20's invariant step.
+- Status: **approved by the human 2026-10-26** ("aproved, files unlocked, please proceed"; proposed the same day, P20 plan). Code, model and tests applied; the spec/invariant text awaits the protected-paths unlock.
 - Affects: `docs/invariants.md` I2 ("Counter rules": the `gX` and `gY` rows, and one added sentence).
   No spec, contract, model or vector change.
 

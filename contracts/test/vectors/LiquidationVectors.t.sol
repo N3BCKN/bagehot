@@ -17,9 +17,9 @@ import {Test, Vm} from "forge-std/Test.sol";
 
 /// @notice Every system vector of `liquidation_pool.json` (6) and `redistribution.json` (2) end to end
 ///         on deployment A: the real VaultManager, StabilityPool, SortedPositions, StableToken,
-///         OracleAdapter (mock feeds) and RedemptionModule, the DeficitLedger stand-in (storage-backed
-///         `recordDeficit` since P20) and §5.8's gate as a mock. Every step's result (each liquidation's
-///         `Liquidated` and `PoolLiquidation` fields) and the full expected state afterwards. The
+///         OracleAdapter (mock feeds) and RedemptionModule, the real DeficitLedger (P21) and §5.8's gate as
+/// a mock. Every step's result (each liquidation's `Liquidated` and `PoolLiquidation` fields) and the full
+/// expected state afterwards. The
 ///         reference's `weth.strategy` is a pass-through account it kept for WETH in transit (0 in
 ///         every vector, A and B alike); in the contracts the strategy is the pool, checked as `pool`.
 ///         The Python model runs the same vectors in tests/model/test_liquidation_model.py.

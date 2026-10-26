@@ -220,6 +220,8 @@ that fails before its fix.
 | `test_regression_I13_toleranceAfterRedistributions` | 3, I13 | **spec**: `k = 4` exceeded (needed ≈ 8,125) | CHG-008, a derived per-member bound (ADR-0034) |
 | `test_regression_I13_derivedBound_stakeCollapse` | 1, I13 | **spec**: the proposed 10⁻⁹ slack ceiling fails under stake collapse | ceiling withdrawn; weak regime stated; P17-1 opened |
 | `I13BoundCounterexampleTest` (unit, deterministic) | — , I13 | **spec**: CHG-008's bound is broken by a correct VaultManager on a protocol-valid sequence (review F3) | CHG-009, the hidden-key bound (proposed) |
+| `test_regression_I8_unwindCountsPoolDonations` | 1–3 (P21), A, `afterInvariant` | harness: once `donate` could reach the pool, the unwind still expected the pool's balances without donations | the unwind compares with I8 step 3, `D + residual`, for the pool and the DeficitLedger |
+| `test_regression_I13_toleranceReachedWithoutLiquidateCalls` | 3 (P21), A, `afterInvariant` | harness: CHG-005's reach depended on luck — the run's only `liquidate` was as-is (mode 7) | from call 50 until the run has redistributed, a priced liquidation (ICR 0.95, pool thinned) precedes each action (`_reachTolerance`) |
 
 No contract bug was found. Every failure was a handler bug or a spec problem routed through `/spec-change`. The counterexample test is not a shrunk campaign failure: the campaign never produced the shape, and an exact-arithmetic model search found it.
 

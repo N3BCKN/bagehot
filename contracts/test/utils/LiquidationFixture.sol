@@ -13,7 +13,7 @@ import {MockWETH} from "./VaultMocks.sol";
 import {Test} from "forge-std/Test.sol";
 
 /// @notice Deployment A for the liquidation tests (P20): the VaultManager (harness, for P17-H1), the
-///         real StabilityPool as strategy, the DeficitLedger stand-in, SortedPositions, StableToken and
+///         real StabilityPool as strategy, the real DeficitLedger (P21), SortedPositions, StableToken and
 ///         the OracleAdapter over mock feeds. The redemption module and shutdown module are inert
 ///         addresses (liquidation calls neither). Start parameters of §3.1.
 abstract contract LiquidationFixture is Test {

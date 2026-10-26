@@ -99,7 +99,8 @@ contract CoreHandler is Test {
     string public lastUnexpectedAction;
     uint256 public i9Violations;
     uint256 public poolEntitlementViolations; // I3: withdraw paid other than min(x, compounded)
-    uint256 public i4Violations; // I4 (A1–A3, B1–B2), checked inside `liquidate`
+    uint256 public i4Violations; // I4's bundle (A1, A2, B1, B2), checked inside `liquidate`
+    uint256 public i4TcrViolations; // I4 A3, full absorption does not lower the TCR
     uint256 public ledgerViolations; // `cover` (§6.9.2), checked inside the action
     uint256 public i6Violations; // I6, by state deltas inside `liquidate`
     uint256 public i7Violations; // I7, per-actor WETH deltas inside `liquidate`
@@ -530,6 +531,7 @@ contract CoreHandler is Test {
     function _reachTolerance() internal {
         if (variantB || stepsNonExact != 0 || stepsAllExact == 0 || calls < REACH_AT || v.shutdown()) return;
         _begin();
+        --calls; // injected, not a fuzzer call: `calls` gates the reach checks (CHG-005)
         _liquidate(uint256(keccak256(abi.encode(calls))), 2, false);
         _end();
     }
@@ -572,6 +574,7 @@ contract CoreHandler is Test {
         try v.liquidate(id) {
             if (unusable) ++i12Violations;
             _liqAfter(l);
+            if (eventsAvailable) _liqEvents(l);
             _forget(id);
         } catch (bytes memory err) {
             _discardLogs();
@@ -592,6 +595,9 @@ contract CoreHandler is Test {
         uint256 coll; // effective
         uint256 n; // effective normalised debt
         uint256 pc; // pending collateral the liquidation applies first
+        uint256 pn; // pending normalised debt the liquidation applies first
+        uint256 totalNormBefore;
+        uint256 normAbsorbed;
         uint256 debt;
         uint256 price;
         uint256 cBefore;
@@ -618,7 +624,8 @@ contract CoreHandler is Test {
         VaultManager.Position memory p = v.positions(id);
         (l.id, l.owner, l.caller, l.price) = (id, p.owner, caller, price);
         (l.coll, l.n) = v.effective(id);
-        l.pc = l.coll - p.coll;
+        (l.pc, l.pn) = (l.coll - p.coll, l.n - p.normDebt);
+        l.totalNormBefore = v.totalNormDebt();
         l.debt = v.debtOf(id);
         (l.cBefore, l.dBefore) = (v.systemColl(), v.systemDebt());
         (l.pendingCollBefore, l.pendingNormBefore) = (v.pendingColl(), v.pendingNormDebt());
@@ -630,7 +637,7 @@ contract CoreHandler is Test {
             l.wethBefore[i] = weth.balanceOf(actors[i]);
         }
         if (variantB) {
-            l.dP = l.debt; // §6.8.2 answers (debt, 0)
+            (l.dP, l.normAbsorbed) = (l.debt, l.n); // §6.8.2 answers (debt, 0)
             return l;
         }
         l.seized = Math.min(l.coll, Math.mulDiv(l.debt, WAD + PENALTY, l.price, Math.Rounding.Ceil)); // R11
@@ -639,8 +646,8 @@ contract CoreHandler is Test {
         l.dP = Math.min(l.debt, t);
         l.collP = l.dP == l.debt ? l.seized : Math.mulDiv(l.seized, l.dP, l.debt); // R12
         l.collReturned = l.seized - l.collP;
-        uint256 normAbsorbed = l.dP == l.debt ? l.n : Math.mulDiv(l.dP, RAY, v.index()); // R34
-        l.normRest = l.n - normAbsorbed;
+        l.normAbsorbed = l.dP == l.debt ? l.n : Math.mulDiv(l.dP, RAY, v.index()); // R34
+        l.normRest = l.n - l.normAbsorbed;
         if (l.collReturned > 0 || l.normRest > 0) l.path = l.stakesAfterRemoval > 0 ? 1 : 2;
     }
 
@@ -649,6 +656,23 @@ contract CoreHandler is Test {
         _countLiquidation(l);
         uint256 cAfter = v.systemColl();
         uint256 dAfter = v.systemDebt();
+        // I6, every path and both deployments (§6.4.1, §6.4.4, §6.5.2): the position's pending shares
+        // leave the pending totals; normRest and collReturned re-enter them only when redistributed;
+        // totalNormDebt drops by what was absorbed, or by all of `n` when the remainder is a deficit
+        // (in B the house answers debtAbsorbed == debt, so normAbsorbed == n)
+        bool redistributed = l.path == 1;
+        if (v.pendingNormDebt() != l.pendingNormBefore - l.pn + (redistributed ? l.normRest : 0)) {
+            _liqFail(6, "I6: pendingNormDebt");
+        }
+        if (v.pendingColl() != l.pendingCollBefore - l.pc + (redistributed ? l.collReturned : 0)) {
+            _liqFail(6, "I6: pendingColl");
+        }
+        if (v.totalNormDebt() != l.totalNormBefore - (l.path == 2 ? l.n : l.normAbsorbed)) {
+            _liqFail(6, "I6: totalNormDebt");
+        }
+        if (l.path != 2 && ledger.deficit() != l.ledgerDeficitBefore) {
+            _liqFail(6, "I6: deficit moved off path 2");
+        }
         if (variantB) {
             // I4 B1, B2
             if (cAfter != l.cBefore) _liqFail(4, "I4 B1: C changed at an auction start");
@@ -666,13 +690,10 @@ contract CoreHandler is Test {
             if (
                 l.dP == l.debt && l.coll * l.dBefore <= l.debt * l.cBefore
                     && cAfter * l.dBefore + l.cBefore < l.cBefore * dAfter
-            ) _liqFail(4, "I4 A3: TCR fell by more than one wei of debt");
+            ) _liqFail(43, "I4 A3: TCR fell by more than one wei of debt");
             // I6 A: collReturned and normRest accounted exactly once
             if (l.coll != l.collP + l.surplus + l.collReturned) _liqFail(6, "I6 A: coll split");
             if (l.path == 1) {
-                if (v.pendingColl() != l.pendingCollBefore - l.pc + l.collReturned) {
-                    _liqFail(6, "I6 A: collReturned not redistributed exactly");
-                }
                 if (ledger.recoveredColl() != l.ledgerCollBefore) {
                     _liqFail(6, "I6 A: redistributed and recovered");
                 }
@@ -705,6 +726,67 @@ contract CoreHandler is Test {
         }
     }
 
+    /// @dev Foundry only (invariants.md I4/I6 provenance): every bundle term the liquidation emitted —
+    ///      `Liquidated`, `PoolLiquidation` (A), `Redistributed` (path 1), `DeficitRecorded` (path 2, from
+    ///      the ledger) — must equal the reconstruction from the pre-state, each expected event exactly
+    ///      once and no unexpected one. The logs are consumed here and counted for I2 as `_end` would.
+    function _liqEvents(Liq memory l) internal {
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        _countLogs(logs);
+        (uint256 nLiq, uint256 nPool, uint256 nRed, uint256 nDef) = (0, 0, 0, 0);
+        for (uint256 i; i < logs.length; ++i) {
+            Vm.Log memory g = logs[i];
+            bytes32 t = g.topics[0];
+            if (g.emitter == address(v) && t == VaultManager.Liquidated.selector) {
+                ++nLiq;
+                (uint256 debt, uint256 coll, uint256 dA, uint256 cR, uint256 nR, uint8 path, uint256 gas) =
+                    abi.decode(g.data, (uint256, uint256, uint256, uint256, uint256, uint8, uint256));
+                if (
+                    uint256(g.topics[1]) != l.id || address(uint160(uint256(g.topics[2]))) != l.owner
+                        || address(uint160(uint256(g.topics[3]))) != l.caller
+                ) _liqFail(6, "events: Liquidated topics");
+                if (debt != l.debt || coll != l.coll || dA != l.dP || gas != GAS_RESERVE) {
+                    _liqFail(4, "events: Liquidated debt, coll, debtAbsorbed or gas reserve");
+                }
+                if (cR != l.collReturned || nR != l.normRest || path != l.path) {
+                    _liqFail(6, "events: Liquidated collReturned, normRest or path");
+                }
+            } else if (!variantB && g.emitter == address(pool) && t == StabilityPool.PoolLiquidation.selector)
+            {
+                ++nPool;
+                (
+                    uint256 debt,
+                    uint256 coll,
+                    uint256 seized,
+                    uint256 surplus,
+                    uint256 off,
+                    uint256 cP,
+                    uint256 cR
+                ) = abi.decode(g.data, (uint256, uint256, uint256, uint256, uint256, uint256, uint256));
+                if (
+                    uint256(g.topics[1]) != l.id || debt != l.debt || coll != l.coll || seized != l.seized
+                        || surplus != l.surplus || off != l.dP || cP != l.collP || cR != l.collReturned
+                ) _liqFail(6, "events: PoolLiquidation");
+                if (coll != cP + surplus + cR) _liqFail(6, "events: coll != collP + surplus + collReturned");
+            } else if (g.emitter == address(v) && t == VaultManager.Redistributed.selector) {
+                ++nRed;
+                (uint256 cR, uint256 nR) = abi.decode(g.data, (uint256, uint256));
+                if (cR != l.collReturned || nR != l.normRest) _liqFail(6, "events: Redistributed");
+            } else if (g.emitter == address(ledger) && t == DeficitLedger.DeficitRecorded.selector) {
+                ++nDef;
+                (uint256 amount, uint256 cR, uint8 source) = abi.decode(g.data, (uint256, uint256, uint8));
+                uint256 debtRest = Math.mulDiv(l.normRest, v.index(), RAY, Math.Rounding.Ceil); // R27
+                if (amount != debtRest || cR != l.collReturned || source != 2) {
+                    _liqFail(6, "events: DeficitRecorded");
+                }
+            }
+        }
+        if (nLiq != 1) _liqFail(6, "events: Liquidated not emitted exactly once");
+        if (nPool != (variantB ? 0 : 1)) _liqFail(6, "events: PoolLiquidation count");
+        if (nRed != (l.path == 1 ? 1 : 0)) _liqFail(6, "events: Redistributed count");
+        if (nDef != (l.path == 2 ? 1 : 0)) _liqFail(6, "events: DeficitRecorded count");
+    }
+
     /// @dev I2's counters for one liquidation (CHG-011): A — a partial pool offset (0 < dP < debt)
     ///      counts X, a full one (dP == debt > 0) counts Y, a no-stakes deficit counts Y; B — the auction
     ///      start counts Y.
@@ -720,6 +802,7 @@ contract CoreHandler is Test {
 
     function _liqFail(uint256 which, string memory why) internal {
         if (which == 4) ++i4Violations;
+        else if (which == 43) ++i4TcrViolations;
         else if (which == 6) ++i6Violations;
         else ++i7Violations;
         lastLiqViolation = why;
@@ -1171,6 +1254,15 @@ contract CoreHandler is Test {
 
     function _countLogs(Vm.Log[] memory logs) internal {
         for (uint256 i; i < logs.length; ++i) {
+            if (logs[i].emitter == address(ledger)) {
+                // CHG-011: the no-stakes deficit counts Y, read from the ledger's own event (invariants.md
+                // I2)
+                if (logs[i].topics[0] == DeficitLedger.DeficitRecorded.selector) {
+                    (,, uint8 source) = abi.decode(logs[i].data, (uint256, uint256, uint8));
+                    if (source == 2) ++eY;
+                }
+                continue;
+            }
             if (logs[i].emitter != address(v)) continue;
             bytes32 t = logs[i].topics[0];
             if (t == VaultManager.InterestAccrued.selector) {
@@ -1190,15 +1282,16 @@ contract CoreHandler is Test {
             ) {
                 ++eRedistributions;
             } else if (t == VaultManager.Liquidated.selector) {
-                // CHG-011: classified by the position; B's auction start counts once (Y)
-                (uint256 debt,, uint256 dA,,, uint8 path,) =
+                // CHG-011: classified by the position; B's auction start counts once (Y); the no-stakes
+                // deficit is counted from `DeficitRecorded` above
+                (uint256 debt,, uint256 dA,,,,) =
                     abi.decode(logs[i].data, (uint256, uint256, uint256, uint256, uint256, uint8, uint256));
                 if (variantB) {
                     ++eY;
-                } else {
-                    if (dA > 0 && dA < debt) ++eX;
-                    else if (dA > 0) ++eY;
-                    if (path == 2) ++eY;
+                } else if (dA > 0 && dA < debt) {
+                    ++eX;
+                } else if (dA > 0) {
+                    ++eY;
                 }
             }
         }
@@ -1449,9 +1542,31 @@ contract CoreHandler is Test {
     }
 
     /// @dev I4, I6, I7 — checked inside every successful `liquidate` (P20).
+    /// @dev Every liquidation check at once (the regression tests); the campaigns assert each invariant
+    ///      under its invariants.md name through the four checks below.
     function checkLiquidations() public view returns (bool, string memory) {
-        if (i4Violations + i6Violations + i7Violations != 0) return (false, lastLiqViolation);
+        if (i4Violations + i4TcrViolations + i6Violations + i7Violations != 0) {
+            return (false, lastLiqViolation);
+        }
         return (true, "");
+    }
+
+    function checkI4Bundle() public view returns (bool, string memory) {
+        return
+            (i4Violations == 0, i4Violations == 0 ? "" : "I4 bundle (A1, A2, B1, B2): see lastLiqViolation");
+    }
+
+    function checkI4Tcr() public view returns (bool, string memory) {
+        return
+            (i4TcrViolations == 0, i4TcrViolations == 0 ? "" : "I4 A3: TCR fell by more than one wei of debt");
+    }
+
+    function checkI6() public view returns (bool, string memory) {
+        return (i6Violations == 0, i6Violations == 0 ? "" : "I6: see lastLiqViolation");
+    }
+
+    function checkI7() public view returns (bool, string memory) {
+        return (i7Violations == 0, i7Violations == 0 ? "" : "I7: an actor's WETH delta");
     }
 
     function checkI1Sums() public view returns (bool, string memory) {

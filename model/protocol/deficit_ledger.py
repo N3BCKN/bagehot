@@ -3,8 +3,9 @@
 Spec §4.7, §5.6, §6.9, §6.11.3. Integers only. Tokens live in a *bank* with `stable` / `weth`
 balances and `_burn` (the Vault model, or `stability_pool.Tokens`); the ledger's account is
 "ledger". Callers are named strings ("vault", "pool", "house", "shutdown"). Every hook checks the
-caller, then `not settled` (§5.6); each call is atomic. The Vault model still carries its own
-stand-in ledger fields; the P22 model wires this class in.
+caller, then `not settled` (§5.6); each call is atomic. The Vault model owns one instance
+(`Vault.ledger`, banked in the vault) since P21; `stability_pool.Tokens` keeps a stand-in for
+pool-only unit tests.
 """
 
 from __future__ import annotations
@@ -31,16 +32,22 @@ class DeficitLedger:
     settled: bool = False
     events: list[tuple] = field(default_factory=list)
 
-    def _atomic(self, fn):  # noqa: ANN001, ANN202
-        saved = {
+    def _save(self) -> dict:
+        return {
             f.name: copy.deepcopy(getattr(self, f.name)) for f in fields(self) if f.name != "bank"
         }
+
+    def _restore(self, saved: dict) -> None:
+        self.__dict__.update(saved)
+
+    def _atomic(self, fn):  # noqa: ANN001, ANN202
+        saved = self._save()
 
         def run():  # noqa: ANN202
             try:
                 return fn()
             except Exception:
-                self.__dict__.update(saved)
+                self._restore(saved)
                 raise
 
         return self.bank._atomic(run)

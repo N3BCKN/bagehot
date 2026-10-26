@@ -1,14 +1,13 @@
 """VaultManager parts I–III (P14–P16), bit-for-bit with `contracts/src/core/VaultManager.sol`.
 
 Spec §4.2, §5.1.1–5.1.12, §6.2, §6.5.3–6.5.4, §6.7.3. Integers only. Covers positions, interest
-accrual and its routing (P15), the redemption loop (P16), the shutdown hooks and the views;
-redistribution (P20) has not happened, so the accumulators are 0. Time is `now`, set by the caller
-(block.timestamp). The pool and the ledger are stand-ins: balances "pool" / "ledger" in `stable`,
-the pool's `onInterest` as a callable `pool_hook` (ADR-0033: returns whether it booked; raising
-stands for a failed guarded call), the hooks' effects recorded in `pool_interest` /
-`ledger_reserve`, and the ledger and auction-house views that `systemColl` / `systemDebt` read as
-plain fields (`ledger_recovered_coll`, …). The P22 model extends this module rather than replacing
-it.
+accrual and its routing (P15), the redemption loop (P16), liquidation and redistribution (P20), the
+shutdown hooks and the views. Time is `now`, set by the caller (block.timestamp). The ledger is the
+real DeficitLedger model (`self.ledger`, P21) banked in this vault; `ledger_reserve`, … are its
+views. The pool's `onInterest` is a callable `pool_hook` (ADR-0033: returns whether it booked;
+raising stands for a failed guarded call) recorded in `pool_interest`, the strategy an object
+(`strategy`), and the auction house's lot a plain field (`house_total_lot`). The P22 model extends
+this module rather than replacing it.
 
 Each operation is atomic like a transaction: on any exception the state is restored, so a failed
 call leaves nothing behind. Exceptions carry the spec's error names (§11.2); a failed WETH transfer
@@ -122,11 +121,6 @@ class Vault:
     now: int = 0
     last_accrual: int = 0
     pool_interest: int = 0
-    ledger_reserve: int = 0
-    settled_ledger: bool = False  # the stand-in ledger never settles before P21
-    ledger_recovered_coll: int = 0
-    ledger_auction_debt: int = 0
-    ledger_deficit: int = 0
     house_total_lot: int = 0
     positions: dict[int, Position] = field(default_factory=dict)
     next_id: int = 1
@@ -150,9 +144,44 @@ class Vault:
     total_supply: int = 0
     events: list[tuple] = field(default_factory=list)
     sorted: SortedList = field(init=False)
+    # §4.7 (P21): the real DeficitLedger model, banked here (account "ledger"); saved and restored
+    # with the vault by `_atomic`, never deep-copied with it (its `bank` is this vault)
+    ledger: object = field(init=False)
 
     def __post_init__(self) -> None:
+        from model.protocol.deficit_ledger import (
+            DeficitLedger,  # noqa: PLC0415 (it imports this module)
+        )
+
         self.sorted = SortedList(self.max_hint_steps, self.sort_key)
+        self.ledger = DeficitLedger(bank=self, variant_b=not self.has_pool)
+
+    # ---- the ledger's views, as the VaultManager reads them (§5.1.12) ----
+    @property
+    def ledger_reserve(self) -> int:
+        return self.ledger.reserve
+
+    @property
+    def ledger_deficit(self) -> int:
+        return self.ledger.deficit
+
+    @ledger_deficit.setter
+    def ledger_deficit(self, value: int) -> None:  # tests only: a deficit without its history
+        self.ledger.deficit = value
+
+    @property
+    def ledger_recovered_coll(self) -> int:
+        return self.ledger.recovered_coll
+
+    @property
+    def ledger_auction_debt(self) -> int:
+        return self.ledger.auction_debt
+
+    @ledger_auction_debt.setter
+    def ledger_auction_debt(
+        self, value: int
+    ) -> None:  # tests only: B's auction debt without a house
+        self.ledger.auction_debt = value
 
     # ---- transaction wrapper ----
     def _atomic(self, fn: Callable[[], object]) -> object:
@@ -161,8 +190,9 @@ class Vault:
         saved = {
             f.name: copy.deepcopy(getattr(self, f.name))
             for f in fields(self)
-            if f.name not in ("price_source", "sorted", "pool_hook", "strategy")
+            if f.name not in ("price_source", "sorted", "pool_hook", "strategy", "ledger")
         }
+        ledger_saved = self.ledger._save()
         saved_sorted = (
             copy.deepcopy(self.sorted.nodes),
             self.sorted.head,
@@ -176,6 +206,7 @@ class Vault:
             if strategy_saved is not None:
                 self.strategy._restore(strategy_saved)
             self.__dict__.update(saved)
+            self.ledger._restore(ledger_saved)
             self.sorted.nodes, self.sorted.head, self.sorted.tail, self.sorted.events = saved_sorted
             self.sorted.key_of = self.sort_key
             raise
@@ -238,15 +269,15 @@ class Vault:
             self.pool_interest += to_pool
         if to_reserve > 0:
             self._mint("ledger", to_reserve)
-            self.ledger_reserve += to_reserve
+            self.ledger.on_interest("vault", to_reserve)
         self.events.append(("InterestAccrued", new, interest, to_pool, to_reserve, self.now))
 
-    # ---- the DeficitLedger stand-in's pool-dust hook (§5.3.1 `leave`, §5.6) ----
+    # ---- the pool's view of the ledger (§5.3.1 `leave`, §5.6): the pool is the caller ----
     def on_pool_dust(self, amount: int) -> None:
-        self.ledger_reserve += amount
+        self.ledger.on_pool_dust("pool", amount)
 
     def is_ledger_settled(self) -> bool:
-        return self.settled_ledger
+        return self.ledger.settled
 
     def accrue(self) -> None:
         """§5.1.8: anyone; any mode (no-op once shut down)."""
@@ -507,9 +538,7 @@ class Vault:
                     debt_rest = self._debt_of(norm_rest)  # R27
                     self.total_norm_debt -= norm_rest
                     self._weth_move("vault", "ledger", returned)
-                    self.ledger_deficit += debt_rest
-                    self.ledger_recovered_coll += returned
-                    self.events.append(("DeficitRecorded", debt_rest, returned, 2))
+                    self.ledger.record_deficit("vault", debt_rest, returned)
                     path = PATH_DEFICIT
             self._update_system_snapshots()
             self.events.append(

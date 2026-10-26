@@ -25,6 +25,36 @@ contract VaultManagerLiquidationTest is LiquidationFixture {
         target = _open(bob, 2e18, 3000e18);
     }
 
+    /// @dev P19-I2 carry-forward (P21 audit L9): in the shutdown window (shut down, not settled) the
+    ///      last depositor's exit sweeps the pool's rounding residual into the real ledger's reserve;
+    ///      `onPoolDust` does not revert there, as it does not live.
+    function test_window_lastDepositorExit_sweepsDustIntoTheLedger() public {
+        _open(alice, 30e18, 20_000e18);
+        uint256 id = _open(bob, 2e18, 3000e18);
+        _deposit(alice, 7000e18 + 1);
+        vm.prank(alice);
+        token.transfer(carol, 5000e18);
+        _deposit(carol, 4000e18 + 7);
+        _setPrice(1500e18); // bob at ICR 1.0
+        vm.prank(liq);
+        v.liquidate(id);
+        vm.prank(SHUTDOWN);
+        v.onShutdown();
+        vm.prank(alice);
+        pool.withdraw(type(uint256).max);
+        uint256 residual = pool.totalDeposits() - pool.compoundedDeposit(carol);
+        assertGt(residual, 0, "the offset left a rounding residual");
+        uint256 reserve = ledger.reserve();
+        vm.expectEmit(address(pool));
+        emit StabilityPool.PoolDustSwept(residual);
+        vm.prank(carol);
+        pool.withdraw(type(uint256).max);
+        assertEq(pool.totalDeposits(), 0);
+        assertEq(ledger.reserve(), reserve + residual, "swept into the reserve");
+        assertEq(token.balanceOf(address(ledger)), ledger.reserve(), "I1: ledger token == reserve");
+        assertFalse(ledger.settled());
+    }
+
     // ------------------------------------------------------------------ reverts (§6.4.1 order)
 
     function test_liquidate_notWired_reverts() public {
