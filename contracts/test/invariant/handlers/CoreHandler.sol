@@ -105,6 +105,8 @@ contract CoreHandler is Test {
     uint256 public i6Violations; // I6, by state deltas inside `liquidate`
     uint256 public i7Violations; // I7, per-actor WETH deltas inside `liquidate`
     string public lastLiqViolation;
+    string public lastI4Violation; // per invariant, so each named invariant reports its own clause
+    string public lastI6Violation;
     uint256 public i12Violations;
     uint256 public oracleModeMismatches;
     uint256 public i5Violations;
@@ -806,6 +808,8 @@ contract CoreHandler is Test {
         else if (which == 6) ++i6Violations;
         else ++i7Violations;
         lastLiqViolation = why;
+        if (which == 4) lastI4Violation = why;
+        else if (which == 6) lastI6Violation = why;
     }
 
     /// @dev Sets the oracle price so `id` is at `icr` (rounded to the feed's 8 decimals); false if the

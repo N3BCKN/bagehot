@@ -298,6 +298,9 @@ def test_no_stakes_deficit_lands_in_the_real_ledger_then_cover_and_settlement() 
     led = v.ledger
     assert led.deficit > 0 and led.recovered_coll > 0
     assert ("DeficitRecorded", led.deficit, led.recovered_coll, 2) in led.events
+    # one cross-contract order: the ledger's event sits in the vault's log before `Liquidated`
+    names = [e[0] for e in v.events]
+    assert names.index("DeficitRecorded") < len(names) - 1 - names[::-1].index("Liquidated")
     assert v.weth.get("ledger", 0) == led.recovered_coll  # I1's ledger row
     assert v.stable.get("ledger", 0) == led.reserve
     reserve, deficit, supply = led.reserve, led.deficit, v.total_supply

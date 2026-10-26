@@ -57,11 +57,11 @@ contract CoreInvariantsTest is Test {
     }
 
     /// @dev I4, I6 and I7 are checked inside every liquidation (P20) and asserted here under their
-    ///      invariants.md names; `lastLiqViolation` names the failing clause.
+    ///      invariants.md names; `lastI4Violation` / `lastI6Violation` name the failing clause.
     /// I4's bundle: A1, A2 (A), B1, B2 (B), with the terms cross-checked against the events.
     function invariant_I4_liquidationBundle() public view {
-        (bool ok, string memory why) = handler.checkI4Bundle();
-        _assert(ok, ok ? why : handler.lastLiqViolation());
+        (bool ok,) = handler.checkI4Bundle();
+        _assert(ok, handler.lastI4Violation());
     }
 
     /// I4 A3: a full absorption does not lower the TCR (by more than one wei of debt).
@@ -72,8 +72,8 @@ contract CoreInvariantsTest is Test {
 
     /// I6: collReturned and normRest accounted exactly once, with event provenance.
     function invariant_I6_liquidationConservation() public view {
-        (bool ok, string memory why) = handler.checkI6();
-        _assert(ok, ok ? why : handler.lastLiqViolation());
+        (bool ok,) = handler.checkI6();
+        _assert(ok, handler.lastI6Violation());
     }
 
     /// I7: the surplus only to the owner, the gas reserve only to the caller.

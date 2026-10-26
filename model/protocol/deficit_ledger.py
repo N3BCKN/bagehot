@@ -52,6 +52,14 @@ class DeficitLedger:
 
         return self.bank._atomic(run)
 
+    def _emit(self, event: tuple) -> None:
+        # the ledger's own log, and the bank's (the Vault model's `events`), so the system keeps one
+        # cross-contract order (§5.10, I14); a bare `Tokens` bank has no log
+        self.events.append(event)
+        bank_events = getattr(self.bank, "events", None)
+        if bank_events is not None:
+            bank_events.append(event)
+
     def _hook(self, caller: str, allowed: str | None) -> None:
         if allowed is None or caller != allowed:
             raise Unauthorized()
@@ -71,7 +79,7 @@ class DeficitLedger:
         def run() -> None:
             self._hook(caller, "vault")
             self.reserve += amount
-            self.events.append(("ReserveIncreased", amount, 1))
+            self._emit(("ReserveIncreased", amount, 1))
 
         self._atomic(run)
 
@@ -79,7 +87,7 @@ class DeficitLedger:
         def run() -> None:
             self._hook(caller, self._pool)
             self.reserve += amount
-            self.events.append(("ReserveIncreased", amount, 3))
+            self._emit(("ReserveIncreased", amount, 3))
 
         self._atomic(run)
 
@@ -88,7 +96,7 @@ class DeficitLedger:
             self._hook(caller, "vault")
             self.deficit += d
             self.recovered_coll += coll
-            self.events.append(("DeficitRecorded", d, coll, 2))
+            self._emit(("DeficitRecorded", d, coll, 2))
 
         self._atomic(run)
 
@@ -96,7 +104,7 @@ class DeficitLedger:
         def run() -> None:
             self._hook(caller, self._house)
             self.auction_debt += d
-            self.events.append(("AuctionDebtChanged", d, self.auction_debt))
+            self._emit(("AuctionDebtChanged", d, self.auction_debt))
 
         self._atomic(run)
 
@@ -107,9 +115,9 @@ class DeficitLedger:
                 raise ArithmeticError("Underflow")
             self.auction_debt -= burned
             self.reserve += to_reserve
-            self.events.append(("AuctionDebtChanged", -burned, self.auction_debt))
+            self._emit(("AuctionDebtChanged", -burned, self.auction_debt))
             if to_reserve > 0:
-                self.events.append(("ReserveIncreased", to_reserve, 2))
+                self._emit(("ReserveIncreased", to_reserve, 2))
 
         self._atomic(run)
 
@@ -120,8 +128,8 @@ class DeficitLedger:
                 raise ArithmeticError("Underflow")
             self.auction_debt -= d
             self.deficit += d
-            self.events.append(("AuctionDebtChanged", -d, self.auction_debt))
-            self.events.append(("DeficitRecorded", d, 0, 1))
+            self._emit(("AuctionDebtChanged", -d, self.auction_debt))
+            self._emit(("DeficitRecorded", d, 0, 1))
 
         self._atomic(run)
 
@@ -134,7 +142,7 @@ class DeficitLedger:
             stable = self.bank.stable
             stable["ledger"] = stable.get("ledger", 0) - amount
             stable[to] = stable.get(to, 0) + amount
-            self.events.append(("ReserveDecreased", amount, 1))
+            self._emit(("ReserveDecreased", amount, 1))
 
         self._atomic(run)
 
@@ -148,7 +156,7 @@ class DeficitLedger:
                 self.reserve -= c
                 self.deficit -= c
                 self.bank._burn("ledger", c)
-            self.events.append(("DeficitCovered", c, self.reserve, self.deficit))
+            self._emit(("DeficitCovered", c, self.reserve, self.deficit))
             return c
 
         return self._atomic(run)
@@ -170,7 +178,7 @@ class DeficitLedger:
                 self.bank._burn("ledger", burned)
             if coll > 0:
                 self.bank._weth_move("ledger", "shutdown", coll)
-            self.events.append(("LedgerSettled", burned, self.deficit, coll))
+            self._emit(("LedgerSettled", burned, self.deficit, coll))
             return coll
 
         return self._atomic(run)
