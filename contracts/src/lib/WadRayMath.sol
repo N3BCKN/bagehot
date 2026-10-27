@@ -5,7 +5,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @title WadRayMath
 /// @notice WAD (1e18) and RAY (1e27) fixed-point products, quotients and the power function
-///         (docs/spec.md §2.1–§2.3). Bit-for-bit identical to `model/math.py`.
+///         (docs/spec.md §2.1–§2.3). Bit-for-bit identical to `model/protocol/math.py`.
 /// @dev Every function rounds in the direction its name says; callers pick the direction from
 ///      the spec's rounding table (§8). Overflow and zero divisors revert as in `Rounding`
 ///      (`Panic(0x11)` / `Panic(0x12)`, spec §2.2).

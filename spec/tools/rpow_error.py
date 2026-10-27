@@ -27,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from model.math import RAY, Overflow, Rounding, rpow  # noqa: E402
+from model.protocol.math import RAY, Overflow, Rounding, rpow  # noqa: E402
 
 SCALE = 10**70
 UP = SCALE // RAY  # 10^43: RAY units -> SCALE units

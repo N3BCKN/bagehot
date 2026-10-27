@@ -11,8 +11,9 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from model.math import RAY, Overflow
 from model.protocol import vault as vm
+from model.protocol.errors import ProtocolError
+from model.protocol.math import RAY, Overflow
 
 VECTORS = json.loads(Path("spec/vectors/interest.json").read_text())["vectors"]
 RATE = 1_547_125_957_863_212_449
@@ -199,7 +200,7 @@ def test_I2_long_horizon(ops: list[tuple[int, int, int]]) -> None:
                     v.stable["ledger"] -= need
                     v.stable[owner] = v.stable.get(owner, 0) + need
                 v.close(owner, pid)
-        except vm.VaultError:
+        except ProtocolError:
             pass
         for ev in v.events[before:]:
             if ev[0] == "InterestAccrued":

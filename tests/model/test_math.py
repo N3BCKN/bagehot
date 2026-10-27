@@ -1,4 +1,4 @@
-"""model/math.py against spec vectors, the generated cases, Fraction, and Hypothesis properties.
+"""model/protocol/math.py against spec vectors, the generated cases, Fraction and Hypothesis.
 
 The Solidity libraries are checked against the same two vector files in
 contracts/test/vectors/MathVectors.t.sol, so passing both suites means the two sides agree.
@@ -15,7 +15,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from model import math as m
+from model.protocol import math as m
 
 SPEC = json.loads(Path("spec/vectors/math.json").read_text())["vectors"]
 GEN = json.loads(Path("spec/generated/math_random.json").read_text())

@@ -13,12 +13,15 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field, fields
 
-from model.protocol.vault import Unauthorized, VaultError, _error
+from model.protocol.errors import (
+    AlreadySettled,
+    ProtocolError,
+    SystemSettled,
+    Unauthorized,
+    Underflow,
+)
 
-SystemSettled = _error("SystemSettled")
-AlreadySettled = _error("AlreadySettled")
-
-__all__ = ["AlreadySettled", "DeficitLedger", "SystemSettled", "Unauthorized", "VaultError"]
+__all__ = ["AlreadySettled", "DeficitLedger", "ProtocolError", "SystemSettled", "Unauthorized"]
 
 
 @dataclass
@@ -112,7 +115,7 @@ class DeficitLedger:
         def run() -> None:
             self._hook(caller, self._house)
             if burned > self.auction_debt:
-                raise ArithmeticError("Underflow")
+                raise Underflow()
             self.auction_debt -= burned
             self.reserve += to_reserve
             self._emit(("AuctionDebtChanged", -burned, self.auction_debt))
@@ -125,7 +128,7 @@ class DeficitLedger:
         def run() -> None:
             self._hook(caller, self._house)
             if d > self.auction_debt:
-                raise ArithmeticError("Underflow")
+                raise Underflow()
             self.auction_debt -= d
             self.deficit += d
             self._emit(("AuctionDebtChanged", -d, self.auction_debt))
@@ -137,7 +140,7 @@ class DeficitLedger:
         def run() -> None:
             self._hook(caller, self._house)
             if amount > self.reserve:
-                raise ArithmeticError("Underflow")
+                raise Underflow()
             self.reserve -= amount
             stable = self.bank.stable
             stable["ledger"] = stable.get("ledger", 0) - amount

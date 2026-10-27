@@ -11,10 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from model.math import WAD
-from model.protocol import deficit_ledger as dl
+from model.protocol import deficit as dl
 from model.protocol import stability_pool as sp
 from model.protocol import vault as vm
+from model.protocol.math import WAD
 
 FILES = {
     f: {v["name"]: v for v in json.loads(Path(f"spec/vectors/{f}.json").read_text())["vectors"]}

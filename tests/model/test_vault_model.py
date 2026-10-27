@@ -14,8 +14,9 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from model.math import RAY
 from model.protocol import vault as vm
+from model.protocol.errors import ProtocolError
+from model.protocol.math import RAY
 
 MCR, MIN_DEBT, GAS = 11 * 10**17, 2_000 * 10**18, 375 * 10**14
 PRICE = 2_000 * 10**18
@@ -243,7 +244,7 @@ def test_random_sequences_keep_I1_I2_and_identities(ops: list[tuple[int, int, in
                 v.repay(caller, mine[0], 1 + amt % (5_000 * 10**18), 0, 0)
             else:
                 v.close(caller, mine[0])
-        except vm.VaultError:
+        except ProtocolError:
             pass  # an invalid step reverts as a whole
         check_identities(v)
 
@@ -271,7 +272,7 @@ def test_apply_pending_and_stake_after_a_snapshot() -> None:
 
 def test_checked_arithmetic_raises_overflow_like_the_contract() -> None:
     """Review V-2: where Solidity panics 0x11 the model raises Overflow, not a spec error."""
-    from model.math import Overflow
+    from model.protocol.math import Overflow
 
     v = fresh()
     with pytest.raises(Overflow):

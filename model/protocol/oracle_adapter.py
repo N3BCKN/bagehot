@@ -18,6 +18,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import IntEnum
 
+from model.protocol.errors import InvalidFeedDecimals, InvalidParameter
+
 UINT256_MAX = 2**256 - 1
 
 
@@ -32,18 +34,6 @@ class Reason(IntEnum):
     INVALID_TIMESTAMP = 7
     STALE = 8
     OUT_OF_BOUNDS = 9
-
-
-class InvalidParameter(Exception):  # noqa: N818 — the spec's error name
-    """Constructor argument out of range (spec §3.4); `index` is the 0-based argument position."""
-
-    def __init__(self, index: int) -> None:
-        super().__init__(index)
-        self.index = index
-
-
-class InvalidFeedDecimals(Exception):  # noqa: N818 — the spec's error name
-    """`priceFeed.decimals()` failed or exceeds 18."""
 
 
 @dataclass(frozen=True)
@@ -120,6 +110,9 @@ class OracleAdapter:
             feed_decimals,
         )
 
+    def _emit(self, event: tuple) -> None:
+        self.events.append(event)
+
     @property
     def _scale(self) -> int:
         return 10 ** (18 - self.feed_decimals)
@@ -172,12 +165,12 @@ class OracleAdapter:
         if usable:
             if price != self.last_good_price:
                 self.last_good_price = price
-                self.events.append(("LastGoodPriceUpdated", price))
+                self._emit(("LastGoodPriceUpdated", price))
             if self.failure_start != 0:
                 self.failure_start = 0
-                self.events.append(("OracleRecovered", now))
+                self._emit(("OracleRecovered", now))
             return price, True
         if self.failure_start == 0:
             self.failure_start = now
-            self.events.append(("OracleFailure", int(reason), now))
+            self._emit(("OracleFailure", int(reason), now))
         return self.last_good_price, False

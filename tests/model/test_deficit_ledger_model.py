@@ -1,11 +1,11 @@
-"""DeficitLedger in model/protocol/deficit_ledger.py (P21): the same cases as
+"""DeficitLedger in model/protocol/deficit.py (P21): the same cases as
 contracts/test/unit/DeficitLedger.t.sol — hooks, caller and settled checks, cover, settlement."""
 
 from __future__ import annotations
 
 import pytest
 
-from model.protocol import deficit_ledger as dl
+from model.protocol import deficit as dl
 from model.protocol.stability_pool import Tokens
 
 E18 = 10**18

@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from model.math import WAD
 from model.protocol import stability_pool as sp
 from model.protocol import vault as vm
+from model.protocol.math import WAD
 
 VECTORS = {
     v["name"]: v for v in json.loads(Path("spec/vectors/product_sum.json").read_text())["vectors"]

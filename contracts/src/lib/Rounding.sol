@@ -8,7 +8,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 ///         (docs/spec.md §2.2). Every call site names its direction from the rounding table (§8).
 /// @dev Wraps OpenZeppelin `Math.mulDiv` (512-bit intermediate) — ADR-0017. Errors follow spec
 ///      §2.2: a zero divisor reverts `Panic(0x12)`, a result that does not fit in 256 bits
-///      (including the +1 of a ceil) reverts `Panic(0x11)`. The Python model (`model/math.py`)
+///      (including the +1 of a ceil) reverts `Panic(0x11)`. The Python model (`model/protocol/math.py`)
 ///      raises `DivisionByZero` / `Overflow` for the same inputs.
 library Rounding {
     /// @notice floor(x * y / d).

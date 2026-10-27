@@ -16,18 +16,19 @@ import copy
 from collections.abc import Callable
 from dataclasses import dataclass, field, fields
 
-from model.math import WAD, Underflow, mul_div_down, mul_div_up
-from model.protocol.vault import (
+from model.protocol.errors import (
+    DepositTooSmall,
     ERC20InsufficientBalance,
     InsufficientBalance,
+    InvalidParameter,
+    NoDeposit,
+    ProtocolError,
     SupplyCapExceeded,
-    Unauthorized,  # noqa: F401 — the hooks' caller check lives in the contract; re-exported
-    VaultError,
     WethTransferFailed,
     ZeroAmount,
-    _c,
-    _error,
 )
+from model.protocol.math import WAD, Underflow, mul_div_down, mul_div_up
+from model.protocol.math import checked as _c
 
 DECIMAL_PRECISION = 10**18
 P_PRECISION = 10**36
@@ -36,15 +37,12 @@ P_MIN = P_PRECISION // SCALE_FACTOR
 SCALE_SPAN = 2
 SUPPLY_CAP = 2**128 - 1
 
-NoDeposit = _error("NoDeposit")
-DepositTooSmall = _error("DepositTooSmall")
-
 __all__ = [
     "DepositTooSmall",
     "NoDeposit",
     "StabilityPool",
     "Tokens",
-    "VaultError",
+    "ProtocolError",
 ]
 
 
@@ -132,8 +130,11 @@ class StabilityPool:
     events: list[tuple] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        if self.liquidation_penalty > WAD // 2 or self.min_deposit < 10**18:
-            raise ValueError("InvalidParameter")
+        # §3.4: arguments 0 and 1 are the token addresses, which the model does not carry
+        if self.liquidation_penalty > WAD // 2:
+            raise InvalidParameter(2)
+        if self.min_deposit < 10**18:
+            raise InvalidParameter(3)
 
     # ---- save / restore, for the vault's transaction wrapper when the pool is its strategy ----
     def _save(self) -> dict:
@@ -158,6 +159,9 @@ class StabilityPool:
                 raise
 
         return self.bank._atomic(run)
+
+    def _emit(self, event: tuple) -> None:
+        self.events.append(event)
 
     # ---- helpers ----
     def _stable_transfer(self, frm: str, to: str, amount: int) -> None:
@@ -196,11 +200,11 @@ class StabilityPool:
     def _emit_deposit(self, a: str) -> None:
         r = self.deposits.get(a)
         if r is None or r.initial == 0:
-            self.events.append(
+            self._emit(
                 ("DepositUpdated", a, 0, self.p, self.current_epoch, self.current_scale, 0, 0)
             )
         else:
-            self.events.append(
+            self._emit(
                 (
                     "DepositUpdated",
                     a,
@@ -250,7 +254,7 @@ class StabilityPool:
                 new_p = mul_div_down(_c(self.p * SCALE_FACTOR**k), t - d, t)  # R13
             self.p = new_p
             self.current_scale += k
-        self.events.append(
+        self._emit(
             (
                 "PoolOffset",
                 d,
@@ -315,7 +319,7 @@ class StabilityPool:
                 self.depositor_count[e] = self.depositor_count.get(e, 0) + 1
             self._stable_transfer(caller, "pool", amount)
             self._emit_deposit(caller)
-            self.events.append(("GainsPaid", caller, coll_gain, interest_gain))
+            self._emit(("GainsPaid", caller, coll_gain, interest_gain))
 
         self._atomic(run)
 
@@ -345,9 +349,9 @@ class StabilityPool:
                 self._snapshot(caller, new_deposit)
             self._stable_transfer("pool", caller, w)
             self._emit_deposit(caller)
-            self.events.append(("GainsPaid", caller, coll_gain, interest_gain))
+            self._emit(("GainsPaid", caller, coll_gain, interest_gain))
             if swept > 0:
-                self.events.append(("PoolDustSwept", swept))
+                self._emit(("PoolDustSwept", swept))
             return swept
 
         return self._atomic(run)
@@ -368,9 +372,9 @@ class StabilityPool:
             else:
                 self._snapshot(caller, compounded)
             self._emit_deposit(caller)
-            self.events.append(("GainsPaid", caller, coll_gain, interest_gain))
+            self._emit(("GainsPaid", caller, coll_gain, interest_gain))
             if swept > 0:
-                self.events.append(("PoolDustSwept", swept))
+                self._emit(("PoolDustSwept", swept))
             return swept
 
         return self._atomic(run)
@@ -392,7 +396,7 @@ class StabilityPool:
             self.bank._weth_move("pool", owner, surplus)
         if coll_returned > 0:
             self.bank._weth_move("pool", "vault", coll_returned)
-        self.events.append(
+        self._emit(
             (
                 "PoolLiquidation",
                 position_id,
@@ -422,7 +426,7 @@ class StabilityPool:
         self.last_interest_error = num - per_unit * t
         self.g[key] = new_g
         self.interest_gains_balance = new_balance
-        self.events.append(("PoolInterest", amount, per_unit, self.last_interest_error))
+        self._emit(("PoolInterest", amount, per_unit, self.last_interest_error))
         return True
 
     # ---- test-VaultManager hooks of the unit vectors ----

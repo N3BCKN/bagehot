@@ -12,19 +12,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from model.protocol.errors import InvalidParameter, NodeExists, NodeNotFound, StaleHint
+
+__all__ = ["NodeExists", "NodeNotFound", "SortedList", "StaleHint", "precedes"]
+
 Key = tuple[int, int]
-
-
-class NodeExists(Exception):  # noqa: N818 — the spec's error name
-    pass
-
-
-class NodeNotFound(Exception):  # noqa: N818 — the spec's error name
-    pass
-
-
-class StaleHint(Exception):  # noqa: N818 — the spec's error name
-    pass
+MAX_MAX_HINT_STEPS = 1_000
 
 
 def precedes(ka: Key, ida: int, kb: Key, idb: int) -> bool:
@@ -41,6 +34,13 @@ class SortedList:
     head: int = 0
     tail: int = 0
     events: list[tuple] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.max_hint_steps <= MAX_MAX_HINT_STEPS:  # §3.4, argument 0
+            raise InvalidParameter(0)
+
+    def _emit(self, event: tuple) -> None:
+        self.events.append(event)
 
     @property
     def size(self) -> int:
@@ -131,7 +131,7 @@ class SortedList:
             self.tail = node_id
         else:
             self.nodes[nxt][0] = node_id
-        self.events.append(("NodeInserted", node_id, prev, nxt))
+        self._emit(("NodeInserted", node_id, prev, nxt))
 
     def remove(self, node_id: int) -> None:
         if node_id not in self.nodes:
@@ -145,7 +145,7 @@ class SortedList:
             self.tail = prev
         else:
             self.nodes[nxt][0] = prev
-        self.events.append(("NodeRemoved", node_id))
+        self._emit(("NodeRemoved", node_id))
 
     def reinsert(self, node_id: int, upper: int, lower: int) -> None:
         """remove, then insert with the fresh key; a StaleHint undoes both, as the revert does."""

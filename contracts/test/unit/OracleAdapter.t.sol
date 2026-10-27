@@ -48,7 +48,7 @@ contract OracleAdapterTest is OracleFixture {
 
     // ------------------------------------------------------------------ reason codes by value
 
-    /// @dev Values are ABI (spec §11.1) and must equal model/protocol/oracle.py's IntEnum.
+    /// @dev Values are ABI (spec §11.1) and must equal model/protocol/oracle_adapter.py's IntEnum.
     function test_reasonCodes_matchTheSpecByValue() public pure {
         assertEq(uint8(OracleAdapter.Reason.OK), 0);
         assertEq(uint8(OracleAdapter.Reason.SEQUENCER_CALL_FAILED), 1);

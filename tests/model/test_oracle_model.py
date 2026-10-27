@@ -1,4 +1,4 @@
-"""model/protocol/oracle.py against spec/vectors/oracle.json, the reason values, and properties.
+"""model/protocol/oracle_adapter.py against spec/vectors/oracle.json, reason values, properties.
 
 The Solidity adapter is checked against the same vectors in
 contracts/test/vectors/OracleVectors.t.sol, so passing both suites means the two sides agree.
@@ -13,7 +13,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from model.protocol import oracle as o
+from model.protocol import oracle_adapter as o
 
 VECTORS = json.loads(Path("spec/vectors/oracle.json").read_text())["vectors"]
 START = {"staleness": 3_600, "grace_period": 3_600, "min_price": 10 * 10**18, "max_price": 10**24}

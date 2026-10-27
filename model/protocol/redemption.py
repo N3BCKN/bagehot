@@ -13,22 +13,21 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from model.math import RAY, WAD, mul_div_up, rpow
-from model.protocol.vault import (
+from model.protocol.errors import (
+    AuctionCallbackActive,
+    FeeExceedsMaximum,
     InsufficientBalance,
+    InvalidParameter,
+    NothingRedeemed,
     PriceUnusable,  # noqa: F401 — raised by Vault._fetch_required_price, re-exported for callers
+    ProtocolError,
     SystemShutdown,
-    Vault,
-    VaultError,
+    TCRBelowCritical,
     ZeroAmount,
-    _error,
+    ZeroIterations,
 )
-
-ZeroIterations = _error("ZeroIterations")
-FeeExceedsMaximum = _error("FeeExceedsMaximum")
-NothingRedeemed = _error("NothingRedeemed")
-TCRBelowCritical = _error("TCRBelowCritical")
-AuctionCallbackActive = _error("AuctionCallbackActive")
+from model.protocol.math import RAY, WAD, mul_div_up, rpow
+from model.protocol.vault import Vault
 
 __all__ = [
     "AuctionCallbackActive",
@@ -36,7 +35,7 @@ __all__ = [
     "NothingRedeemed",
     "RedemptionModule",
     "TCRBelowCritical",
-    "VaultError",
+    "ProtocolError",
     "ZeroIterations",
     "make_gate",
 ]
@@ -71,9 +70,17 @@ class RedemptionModule:
     events: list[tuple] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        if self.fee_floor > WAD or not 1 <= self.beta <= 100 or not 0 < self.base_rate_decay < RAY:
-            raise ValueError("InvalidParameter")
+        # §3.4: arguments 0 and 1 are the token and oracle addresses, not carried by the model
+        if self.fee_floor > WAD:
+            raise InvalidParameter(2)
+        if not 1 <= self.beta <= 100:
+            raise InvalidParameter(3)
+        if not 0 < self.base_rate_decay < RAY:
+            raise InvalidParameter(4)
         self.last_fee_operation_time = self.vault.now  # the construction timestamp
+
+    def _emit(self, event: tuple) -> None:
+        self.events.append(event)
 
     # ---- §6.7.1 ----
     def decayed_base_rate(self) -> int:
@@ -131,7 +138,7 @@ class RedemptionModule:
                 raise NothingRedeemed()
             new_base = min(decayed + self._increment(redeemed, s0), WAD)
             self.base_rate, self.last_fee_operation_time = new_base, v.now
-            self.events.append(
+            self._emit(
                 ("Redeemed", caller, amount, redeemed, coll_sent, fee_rate, iterations, new_base)
             )
             return redeemed, coll_sent, iterations

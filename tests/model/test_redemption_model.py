@@ -11,9 +11,10 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from model.math import RAY, WAD, mul_div_down, mul_div_up
 from model.protocol import redemption as rd
 from model.protocol import vault as vm
+from model.protocol.errors import ProtocolError
+from model.protocol.math import RAY, WAD, mul_div_down, mul_div_up
 
 VECTORS = json.loads(Path("spec/vectors/redemption.json").read_text())["vectors"]
 STATUS = {
@@ -101,7 +102,7 @@ def _run_step(env: Env, step: dict) -> None:
     )
     if "revert" in step:
         before = _snapshot(env)
-        with pytest.raises(rd.VaultError) as exc:
+        with pytest.raises(ProtocolError) as exc:
             env.rm.redeem(*args)
         assert type(exc.value).__name__ == step["revert"]
         assert _snapshot(env) == before, "a reverted redeem leaves no trace"
@@ -271,7 +272,7 @@ def test_redeem_collateral_unauthorized() -> None:
 )
 def test_redeem_errors(args: tuple, err: str) -> None:
     env = _simple_env()
-    with pytest.raises(rd.VaultError) as exc:
+    with pytest.raises(ProtocolError) as exc:
         env.rm.redeem("alice", *args)
     assert type(exc.value).__name__ == err
 
@@ -308,7 +309,7 @@ def test_gate_is_strict_at_critical_tcr() -> None:
 
 def test_gate_not_live_never_blocks() -> None:
     env = _simple_env(0)
-    env.v.ledger_deficit = 10**21
+    env.v.ledger.record_deficit("vault", 10**21, 0)  # through the hook, not a bare write
     assert not rd.make_gate(env.v, env.p["CRITICAL_TCR"])(10 * WAD)
 
 
@@ -350,7 +351,7 @@ def test_fuzz_redemption_leaves_healthy_positions(
     n0 = len(v.events)
     try:
         env.rm.redeem("erin", min(amount, v.stable["erin"]), max_it, WAD, 0, 0)
-    except rd.VaultError:
+    except ProtocolError:
         assert _snapshot(env) == before
         return
     redeemed_events = [e for e in v.events[n0:] if e[0] == "PositionRedeemed"]

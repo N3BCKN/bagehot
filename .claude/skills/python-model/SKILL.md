@@ -6,7 +6,7 @@ paths: "model/**, differential/**, agents/**, paths/**"
 ---
 ## Protocol model (model/protocol/)
 - Python `int` only for protocol state and math. No `float`, no `Decimal`, no numpy in the protocol
-  core. `model/math.py` implements `mul_div(x, y, d, rounding)`, WAD/RAY helpers and `rpow`
+  core. `model/protocol/math.py` implements `mul_div(x, y, d, rounding)`, WAD/RAY helpers and `rpow`
   bit-for-bit identical to the Solidity library; both are validated against the same vectors.
 - Mirror Solidity semantics: uint256 overflow raises `Overflow`; underflow raises `Underflow`;
   custom errors become exceptions with identical names; operations are atomic (on exception,

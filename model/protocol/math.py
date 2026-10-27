@@ -37,6 +37,14 @@ class Rounding(Enum):
     CEIL = "ceil"
 
 
+def checked(x: int) -> int:
+    """Solidity's checked arithmetic on a computed result: above 2^256 − 1 panics (0x11), which is
+    `Overflow` here (spec §2.2): the model never reports a spec error where the contract panics."""
+    if x > UINT256_MAX:
+        raise Overflow()
+    return x
+
+
 def _uint(*values: int) -> None:
     for v in values:
         if not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= UINT256_MAX:

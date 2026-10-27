@@ -22,7 +22,35 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, fields
 from enum import IntEnum
 
-from model.math import RAY, UINT256_MAX, WAD, Overflow, mul_div_down, mul_div_up, rpow
+from model.protocol import redistribution as rd
+from model.protocol.errors import (
+    AlreadySettled,
+    CollateralTooLarge,
+    CollReturnedExceedsColl,
+    CollReturnedNotReceived,
+    DebtAbsorbedExceedsDebt,
+    DebtBelowMinimum,
+    ERC20InsufficientBalance,
+    IcrBelowMcr,
+    InsufficientBalance,
+    InsufficientCollateral,
+    InvalidParameter,
+    NotLiquidatable,
+    NotOwner,
+    NotSettled,
+    NotTriggered,
+    PositionNotActive,
+    PriceUnusable,
+    RepayExceedsMaximum,
+    SupplyCapExceeded,
+    SystemSettled,
+    SystemShutdown,
+    Unauthorized,
+    WethTransferFailed,
+    ZeroAmount,
+)
+from model.protocol.math import RAY, WAD, mul_div_down, mul_div_up, rpow
+from model.protocol.math import checked as _c
 from model.protocol.sorted_list import SortedList
 
 BPS = 10_000
@@ -31,6 +59,11 @@ SUPPLY_CAP = 2**128 - 1
 DECIMAL_PRECISION = 10**18
 NICR_PRECISION = 10**20
 OP_OPEN, OP_ADD_COLLATERAL, OP_WITHDRAW_COLLATERAL, OP_BORROW, OP_REPAY, OP_CLOSE = 1, 2, 3, 4, 5, 6
+MAX_MCR = 2 * WAD
+MIN_MIN_DEBT = 10**18
+MAX_RATE_PER_SECOND = 21_979_553_151_239_153_028
+MIN_POOL_HOOK_GAS = 175_000  # CHG-013
+MAX_POOL_HOOK_GAS = 1_000_000
 OP_REDEEM = 7
 OP_LIQUIDATE = 8
 PATH_NONE, PATH_REDISTRIBUTED, PATH_DEFICIT = 0, 1, 2
@@ -43,47 +76,6 @@ class Status(IntEnum):
     CLOSED_BY_REDEMPTION = 3
     CLOSED_BY_LIQUIDATION = 4
     CLOSED_BY_SHUTDOWN = 5
-
-
-def _c(x: int) -> int:
-    """Solidity's checked arithmetic: a result above 2^256 − 1 panics (0x11) — `Overflow` here
-    (spec §2.2), so the model never reports a spec error where the contract panics."""
-    if x > UINT256_MAX:
-        raise Overflow()
-    return x
-
-
-class VaultError(Exception):
-    """Base of the spec's errors; the class name is the error name (§11.2)."""
-
-
-def _error(name: str) -> type[VaultError]:
-    return type(name, (VaultError,), {})
-
-
-SystemShutdown = _error("SystemShutdown")
-SystemSettled = _error("SystemSettled")
-NotSettled = _error("NotSettled")
-ZeroAmount = _error("ZeroAmount")
-PositionNotActive = _error("PositionNotActive")
-NotOwner = _error("NotOwner")
-DebtBelowMinimum = _error("DebtBelowMinimum")
-CollateralTooLarge = _error("CollateralTooLarge")
-PriceUnusable = _error("PriceUnusable")
-IcrBelowMcr = _error("IcrBelowMcr")
-InsufficientCollateral = _error("InsufficientCollateral")
-RepayExceedsMaximum = _error("RepayExceedsMaximum")
-InsufficientBalance = _error("InsufficientBalance")
-Unauthorized = _error("Unauthorized")
-NotTriggered = _error("NotTriggered")
-AlreadySettled = _error("AlreadySettled")
-SupplyCapExceeded = _error("SupplyCapExceeded")
-WethTransferFailed = _error("WethTransferFailed")
-ERC20InsufficientBalance = _error("ERC20InsufficientBalance")
-NotLiquidatable = _error("NotLiquidatable")
-DebtAbsorbedExceedsDebt = _error("DebtAbsorbedExceedsDebt")
-CollReturnedExceedsColl = _error("CollReturnedExceedsColl")
-CollReturnedNotReceived = _error("CollReturnedNotReceived")
 
 
 @dataclass
@@ -109,6 +101,8 @@ class Vault:
     rate_per_second: int = 0
     pool_share_bps: int = 0
     has_pool: bool = True  # deployment A; B has no stability pool
+    # §3.1 / ADR-0033: range-checked immutable; the model has no gas, so it is never used
+    pool_hook_gas: int = 200_000
     # §6.2 / ADR-0033: the pool's `onInterest(offered) -> booked`. None is a pool that always
     # declines (no deposits). An exception stands for a failed guarded call (revert, out of gas,
     # malformed return); gas is not modelled, so `InsufficientGasForPoolHook` never arises here.
@@ -149,7 +143,23 @@ class Vault:
     ledger: object = field(init=False)
 
     def __post_init__(self) -> None:
-        from model.protocol.deficit_ledger import (
+        # §3.4 constructor, in argument order (0–2 are addresses the model does not carry)
+        if not WAD < self.mcr <= MAX_MCR:
+            raise InvalidParameter(3)
+        if self.min_debt < MIN_MIN_DEBT:
+            raise InvalidParameter(4)
+        if self.gas_reserve == 0:
+            raise InvalidParameter(5)
+        if self.rate_per_second > MAX_RATE_PER_SECOND:
+            raise InvalidParameter(6)
+        if self.pool_share_bps > BPS:
+            raise InvalidParameter(7)
+        if not MIN_POOL_HOOK_GAS <= self.pool_hook_gas <= MAX_POOL_HOOK_GAS:
+            raise InvalidParameter(8)
+        # §3.4 wire, argument 2: no stability pool ⇒ POOL_SHARE_BPS == 0
+        if not self.has_pool and self.pool_share_bps != 0:
+            raise InvalidParameter(2)
+        from model.protocol.deficit import (
             DeficitLedger,  # noqa: PLC0415 (it imports this module)
         )
 
@@ -165,10 +175,6 @@ class Vault:
     def ledger_deficit(self) -> int:
         return self.ledger.deficit
 
-    @ledger_deficit.setter
-    def ledger_deficit(self, value: int) -> None:  # tests only: a deficit without its history
-        self.ledger.deficit = value
-
     @property
     def ledger_recovered_coll(self) -> int:
         return self.ledger.recovered_coll
@@ -177,11 +183,8 @@ class Vault:
     def ledger_auction_debt(self) -> int:
         return self.ledger.auction_debt
 
-    @ledger_auction_debt.setter
-    def ledger_auction_debt(
-        self, value: int
-    ) -> None:  # tests only: B's auction debt without a house
-        self.ledger.auction_debt = value
+    def _emit(self, event: tuple) -> None:
+        self.events.append(event)
 
     # ---- transaction wrapper ----
     def _atomic(self, fn: Callable[[], object]) -> object:
@@ -262,7 +265,7 @@ class Vault:
                 if ok and booked:
                     to_pool = offered
                 elif not ok:
-                    self.events.append(("PoolInterestRedirected", offered))
+                    self._emit(("PoolInterestRedirected", offered))
         to_reserve = interest - to_pool
         if to_pool > 0:  # after the pool booked it
             self._mint("pool", to_pool)
@@ -270,7 +273,7 @@ class Vault:
         if to_reserve > 0:
             self._mint("ledger", to_reserve)
             self.ledger.on_interest("vault", to_reserve)
-        self.events.append(("InterestAccrued", new, interest, to_pool, to_reserve, self.now))
+        self._emit(("InterestAccrued", new, interest, to_pool, to_reserve, self.now))
 
     # ---- the pool's view of the ledger (§5.3.1 `leave`, §5.6): the pool is the caller ----
     def on_pool_dust(self, amount: int) -> None:
@@ -286,34 +289,18 @@ class Vault:
     def _debt_of(self, n: int) -> int:
         return mul_div_up(n, self.index, RAY)
 
+    # ---- redistribution internals (§6.5), in `redistribution.py` ----
     def _pending(self, p: Position) -> tuple[int, int]:
-        return (
-            mul_div_down(p.stake, self.l_coll - p.snap_l_coll, DECIMAL_PRECISION),
-            mul_div_down(p.stake, self.l_debt - p.snap_l_debt, DECIMAL_PRECISION),
-        )
+        return rd.pending(self, p)
 
     def _apply_pending(self, pid: int) -> None:
-        p = self.positions[pid]
-        pc, pn = self._pending(p)
-        if pc > 0 or pn > 0:
-            p.coll += pc
-            p.norm_debt += pn
-            self.pending_coll -= pc
-            self.pending_norm_debt -= pn
-            self.total_collateral += pc
-            self.events.append(("RewardsApplied", pid, pc, pn))
-        p.snap_l_coll, p.snap_l_debt = self.l_coll, self.l_debt
+        rd.apply_pending(self, pid)
 
     def _compute_stake(self, coll: int) -> int:
-        if self.total_stakes_snapshot == 0 or self.total_collateral_snapshot == 0:
-            return coll
-        return mul_div_down(coll, self.total_stakes_snapshot, self.total_collateral_snapshot)
+        return rd.compute_stake(self, coll)
 
     def _update_stake(self, pid: int) -> None:
-        p = self.positions[pid]
-        new = self._compute_stake(p.coll)
-        self.total_stakes = self.total_stakes - p.stake + new
-        p.stake = new
+        rd.update_stake(self, pid)
 
     def _active(self, pid: int) -> Position:
         p = self.positions.get(pid)
@@ -323,7 +310,7 @@ class Vault:
 
     def _updated(self, pid: int, op: int) -> None:
         p = self.positions[pid]
-        self.events.append(
+        self._emit(
             (
                 "PositionUpdated",
                 pid,
@@ -364,7 +351,7 @@ class Vault:
             self.sorted.insert(pid, upper, lower)
             self._weth_move(caller, "vault", _c(coll + self.gas_reserve))
             self._mint(caller, debt)
-            self.events.append(("PositionOpened", pid, caller, debt))
+            self._emit(("PositionOpened", pid, caller, debt))
             self._updated(pid, OP_OPEN)
             return pid
 
@@ -386,7 +373,7 @@ class Vault:
             self._update_stake(pid)
             self.sorted.reinsert(pid, upper, lower)
             self._weth_move(caller, "vault", amount)
-            self.events.append(("CollateralAdded", pid, caller, amount))
+            self._emit(("CollateralAdded", pid, caller, amount))
             self._updated(pid, OP_ADD_COLLATERAL)
 
         self._atomic(run)
@@ -414,7 +401,7 @@ class Vault:
             self._update_stake(pid)
             self.sorted.reinsert(pid, upper, lower)
             self._weth_move("vault", p.owner, amount)
-            self.events.append(("CollateralWithdrawn", pid, amount))
+            self._emit(("CollateralWithdrawn", pid, amount))
             self._updated(pid, OP_WITHDRAW_COLLATERAL)
 
         self._atomic(run)
@@ -439,7 +426,7 @@ class Vault:
             self._update_stake(pid)
             self.sorted.reinsert(pid, upper, lower)
             self._mint(p.owner, amount)
-            self.events.append(("Borrowed", pid, amount, dn))
+            self._emit(("Borrowed", pid, amount, dn))
             self._updated(pid, OP_BORROW)
 
         self._atomic(run)
@@ -463,7 +450,7 @@ class Vault:
             self._update_stake(pid)
             self.sorted.reinsert(pid, upper, lower)
             self._burn(caller, amount)
-            self.events.append(("Repaid", pid, caller, amount, dn))
+            self._emit(("Repaid", pid, caller, amount, dn))
             self._updated(pid, OP_REPAY)
 
         self._atomic(run)
@@ -490,7 +477,7 @@ class Vault:
             p.status = Status.CLOSED_BY_OWNER
             self._burn(caller, debt)
             self._weth_move("vault", caller, coll + self.gas_reserve)
-            self.events.append(("PositionClosed", pid, debt, coll, self.gas_reserve))
+            self._emit(("PositionClosed", pid, debt, coll, self.gas_reserve))
             self._updated(pid, OP_CLOSE)
 
         self._atomic(run)
@@ -541,7 +528,7 @@ class Vault:
                     self.ledger.record_deficit("vault", debt_rest, returned)
                     path = PATH_DEFICIT
             self._update_system_snapshots()
-            self.events.append(
+            self._emit(
                 (
                     "Liquidated",
                     pid,
@@ -562,40 +549,10 @@ class Vault:
         return self._atomic(run)
 
     def _redistribute(self, coll_r: int, norm_r: int) -> None:
-        """§6.5.2, R9: floor division with error carry. Precondition total_stakes > 0."""
-        stakes = self.total_stakes
-        coll_num = _c(coll_r * DECIMAL_PRECISION + self.last_error_coll)
-        norm_num = _c(norm_r * DECIMAL_PRECISION + self.last_error_debt)
-        d_coll, d_debt = coll_num // stakes, norm_num // stakes
-        self.last_error_coll = coll_num - d_coll * stakes
-        self.last_error_debt = norm_num - d_debt * stakes
-        self.l_coll = _c(self.l_coll + d_coll)
-        self.l_debt = _c(self.l_debt + d_debt)
-        self.pending_coll += coll_r
-        self.pending_norm_debt += norm_r
-        self.events.append(
-            (
-                "Redistributed",
-                coll_r,
-                norm_r,
-                self.l_coll,
-                self.l_debt,
-                self.last_error_coll,
-                self.last_error_debt,
-                stakes,
-            )
-        )
+        rd.redistribute(self, coll_r, norm_r)
 
     def _update_system_snapshots(self) -> None:
-        """§6.5.4: reset when no stake is left."""
-        if self.total_stakes == 0:
-            self.total_stakes_snapshot = self.total_collateral_snapshot = 0
-        else:
-            self.total_stakes_snapshot = self.total_stakes
-            self.total_collateral_snapshot = self.total_collateral + self.pending_coll
-        self.events.append(
-            ("SystemSnapshotsUpdated", self.total_stakes_snapshot, self.total_collateral_snapshot)
-        )
+        rd.update_system_snapshots(self)
 
     # ---- §5.1.9 / §6.7.3 ----
     def redeem_collateral(
@@ -651,7 +608,7 @@ class Vault:
                 self._update_stake(cur)
                 self.sorted.reinsert(cur, prv, nxt)
                 burned, coll_out = burned + d, coll_out + out
-                self.events.append(("PositionRedeemed", cur, d, out, 0, False))
+                self._emit(("PositionRedeemed", cur, d, out, 0, False))
                 self._updated(cur, OP_REDEEM)
                 break  # a partial is always the last step
             self._burn(redeemer, burned)
@@ -673,7 +630,7 @@ class Vault:
         p.coll = p.norm_debt = p.stake = 0
         p.status = Status.CLOSED_BY_REDEMPTION
         self._weth_move("vault", p.owner, surplus + self.gas_reserve)
-        self.events.append(("PositionRedeemed", pid, debt, out, surplus, True))
+        self._emit(("PositionRedeemed", pid, debt, out, surplus, True))
         self._updated(pid, OP_REDEEM)
         return out
 
@@ -688,7 +645,7 @@ class Vault:
             p.status = Status.CLOSED_BY_SHUTDOWN
             self.active_count -= 1
             self._weth_move("vault", p.owner, self.gas_reserve)
-            self.events.append(("GasReserveReclaimed", pid, p.owner, self.gas_reserve))
+            self._emit(("GasReserveReclaimed", pid, p.owner, self.gas_reserve))
             self._updated(pid, OP_CLOSE)
 
         self._atomic(run)
@@ -700,7 +657,7 @@ class Vault:
             if self.shutdown:
                 raise SystemShutdown()
             self.shutdown = True
-            self.events.append(("VaultShutdown", self.index))
+            self._emit(("VaultShutdown", self.index))
 
         self._atomic(run)
 
@@ -717,7 +674,7 @@ class Vault:
             self.pending_coll = 0
             self.settled = True
             self._weth_move("vault", self.shutdown_module, coll)
-            self.events.append(("VaultSettled", coll, self.active_count))
+            self._emit(("VaultSettled", coll, self.active_count))
             return coll
 
         return self._atomic(run)

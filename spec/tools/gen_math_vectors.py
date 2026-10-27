@@ -3,10 +3,10 @@
     uv run python spec/tools/gen_math_vectors.py            # writes spec/generated/math_random.json
 
 Expected values are computed here with `fractions.Fraction` and an independent transcription of
-the spec's rpow (§2.3) — deliberately NOT by importing model/math.py — so the Solidity library and
-the Python model are both checked against a third implementation. The output is used by the
-Foundry and pytest suites. It is deliberately outside spec/vectors/ (protected, human-approved):
-promoting it there would go through /spec-change.
+the spec's rpow (§2.3) — deliberately NOT by importing model/protocol/math.py — so the Solidity
+library and the Python model are both checked against a third implementation. The output is used
+by the Foundry and pytest suites. It is deliberately outside spec/vectors/ (protected,
+human-approved): promoting it there would go through /spec-change.
 """
 
 from __future__ import annotations
