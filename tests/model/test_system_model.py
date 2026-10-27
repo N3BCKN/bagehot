@@ -194,6 +194,45 @@ def test_settlement_failure_rolls_the_vault_hook_back() -> None:
     assert not s.vault.settled and not s.ledger.settled
 
 
+def test_erc20_transfer_returns_true_like_oz() -> None:
+    s = _sys()
+    assert s.transfer_weth("alice", "bob", 1, now=s.now).value is True
+    s.open_position("alice", 3 * E18, 3_333 * E18, now=s.now)
+    assert s.transfer("alice", "bob", 1, now=s.now).value is True
+
+
+@pytest.mark.parametrize("name", System.HOOKS)
+def test_hook_from_anyone_but_the_wired_caller_reverts_unauthorized(name: str) -> None:
+    s = _sys()
+    s.open_position("alice", 3 * E18, 3_333 * E18, now=s.now)
+    args = (
+        ("alice", 1_000 * E18, WAD // 200, 2_000 * E18, 3, 0, 0)
+        if name == "redeemCollateral"
+        else ()
+    )
+    pre = s.snapshot()
+    with pytest.raises(er.Unauthorized):
+        s.hook("alice", name, *args, now=s.now)
+    assert s.snapshot() == pre
+
+
+def test_hook_from_the_stand_in_out_of_phase_reverts_with_the_phase_error() -> None:
+    s = _sys()
+    t = s.now
+    s.open_position("alice", 3 * E18, 3_333 * E18, now=t)
+    with pytest.raises(er.NotTriggered):
+        s.hook(SHUTDOWN, "onSettlement", now=t)
+    s.trigger_shutdown(now=t)
+    with pytest.raises(er.SystemShutdown):
+        s.hook(SHUTDOWN, "onShutdown", now=t)
+    s.settle(now=t)
+    pre = s.snapshot()
+    for name in ("onSettlement", "ledgerOnSettlement"):
+        with pytest.raises(er.AlreadySettled):
+            s.hook(SHUTDOWN, name, now=t)
+    assert s.snapshot() == pre
+
+
 def test_a_revert_after_a_position_changed_restores_it_from_the_journal() -> None:
     """`borrow` applies pending rewards (writing the stored position) and only then fails its MCR
     check: the journal must put every field back, and be empty once the transaction is over."""

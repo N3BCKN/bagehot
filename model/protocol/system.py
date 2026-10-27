@@ -289,11 +289,13 @@ class System:
             lambda: self._erc20("weth", caller, to, amount),
         )
 
-    def _erc20(self, token: str, caller: str, to: str, amount: int) -> None:
+    def _erc20(self, token: str, caller: str, to: str, amount: int) -> bool:
+        """ERC-20 `transfer`: returns true or reverts (OZ v5)."""
         (self.weth if token == "weth" else self.token).transfer(caller, to, amount)
         if to in CORE_ACCOUNTS:
             d = self.donated[token]
             d[to] = d.get(to, 0) + amount
+        return True
 
     # ---- OracleAdapter (§5.7): anyone may record a read ----
     def fetch_price(self, caller: str, *, now: int) -> Receipt:
@@ -438,6 +440,23 @@ class System:
         receipt = self._tx("settle", SHUTDOWN, (), now, lambda: self.vault._atomic(run))
         self.claim_coll = receipt.value  # the claim pool's WETH (§6.11.3), fixed from now on
         return receipt
+
+    # ---- one hook as its own transaction, from any caller (§9; the differential's checks) ----
+    HOOKS = ("onShutdown", "onSettlement", "ledgerOnSettlement", "redeemCollateral")
+
+    def hook(self, caller: str, name: str, *args: int | str, now: int) -> Receipt:
+        """A single wired-only call made directly: `VaultManager.onShutdown` / `onSettlement` /
+        `redeemCollateral(redeemer, amount, feeRate, price, maxIterations, upper, lower)` or
+        `DeficitLedger.onSettlement`. From anyone but the wired caller it reverts `Unauthorized`;
+        from the stand-in ShutdownModule out of phase, with the phase error. No accrual."""
+        v, led = self.vault, self.ledger
+        calls: dict[str, Callable[[], object]] = {
+            "onShutdown": lambda: v.on_shutdown(caller),
+            "onSettlement": lambda: v.on_settlement(caller),
+            "ledgerOnSettlement": lambda: led.on_settlement(caller),
+            "redeemCollateral": lambda: v.redeem_collateral(caller, *args),
+        }
+        return self._tx(name, caller, args, now, lambda: v._atomic(calls[name]))
 
     # ---- canonical state ----
     def snapshot(self) -> dict:
