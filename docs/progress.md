@@ -27,7 +27,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | P20 | Liquidation via pool and redistribution | done | 2026-10-26 | `liquidate` (§6.4.1) with redistribution, snapshot reset and the no-stakes deficit; CHG-012's checks; Python mirror; all 9 liquidation/redistribution vectors bit-for-bit on both sides; unit tests (every revert and path, T-10, T-26, T-27, P17-H1 equivalence, CHG-006's liquidation case, the review's gaps); the core campaign liquidates for real in A and B (I4, I6, I7 per liquidation; I2 per CHG-011); smoke test liquidates on a fresh anvil; **nightly green** (4,096 runs × 500, A and B); security-reviewer: no critical/high. Open: the CHG-010/011/013 spec and invariant texts (approved, await the unlock), CHG-014 and CHG-015 (proposed), a per-path liquidation gas measurement for P24's cost model. |
 | P21 | DeficitLedger and invariant extension | done | 2026-10-27 | `DeficitLedger` (§4.7, §5.6, §6.9, §6.11.3) replaces the stand-in in the factory, the fixtures and the core campaign; the model's Vault owns the real ledger model; full I1 per holder, I2 with deficit, I4/I6/I7 by name with event provenance; nightly green at `6284252`; Medusa 2 h green at `9c191d6` (15/15, 6.08M calls); security-reviewer: no critical/high; spec-auditor re-audit: every stage-3 gap closed except CHG-016 (text, awaits approval) and the P33/ShutdownModule-dependent items (P21-DEF). |
 | P22 | Python protocol model | done | 2026-10-27 | `model/protocol/` laid out as the prompt lists (errors named like the Solidity errors, events with one ordered cross-contract log, explicit WETH/StableToken balances with `Transfer`, redistribution extracted, `system.py`); every operation atomic across all contracts with explicit `now`; canonical `snapshot()`; `check_invariants()` for I1–I9, I11–I15 (I10 → ShutdownModule prompt, I16 → P34); all 18 variant-A system vectors replayed with invariants after each step; Hypothesis state machine green (quick 100 runs, nightly 2,000 runs); benchmark 21,317 ops/s at 1,000 positions; spec-auditor: model and Solidity agree everywhere, its eight checker/coverage gaps fixed; CHG-017 (I8 text) proposed. |
-| P23 | Differential testing harness | todo | | |
+| P23 | Differential testing harness | done locally; CI runtime pending | 2026-10-27 | `differential/` drives deployment A on anvil (`DiffDeploy.s.sol` → `Deploy.deploy`) and the model in lockstep: one block per step, outcome + revert name, return value, events and the full snapshot compared at zero tolerance, model invariants after every step; one list of allowed differences with reasons (`allowed.py`); quick 40×30 green in 60 s locally, **nightly 2,000×40 green at `d003bef`** (68 min); no model/chain mismatch found; spec-auditor: no critical, its findings fixed (panic parity, mempool leak, oracle rows, hints, hooks, return values, S/G range). Open: P23-CI (quick-profile runtime on a CI runner). |
 | P24 | Oracle and cost models | todo | | |
 | P25 | Fork liquidity measurement and slippage model | todo | | |
 | P26 | Borrower and depositor agents | todo | | |
@@ -54,6 +54,54 @@ Claude updates this file at the end of every session. Status: todo · in progres
 ## Session log
 
 <!-- newest first: date · prompt · what changed · decisions · next -->
+
+### 2026-10-27 · P23 · Differential testing harness
+
+**Changed.** `contracts/script/DiffDeploy.s.sol` deploys variant A through the audited `Deploy.deploy`
+on chain 31337 with unlocked accounts (no key handled) and writes no manifest. `differential/`:
+`chain.py` (session anvil, automine off, one block per model step at the model's `now`, receipts,
+revert names from every ABI with `WethTransferFailed` taken from the call trace, return values from
+the call trace, `snapshot()` in two JSON-RPC batches in `System.snapshot()`'s shape), `pair.py`
+(the model built from the deployed immutables, feeds and funding; `step` compares outcome, return
+value, events and full state, then the model's invariants), `machine.py` (Hypothesis state machine:
+every operation, warp, price moves, crashes, `undercut` to just below a position's MCR threshold,
+§6.10.1 rows 1–10, hints drawn from the model's list, actors calling wired-only hooks, the stand-in
+out of phase, settlement), `allowed.py` (the single list: `EXCLUDED_EVENTS` Approval and Wired,
+`REVERT_NAMES` for panics, `NOT_GENERATED` with a reason and the covering tests per entry),
+`conftest.py` (profiles `quick` 40×30 and `nightly` 2,000×40; the seed fixed up front and printed on
+failure). Model: `System.hook` (single wired-only calls from any caller) and ERC-20 `transfer`
+returns true — both needed for the comparison, both unit-tested.
+
+**Decisions** (human, plan approval): the forge script reusing `Deploy.deploy`; events compared, with
+Approval excluded and documented; regressions as step-sequence tests; JSON-RPC batching (Multicall
+not needed); one explicit list of allowed differences. P22-DIFF-WIRED and P22-DIFF-PANIC are
+implemented (wiring never generated, reasons in the machine docstring and `NOT_GENERATED`; panics
+compared by code).
+
+**Found.** No model/Solidity mismatch, so `differential/test_regressions.py` does not exist yet. The
+harness itself had faults, all fixed with tests (`differential/test_pair.py`, 10 tests, each showing
+a comparison can fail): the spec-auditor found that model panics (`Overflow`, an `ArithmeticError`)
+escaped the step instead of comparing as `Panic(0x11)`, and that a step aborted after its feed
+transactions left them in anvil's mempool to land in the next example (now dropped on reset;
+the test fails without the drop); one allowed-list reason was false (MockSequencerFeed does have a
+revert mode — sequencer revert is now generated); oracle rows 3, 4, 7 and 9, hints, wired-only
+callers and return values were not compared and are now; S/G slots are read from the chain's
+largest scale, not the model's keys. The return-value check found the model's ERC-20 `transfer`
+returned nothing (fixed). Reach was too thin at first (one liquidation per 4,000 steps); `undercut`
+and a liquidatable-first `liquidate` fixed it.
+
+**Reach** (100 examples × 40 steps, one sample): liquidations on all three paths (full absorption,
+partial offset with `Redistributed`/`RewardsApplied`, no-stakes deficit), pool offsets and interest,
+full and partial redemptions, deficit cover, shutdown, `Unauthorized`/`NotTriggered` hooks, oracle
+failures and recoveries; 40+ distinct revert names compared. Settlement and reclaim occur at lower
+frequency (seen in other samples; 2,000-example nightly).
+
+**Runtime.** About 70 ms per step locally (anvil RPCs dominate). Quick: 60 s. Nightly: 68 min awake;
+an earlier 9 h 19 min run was the laptop asleep with the lid closed (pmset log), not the harness.
+The nightly job's 300-minute timeout leaves about 4× headroom for a slower runner.
+
+**Next.** The human re-protects the spec files (action 12) and permits a push so the quick profile's
+runtime is measured on a CI runner (P23-CI). Then P24.
 
 ### 2026-10-27 · P22 · Python protocol model
 
@@ -1247,8 +1295,8 @@ obligations a later prompt must carry that are not in that prompt's text yet (ro
 | P22-VEC-B | **Python model, deployment-B vectors (P34):** `auction.json#start_and_price`, `auction.json#partial_dust_and_paid`, `auction.json#reset_tip_and_exhaustion`, `deficit.json#shortfall_then_cover` and `drift.json#sequence_B` are not replayed by the model yet — it has no auction house. P34 adds variant B to `System` and moves these into `tests/model/test_vectors_system.py`, then deletes them from this row. `test_every_vector_case_is_replayed_or_deferred` fails unless every vector case is either run or listed in this table. | P34 |
 | P22-VEC-SM | **Python model, ShutdownModule vector:** `shutdown.json#pro_rata_claims` (claims, I10) waits for the ShutdownModule model; same mechanism as P22-VEC-B. | ShutdownModule prompt |
 | P22-SM | **Test stand-in to re-validate (same category as P17-H2): `System.trigger_shutdown` / `settle`** call the hooks as the wired shutdown address does in the core campaign (accrue then `onShutdown`; `VaultManager.onSettlement` then `DeficitLedger.onSettlement`), and `make_gate` stands in for `belowCritical`. The ShutdownModule prompt replaces both with the real module's model and re-runs `tests/model/test_system_model.py`, `test_invariants_model.py` and the state machine. | ShutdownModule prompt |
-| P22-DIFF-WIRED | **P23 must exclude the not-wired paths on purpose (human condition, 2026-10-27).** The model builds the wired graph whole (as `BagehotFactory` does), so `NotWired`, `AlreadyWired` and `NotDeployer` cannot arise in it. The differential harness must never generate a call to an unwired contract, a `wire` call, or a call from the deployer before wiring, and must state why in its module docstring and in its rule list — a sequence that reached `NotWired` on the Solidity side with nothing on the Python side would be a false mismatch. Those paths stay covered by Foundry (`test_wire_*`, `MisWiredFactory`). | P23 |
-| P22-DIFF-PANIC | **P23 revert parity (P22 re-audit, lows 2 and 6):** the model names Solidity's `Panic(0x11)` two ways (`Overflow` from checked arithmetic, `Underflow` from checked subtraction) and `Panic(0x12)` as `DivisionByZero`; the harness compares panics by code, mapping both 0x11 names to one. Deployment failures (several bad constructor arguments at once: the model checks `CRITICAL_TCR` first, the factory deploys the ShutdownModule last) are out of the differential's scope, which starts from a valid deployment. | P23 |
+| P22-DIFF-WIRED | **Done at P23** (`differential/allowed.py` `NOT_GENERATED["wiring"]`, `machine.py` docstring). **P23 must exclude the not-wired paths on purpose (human condition, 2026-10-27).** The model builds the wired graph whole (as `BagehotFactory` does), so `NotWired`, `AlreadyWired` and `NotDeployer` cannot arise in it. The differential harness must never generate a call to an unwired contract, a `wire` call, or a call from the deployer before wiring, and must state why in its module docstring and in its rule list — a sequence that reached `NotWired` on the Solidity side with nothing on the Python side would be a false mismatch. Those paths stay covered by Foundry (`test_wire_*`, `MisWiredFactory`). | P23 |
+| P22-DIFF-PANIC | **Done at P23** (`allowed.REVERT_NAMES`, `pair.REVERTS`, `test_a_model_panic_is_compared_as_a_revert`). **P23 revert parity (P22 re-audit, lows 2 and 6):** the model names Solidity's `Panic(0x11)` two ways (`Overflow` from checked arithmetic, `Underflow` from checked subtraction) and `Panic(0x12)` as `DivisionByZero`; the harness compares panics by code, mapping both 0x11 names to one. Deployment failures (several bad constructor arguments at once: the model checks `CRITICAL_TCR` first, the factory deploys the ShutdownModule last) are out of the differential's scope, which starts from a valid deployment. | P23 |
 
 ## Open issues
 
@@ -1304,6 +1352,7 @@ obligations a later prompt must carry that are not in that prompt's text yet (ro
 | CHG-016 | **Closed 2026-10-27: approved by the human (option A) and written to the spec.** Proposed 2026-10-26 (P21 spec audit L3–L5): spec text only — §5.10 marks the ledger's single-caller hooks lock-free, §11.2 lists `AlreadySettled` in both `onSettlement`s, §6.11.3's ledger settlement pseudocode follows the code's CEI order. | — | no |
 | CHG-017 | **Approved by the human 2026-10-27 (option 1).** I8's `Σ_active pendingColl(p) ≤ pendingColl` cannot hold after settlement (`onSettlement` zeroes the bucket while positions keep their snapshots): the collateral half is live and window only, the debt half every phase. Python `check_I8` and Foundry `checkI8` apply it (Foundry checked neither half after settlement before; `test_I8_afterSettlement_checksTheDebtHalfOnly`). **Closed 2026-10-27:** the `docs/invariants.md` I8 text written. | — | no |
 
+| P23-CI | The quick differential profile's runtime must be measured on a CI runner (human condition: the 5-minute budget applies there, not locally). Locally 60 s for 40×30. Needs a push / PR, which the human approves. | human | closes P23 |
 ## Human actions required
 
 <!-- things only the human can do: approvals, secrets, broadcasts -->
