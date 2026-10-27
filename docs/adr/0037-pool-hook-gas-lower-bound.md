@@ -1,6 +1,6 @@
 # ADR-0037: `POOL_HOOK_GAS` may not be set below 175,000
 
-- Status: proposed 2026-10-27 (records CHG-013, approved by the human 2026-10-26)
+- Status: accepted 2026-10-27 (human); proposed the same day (records CHG-013, approved by the human 2026-10-26)
 - Date: 2026-10-27
 - Prompt: P19 (security review, finding L-1); spec text applied at P21's close
 - Supersedes: —

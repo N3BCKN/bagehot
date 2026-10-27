@@ -532,11 +532,18 @@ missing.
 **Formula.** The §10.3 inequalities, at every step:
 
 ```
-Σ_active pendingColl(p) ≤ pendingColl ,  Σ_active pendingNorm(p) ≤ pendingNormDebt
+Σ_active pendingColl(p) ≤ pendingColl            (live and window — see below)
+Σ_active pendingNorm(p) ≤ pendingNormDebt        (every phase)
 Σ_depositors compoundedDeposit ≤ totalDeposits
 Σ_depositors collGain ≤ collGainsBalance ,  Σ_depositors interestGain ≤ interestGainsBalance
 Σ claims paid ≤ claimColl
 ```
+
+**The collateral half stops at settlement** (CHG-017): `onSettlement` moves `pendingColl` into the
+claim pool and zeroes it, while positions keep their stakes and snapshots (§5.1.11), so a position
+that had pending collateral still reports it against an empty bucket. The WETH is not missing — it is
+in `claimColl`, which I1's settled rows and I10 account for. `pendingNormDebt` is not touched, so the
+debt half holds in every phase.
 
 **The unwind check** (`afterInvariant`), stated as a procedure because the phases differ and
 several exits are legal only in some of them:

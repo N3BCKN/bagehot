@@ -1,7 +1,7 @@
 # CHG-017: I8's pending-collateral inequality cannot hold after settlement
 
-- Status: **proposed**, 2026-10-27 (P22 spec audit of the Python model, finding 4). Needs the human's
-  approval and the protected-paths unlock of `docs/invariants.md`.
+- Status: **approved by the human 2026-10-27** (option 1; proposed the same day, P22 spec audit of the
+  Python model, finding 4). Model, Foundry and the invariants text applied 2026-10-27.
 - Affects: `docs/invariants.md` I8 ("Formula", the first line). No spec algorithm, contract, model or
   vector change.
 
@@ -67,5 +67,7 @@ debt half holds in every phase.
 
 - `docs/invariants.md` I8 only.
 - Python model: `model.invariants.check_I8` already implements option 1.
-- Foundry: `CoreHandler.checkI8` should check the debt half after settlement (follow-up test change).
+- Foundry: `CoreHandler.checkI8` checks the debt half after settlement (it returned early before);
+  `CoreHandlerPhasesTest.test_I8_afterSettlement_checksTheDebtHalfOnly` fails without the change.
+  Foundry's coverage gets stronger, not weaker.
 - Spec, contracts, vectors, differential, experiments: none.

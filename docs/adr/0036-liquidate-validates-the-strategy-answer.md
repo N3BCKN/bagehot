@@ -1,6 +1,6 @@
 # ADR-0036: `liquidate` validates the strategy's answer, including the collateral it returns
 
-- Status: proposed 2026-10-27 (records CHG-012, approved by the human 2026-10-26 as P20 decision d,
+- Status: accepted 2026-10-27 (human); proposed the same day (records CHG-012, approved by the human 2026-10-26 as P20 decision d,
   and CHG-014, approved 2026-10-26 under the human's delegation)
 - Date: 2026-10-27
 - Prompt: P20 (CHG-012, security review P20-L1 → CHG-014); spec text applied at P21's close
