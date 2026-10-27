@@ -133,8 +133,17 @@ handler increments from emitted events, not from its own model of what happened:
 | Counter | Incremented by | Event it is read from |
 |---|---|---|
 | `gN` | every accrual with `dt > 0`, whether or not `interest > 0` | `InterestAccrued` |
-| `gX` | `openPosition`, `borrow`; each partial repay, partial redemption, partial pool offset | `PositionUpdated` with `op ∈ {OP_OPEN, OP_BORROW, OP_REPAY}` only — the same event fires for `addCollateral`, `withdrawCollateral` and `liquidate`, which contribute 0 — plus `PositionRedeemed(closed=false)` and `PoolOffset` leaving `totalDeposits > 0` |
-| `gY` | `close`; each full redemption; each full pool offset; each auction start; each no-stakes deficit record | `PositionUpdated(OP_CLOSE)`, `PositionRedeemed(closed=true)`, `PoolOffset` leaving `totalDeposits == 0`, `AuctionStarted`, `DeficitRecorded(source=NO_STAKES)` |
+| `gX` | `openPosition`, `borrow`; each partial repay, partial redemption, partial pool offset | `PositionUpdated` with `op ∈ {OP_OPEN, OP_BORROW, OP_REPAY}` only — the same event fires for `addCollateral`, `withdrawCollateral` and `liquidate`, which contribute 0 — plus `PositionRedeemed(closed=false)` and `Liquidated` with `0 < debtAbsorbed < debt` |
+| `gY` | `close`; each full redemption; each full pool offset; each auction start; each no-stakes deficit record | `PositionUpdated(OP_CLOSE)`, `PositionRedeemed(closed=true)`, `Liquidated` with `debtAbsorbed == debt` in deployment A, `AuctionStarted`, `DeficitRecorded(source=NO_STAKES)` |
+
+**Partial and full are properties of the position, not of the pool** (§10.2): a pool offset is
+*full* when it absorbs the liquidated position's whole debt (`debtAbsorbed == debt`; `n` falls by
+`nᵢ`, ΔE ∈ `[0, RAY)`) and *partial* when it absorbs less (`n` falls by `⌊a·RAY/I⌋`, R34, ΔE ∈
+`[0, I)`), whatever `totalDeposits` is afterwards. A partial absorption always empties the pool and
+a full one usually does not, so keying on `totalDeposits` — as this table did until CHG-011 — counts
+the partial case against `RAY` where its error can reach `I > RAY`. In deployment B the house's
+`onLiquidation` returns `debtAbsorbed == debt` and the auction start is counted by `AuctionStarted`,
+so `Liquidated` is not counted there (one sub-effect, one count).
 
 **An offset of zero adds nothing** (§10.2) — `dP == 0` emits no `PoolOffset`, so the
 event-driven rule gets this right automatically. Redistribution, applying pending rewards, auction
@@ -194,13 +203,26 @@ accumulates at each event:
 ```
 |gExactCollGain[a] − collGain(a)|  ≤  T_j / DECIMAL_PRECISION
                                       + Σ_{offset events k since snapshot} (T_k / DECIMAL_PRECISION + 1)
-|gExactInterestGain[a] − interestGain(a)|  ≤  same form over interest events
+                                      + Σ_{offset events k since snapshot, booked while
+                                          currentScale > snapScale(a) + SCALE_SPAN} c_k · gExactShare_k[a] / T_k
+|gExactInterestGain[a] − interestGain(a)|  ≤  the same form over interest events, with g_k for c_k
 ```
 
 summed over the events **since the depositor's last snapshot** — `deposit`, `withdraw` and
 `claimGains` all re-snapshot (§6.6.8) — where `T_k` is `totalDeposits` at event k: it changes at
 every event, so this is a sum, not a count times a constant. Interest events (§6.6.5, R15) have the
 same structure as offsets and are counted the same way.
+
+**The ignored-scales term.** §6.6.7 ignores gains booked while `currentScale > snapScale +
+SCALE_SPAN`; the depositor's remaining fraction there is at most `10^-18` of its deposit, but what
+that remainder would have earned is never paid to it — it stays in `collGainsBalance` /
+`interestGainsBalance` as inert dust, so the totals stay exact. The last term is exactly the
+depositor's exact share of those gains, with `gExactShare_k[a]` its rational share at event `k`. For
+collateral it is small (`c ≤ T`, §6.6.3, keeps the per-unit gain near 1). For interest it is not: an
+interest event credits `g / T` per wei, and after a near-emptying offset `T` can be small while `g`
+is the pool's share of interest on the system's whole debt. Measured by the P19 precision study:
+up to 2.1·10^13 wei. Counterexample to the bound without this term: seed 190022 in
+`tests/model/test_sp_precision.py` (CHG-010).
 
 **The leading term is not optional.** `offset()` never clears `lastCollError` — it survives a full
 offset, an epoch change and a complete emptying of the pool (§6.6.2) — so the carry paid out at the
@@ -232,7 +254,9 @@ inequalities and the `P` range only. **The two attribution bounds are checked in
 and the differential, not in Foundry:** they compare against exact rationals, which Solidity cannot
 carry, and approximating them with scaled integers would put a second, undeclared tolerance inside
 a tolerance check. Python: `model.invariants.check_I3(state)` for the integer inequalities and the `P` range, and
-`model.invariants.check_I3_attribution(state, exact)` for the two bounds, where `exact` holds the
+`model.invariants.check_I3_attribution(state, exact)` for the two bounds, and the P19 precision study
+`model/tools/sp_precision.py` (200 sequences × 300 steps; its integer model replayed bit-for-bit
+against the contract by `StabilityPoolPrecisionTest`), where `exact` holds the
 `fractions.Fraction` accumulators. Medusa `property_I3_poolSolvency`; Halmos
 `check_I3_proRataSumBounded` (one offset, symbolic deposits); differential: `P`, `currentScale`,
 `currentEpoch`, `S` and `G` compared exactly; monitor: alert if `P` falls within 10× of `P_MIN`.

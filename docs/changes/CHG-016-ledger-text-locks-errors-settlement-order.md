@@ -1,7 +1,6 @@
 # CHG-016: DeficitLedger text — lock-free hooks, `AlreadySettled` locations, settlement step order
 
-- Status: **proposed**, 2026-10-26 (P21 stage-3 spec audit, findings L3, L4, L5). Needs the human's
-  approval and the protected-paths unlock of `docs/spec.md`.
+- Status: **approved by the human 2026-10-27** (option A; proposed 2026-10-26, P21 stage-3 spec audit, findings L3, L4, L5). **Applied 2026-10-27:** spec/invariant text written.
 - Affects: `docs/spec.md` §5.10, §11.2, §6.11.3 (text only). No code, model, vector or invariant change.
 
 ## Problem

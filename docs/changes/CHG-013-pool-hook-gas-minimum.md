@@ -1,6 +1,6 @@
 # CHG-013: `POOL_HOOK_GAS`'s lower bound must satisfy CHG-006's own rule
 
-- Status: **approved by the human 2026-10-26** ("aproved, files unlocked, please proceed"; proposed the same day, P19 security review, finding L-1). Code, model and tests applied; the spec/invariant text awaits the protected-paths unlock.
+- Status: **approved by the human 2026-10-26** ("aproved, files unlocked, please proceed"; proposed the same day, P19 security review, finding L-1). Code, model and tests applied. **Applied 2026-10-27:** spec/invariant text written (ADR-0037).
 - Affects: `docs/spec.md` §3.1 (`POOL_HOOK_GAS` range) and §3.4 (VaultManager index 8); the
   VaultManager constant `MIN_POOL_HOOK_GAS`; the constructor-range test; `StabilityPoolGasTest`
   (asserts the minimum too). No model or vector change.

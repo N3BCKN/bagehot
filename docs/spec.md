@@ -37,7 +37,7 @@ A collateralised-debt protocol issuing a USD-pegged stablecoin (`StableToken`) a
 |---|---|---|
 | Strategy contract | `StabilityPool` | `DutchAuctionHouse` |
 | Liquidation | Pool burns deposits against the debt, receives collateral worth at most debt × (1 + penalty); surplus returns to the owner | Whole collateral is auctioned on a decaying curve; buyers repay debt then penalty; leftover collateral returns to the owner |
-| Remainder the strategy cannot absorb | Redistributed to all other positions; deficit only if no other position exists | Auction shortfall goes to the deficit ledger |
+| Remainder the strategy cannot absorb | Redistributed to all other positions; deficit only if no other position holds a stake | Auction shortfall goes to the deficit ledger |
 | Interest | `POOL_SHARE_BPS` to pool depositors, the rest to the reserve | All to the reserve |
 | Penalty proceeds | To pool depositors (part of the seized collateral) | To the reserve |
 
@@ -253,7 +253,7 @@ where each one started.
 | `ANNUAL_RATE` | (deployment script) | decimal | `[0, 1]` | `0.05` | H | Annual compounded interest rate |
 | `RATE_PER_SECOND` | VaultManager | RAY | `[0, 21_979_553_151_239_153_028]` (= the derived value for `ANNUAL_RATE = 1`) | `1_547_125_957_863_212_449` | D | `round_half_even(((1 + ANNUAL_RATE)^(1/31_536_000) − 1) · RAY)` at ≥ 80 significant digits |
 | `POOL_SHARE_BPS` | VaultManager | bps | `[0, 10_000]` | `7_500` (A), `0` (B) | H | Share of accrued interest minted to the pool (A); must be 0 in B |
-| `POOL_HOOK_GAS` | VaultManager | gas | `[50_000, 1_000_000]` | `200_000` | E | Gas forwarded to the stability pool's `onInterest` in accrual (§6.2, ADR-0033). Derived at P19 from the real pool's worst-case `onInterest` — every slot cold, a fresh `(epoch, scale)` sum `G`, the carry and `interestGainsBalance` written from zero — measured at 86,981 gas including the cold account access (`StabilityPoolGasTest`); the value is at least twice that, rounded up. The post-failure floor `ceil(2·POOL_HOOK_GAS / 63)` (6,350) is derived, not a parameter. Range-checked but unused in B |
+| `POOL_HOOK_GAS` | VaultManager | gas | `[175_000, 1_000_000]` | `200_000` | E | Gas forwarded to the stability pool's `onInterest` in accrual (§6.2, ADR-0033). Derived at P19 from the real pool's worst-case `onInterest` — every slot cold, a fresh `(epoch, scale)` sum `G`, the carry and `interestGainsBalance` written from zero — measured at 86,981 gas including the cold account access (`StabilityPoolGasTest`); the value is at least twice that, rounded up. The post-failure floor `ceil(2·POOL_HOOK_GAS / 63)` (6,350) is derived, not a parameter. Range-checked but unused in B. The lower bound is CHG-006's rule applied to that measurement (≥ 2 × 86,981 = 173,962, CHG-013); re-measure if `onInterest` changes |
 | `MAX_HINT_STEPS` | SortedPositions | count | `[1, 1_000]` | `30` | E | Maximum nodes visited by a hint walk (§6.3) |
 | `LIQUIDATION_PENALTY` | StabilityPool / DutchAuctionHouse | WAD | `[0, 0.5e18]` | `0.05e18` | H | A: cap on seized value is debt × (1 + penalty). B: tab = debt × (1 + penalty). Equal in A and B |
 | `MIN_DEPOSIT` | StabilityPool | stable wei | `≥ 1e18` | `1e18` | H | Minimum non-zero deposit; minimum total deposits for the pool to receive interest |
@@ -333,7 +333,7 @@ the table says otherwise. `wire` first checks `msg.sender == deployer` (`NotDepl
 
 | Contract | Signature (argument index: check) |
 |---|---|
-| VaultManager | `constructor(address weth, address token, address oracle, uint256 MCR, uint256 MIN_DEBT, uint256 GAS_RESERVE, uint256 RATE_PER_SECOND, uint256 POOL_SHARE_BPS, uint256 POOL_HOOK_GAS)` — 3: `WAD < MCR ≤ 2·WAD`; 4: `≥ 1e18`; 5: `> 0`; 6: `≤ 21_979_553_151_239_153_028`; 7: `≤ 10_000`; 8: `50_000 ≤ x ≤ 1_000_000` |
+| VaultManager | `constructor(address weth, address token, address oracle, uint256 MCR, uint256 MIN_DEBT, uint256 GAS_RESERVE, uint256 RATE_PER_SECOND, uint256 POOL_SHARE_BPS, uint256 POOL_HOOK_GAS)` — 3: `WAD < MCR ≤ 2·WAD`; 4: `≥ 1e18`; 5: `> 0`; 6: `≤ 21_979_553_151_239_153_028`; 7: `≤ 10_000`; 8: `175_000 ≤ x ≤ 1_000_000` |
 | | `wire(address sorted, address strategy, address stabilityPool, address redemptionModule, address deficitLedger, address shutdownModule)` — 2: `stabilityPool ∈ {address(0), strategy}`, and `stabilityPool == address(0) ⇒ POOL_SHARE_BPS == 0` |
 | SortedPositions | `constructor(uint256 MAX_HINT_STEPS)` — 0: `1 ≤ x ≤ 1_000` · `wire(address vaultManager)` |
 | StabilityPool | `constructor(address weth, address token, uint256 LIQUIDATION_PENALTY, uint256 MIN_DEPOSIT)` — 2: `≤ 0.5e18`; 3: `≥ 1e18` · `wire(address vaultManager, address deficitLedger)` |
@@ -925,11 +925,12 @@ is consistent:
 |---|---|
 | `StabilityPool.deposit/withdraw/claimGains → VaultManager.accrue → StabilityPool.onInterest` | `onInterest` is lock-free (onlyVault). It runs before the pool reads any deposit state in the outer call |
 | `VaultManager.* → VaultManager.accrue → StabilityPool.onInterest / DeficitLedger.onInterest` | the pool call is the guarded, gas-capped call of §6.2 (ADR-0033): a pool that reverts, runs out of gas or answers malformed cannot revert accrual. The ledger call is not guarded; it stays call-free and lock-free |
-| `VaultManager.liquidate → strategy.onLiquidation` | A: pool locked normally (not lock-free); B: house locked |
+| `VaultManager.liquidate → strategy.onLiquidation` | A: pool locked normally (not lock-free); B: house locked. While the strategy runs, the VaultManager has removed the position from `totalCollateral`, `totalStakes` and `activeCount` but not yet from `totalNormDebt`, so its system views read a transiently low TCR; a strategy must make no call that could reach code reading them (today: A sends WETH and burns stablecoin, B calls only the ledger) |
 | `DutchAuctionHouse.buy → who.onAuctionPurchase(...)` | arbitrary external call (§6.8.4); the house lock is held, so the callback cannot re-enter the house, and therefore cannot complete a liquidation in deployment B |
 | `RedemptionModule.redeem → OracleAdapter.fetchPrice, VaultManager.accrue, VaultManager.redeemCollateral` (state-changing), plus the views named in §6.7.2: `VaultManager.shutdown`, `token.balanceOf/totalSupply`, `DutchAuctionHouse.inPurchase` (B), `ShutdownModule.belowCritical` | the views change nothing and cannot re-enter; `belowCritical` reads `VaultManager.systemColl/systemDebt`, which read the ledger and (in B) the house |
 | `VaultManager.* → SortedPositions.insert/remove/reinsert/find → VaultManager.sortKey` | `sortKey` is a `view`, so it is callable while the VaultManager lock is held |
 | `VaultManager.liquidate → DeficitLedger.recordDeficit` | A, no-stakes path |
+| `StabilityPool.withdraw/claimGains → DeficitLedger.onPoolDust`; `VaultManager.liquidate → DeficitLedger.recordDeficit`; `DutchAuctionHouse.* → DeficitLedger.addAuctionDebt / onAuctionPayment / onAuctionShortfall` | lock-free like `onInterest`: each is restricted to its one wired caller (§5.6), checks `!settled`, and makes no external call. `payTip`, `cover` and `onSettlement` move tokens and take the ledger's lock |
 | `DutchAuctionHouse.onLiquidation/buy/reset → DeficitLedger.addAuctionDebt/onAuctionPayment/onAuctionShortfall/payTip`; `reset → OracleAdapter.fetchPrice` | ledger hooks are restricted to the house and make only token transfers to non-core recipients (`payTip` to the resetter) |
 | `StabilityPool.withdraw/claimGains → DeficitLedger.onPoolDust` | |
 | `ShutdownModule.check → VaultManager.accrue, DeficitLedger.cover, OracleAdapter.fetchPrice` + views | |
@@ -1112,9 +1113,11 @@ function liquidate(id):
     p.coll = p.normDebt = p.stake = 0; p.status = ClosedByLiquidation
     WETH.safeTransfer(msg.sender, GAS_RESERVE)                       // gas compensation
     WETH.safeTransfer(strategy, coll)
+    wethBefore = WETH.balanceOf(this)
     (debtAbsorbed, collReturned) = strategy.onLiquidation(id, owner, debt, coll, price)
     require(debtAbsorbed ≤ debt, DebtAbsorbedExceedsDebt)                 // defence in depth (CHG-012)
     require(collReturned ≤ coll, CollReturnedExceedsColl)
+    require(WETH.balanceOf(this) == wethBefore + collReturned, CollReturnedNotReceived)   // CHG-014
     normAbsorbed = (debtAbsorbed == debt) ? n : mulDivDown(debtAbsorbed, RAY, index)
     normRest = n − normAbsorbed
     totalNormDebt −= normAbsorbed
@@ -1152,8 +1155,9 @@ debt moves to `DeficitLedger.auctionDebt`. Redistribution never happens in B.
 
 #### 6.4.4 The no-stakes case
 
-If the liquidated position was the last active one (`totalStakes == 0` after removing its stake), a
-remainder cannot be redistributed. Its debt becomes deficit and its collateral is held by the
+If no stake is left after the liquidated position's is removed (`totalStakes == 0`) — because it was
+the last active position, or because every remaining position is staked 0 after stake collapse (T-25)
+— a remainder cannot be redistributed. Its debt becomes deficit and its collateral is held by the
 DeficitLedger as `recoveredColl` until settlement, when it joins the claim pool. Only reachable in A.
 
 Vectors: `liquidation_pool.json`, `auction.json`.
@@ -1833,11 +1837,11 @@ The hooks (each first checks `wired` and that the caller is the ShutdownModule):
 function DeficitLedger.onSettlement():
     require(!settled, AlreadySettled)
     burned = reserve
-    if burned > 0: token.burnFrom(this, burned)
     reserve = 0
     deficit += auctionDebt; auctionDebt = 0
     coll = recoveredColl; recoveredColl = 0
     settled = true
+    if burned > 0: token.burnFrom(this, burned)         // all state written first (CEI)
     if coll > 0: WETH.safeTransfer(shutdownModule, coll)
     emit LedgerSettled(burned, deficit, coll)           // values after the updates
     return coll
@@ -2161,6 +2165,7 @@ function that can raise the error from this spec's own checks.
 | `NotLiquidatable()` | ICR ≥ MCR | `liquidate` |
 | `DebtAbsorbedExceedsDebt()` | the strategy returned `debtAbsorbed > debt` (CHG-012) | `liquidate` |
 | `CollReturnedExceedsColl()` | the strategy returned `collReturned > coll` (CHG-012) | `liquidate` |
+| `CollReturnedNotReceived()` | the VaultManager's WETH did not grow by exactly `collReturned` across `onLiquidation` (CHG-014) | `liquidate` |
 | `SupplyCapExceeded()` | total supply would exceed `2^128 − 1` | `StableToken.mint` |
 | `StaleHint()` | hint walk exceeded `MAX_HINT_STEPS` | `insert`, `reinsert` (all position operations) |
 | `NodeExists()` / `NodeNotFound()` | list misuse (unreachable through the VaultManager) | SortedPositions |
@@ -2177,7 +2182,7 @@ function that can raise the error from this spec's own checks.
 | `NoPartialPurchase()` | partial buy (`owe < tab` and `slice < lot`) with `tab − owe < MIN_DEBT` and `tab ≤ MIN_DEBT` | `buy` |
 | `InvalidCallbackTarget()` | `who == address(0)`; or `data` non-empty and `who ∈ {token, WETH, oracle, vaultManager, deficitLedger, shutdownModule, house}` | `buy` |
 | `AlreadyTriggered()` | `check` after trigger | `check` |
-| `NotTriggered()` / `AlreadySettled()` / `WindowNotOver()` | settlement preconditions | `settle`; `NotTriggered`/`AlreadySettled` also `VaultManager.onSettlement` |
+| `NotTriggered()` / `AlreadySettled()` / `WindowNotOver()` | settlement preconditions | `settle`; `NotTriggered`/`AlreadySettled` also `VaultManager.onSettlement`; `AlreadySettled` also `DeficitLedger.onSettlement` and `DutchAuctionHouse.onSettlement` |
 | `SystemShutdown()` (hook) | `VaultManager.onShutdown` called when already shut down | `onShutdown` |
 | `ReentrancyGuardReentrantCall()` | reentrant call (OZ) | lock-guarded functions |
 | OZ ERC-20 errors, `SafeERC20FailedOperation`, `Panic` | token-level failures; arithmetic bugs | — |

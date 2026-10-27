@@ -85,7 +85,10 @@ the P03 gate via `/spec-change` CHG-002.
 | [0031](0031-deploy-script-enforces-the-wired-peer-graph.md) | The deployment script enforces that the wired peer graph agrees | accepted | P11 / CHG-003 |
 | [0032](0032-i13-exact-regime-requires-every-member-exact.md) | I13 asserts exact order only while every list member is exact | accepted | P13 / CHG-005 |
 | [0033](0033-non-fatal-pool-interest-hook.md) | A failing stability pool cannot stop accrual; its interest share falls back to the reserve | accepted | P15 / CHG-006 |
-| [0034](0034-i13-hidden-key-bound.md) | I13's tolerance comes from hidden ideal keys, with allowances fixed at insertion | proposed | P17 / CHG-008, CHG-009 |
+| [0034](0034-i13-hidden-key-bound.md) | I13's tolerance comes from hidden ideal keys, with allowances fixed at insertion | accepted | P17 / CHG-008, CHG-009 |
+| [0035](0035-factory-creates-from-blueprints.md) | The factory creates every contract from pre-deployed blueprints, still in one transaction | accepted | P18 |
+| [0036](0036-liquidate-validates-the-strategy-answer.md) | `liquidate` validates the strategy's answer, including the collateral it returns | proposed | P20 / CHG-012, CHG-014 |
+| [0037](0037-pool-hook-gas-lower-bound.md) | `POOL_HOOK_GAS` may not be set below 175,000 | proposed | P19 / CHG-013 |
 
 Numbering is continuous and never reused; a later decision takes the next free number, which is
 not a position in the plan. **All 27 were accepted by the human at the P04 gate on 2026-10-23**,
