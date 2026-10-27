@@ -315,3 +315,12 @@ def test_accrued_index_matches_the_vault() -> None:
     rate = s.params.rate_per_second
     assert inv._accrued_index(snap, s.now + 3_600, rate) == s.vault.current_index()
     assert inv._accrued_index({**snap, "shutdown": 1}, s.now + 9, rate) == snap["index"] >= RAY
+
+
+def test_I9_add_collateral_needs_the_weth_it_pulls() -> None:
+    s = _run()
+    with pytest.raises(er.WethTransferFailed):
+        s.add_collateral("bob", 2, 10**25, now=s.now)  # bob holds less WETH than that
+    assert inv.check_I9_liveness(s, s.last) == []
+    held = dataclasses.replace(s.last, args=(2, WAD, 0, 0))
+    assert _has(inv.check_I9_liveness(s, held), "I9: WethTransferFailed with the WETH held")

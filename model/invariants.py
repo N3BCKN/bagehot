@@ -606,7 +606,7 @@ def unwind(system) -> list[str]:  # noqa: ANN001, C901 — System
     bad += [f"I8 unwind {n}: {a} != {e}" for n, a, e in residue if a != e]
     if any(q.status == STATUS_ACTIVE for q in v.positions.values()):
         bad.append("I8 unwind: a position is still active")
-    if pool.deposits:
+    if pool.deposits and not v.settled:  # the pool step belongs to the live and window phases
         bad.append("I8 unwind: a deposit is still open")
     return bad
 
@@ -670,6 +670,11 @@ def check_I9_liveness(system, step) -> list[str]:  # noqa: ANN001, N802, C901, P
         return [] if step.op == "close" and q["owner"] != step.caller else ["I9: NotOwner"]
     if err in ("StaleHint", "CollateralTooLarge"):
         return []  # hints not exact, or the 2^128 − 1 cap
+    if err == "WethTransferFailed":  # "caller holds the tokens": addCollateral pulls WETH
+        held = pre["weth"]["balances"].get(step.caller, 0)
+        if step.op == "addCollateral" and held < step.args[1]:
+            return []
+        return ["I9: WethTransferFailed with the WETH held"]
     _, n = _eff(q, v["LColl"], v["LDebt"])
     debt = mul_div_up(n, _accrued_index(v, step.now, p.rate_per_second), RAY)
     have = pre["token"]["balances"].get(step.caller, 0)
