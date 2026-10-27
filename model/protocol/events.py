@@ -162,15 +162,20 @@ class Log:
     """The run's ordered event log: `(emitter, event)` pairs."""
 
     entries: list[Entry] = field(default_factory=list)
+    # block.timestamp of each entry (a log's block), set by the caller through `now`
+    stamps: list[int] = field(default_factory=list)
+    now: int = 0
 
     def emit(self, emitter: str, event: tuple) -> None:
         self.entries.append((emitter, event))
+        self.stamps.append(self.now)
 
     def mark(self) -> int:
         return len(self.entries)
 
     def truncate(self, mark: int) -> None:
         del self.entries[mark:]
+        del self.stamps[mark:]
 
     def since(self, mark: int) -> list[Entry]:
         return self.entries[mark:]

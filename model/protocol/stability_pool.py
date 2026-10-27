@@ -117,6 +117,17 @@ class Deposit:
     snap_scale: int = 0
 
 
+def compounded(r: Deposit, p: int, epoch: int, scale: int) -> int:
+    """§6.6.6, R16: a deposit record compounded to the pool's current (P, epoch, scale)."""
+    if r.initial == 0 or r.snap_epoch < epoch:
+        return 0
+    ds = scale - r.snap_scale
+    if ds > 5:
+        return 0
+    q = mul_div_down(r.initial, p, r.snap_p)  # R16
+    return q // SCALE_FACTOR**ds
+
+
 @dataclass
 class StabilityPool:
     bank: object  # Tokens, or the Vault model
@@ -278,14 +289,7 @@ class StabilityPool:
         return self.total_deposits >= self.min_deposit
 
     def compounded_deposit(self, a: str) -> int:
-        r = self._rec(a)
-        if r.initial == 0 or r.snap_epoch < self.current_epoch:
-            return 0
-        ds = self.current_scale - r.snap_scale
-        if ds > 5:
-            return 0
-        q = mul_div_down(r.initial, self.p, r.snap_p)  # R16
-        return q // SCALE_FACTOR**ds
+        return compounded(self._rec(a), self.p, self.current_epoch, self.current_scale)
 
     def _gain(self, r: Deposit, acc: dict[tuple[int, int], int], snap: int) -> int:
         total = acc.get((r.snap_epoch, r.snap_scale), 0) - snap

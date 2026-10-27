@@ -34,6 +34,7 @@ from model.protocol.stability_pool import StabilityPool
 from model.protocol.vault import Vault
 
 SHUTDOWN = "shutdown"  # the wired ShutdownModule's account
+CORE_ACCOUNTS = frozenset(("vault", "pool", "ledger", "redemption", "sorted", SHUTDOWN))
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,11 +79,14 @@ class Feeds:
 
     sequencer: FeedRound | None = FeedRound(0, 1, 1)  # up since t = 1
     price: FeedRound | None = None
+    reads: int = 0  # calls to either feed: I9 / I12 ask whether an operation read the oracle
 
     def read_sequencer(self) -> FeedRound | None:
+        self.reads += 1
         return self.sequencer
 
     def read_price(self) -> FeedRound | None:
+        self.reads += 1
         return self.price
 
 
@@ -106,6 +110,7 @@ class Step:
     post: dict
     events: list[Entry] = field(default_factory=list)
     error: Exception | None = None
+    oracle_reads: int = 0
 
 
 class System:
@@ -113,7 +118,11 @@ class System:
         p = self.params = params or Params()
         self.record = record
         self.now = t0
-        self.log = Log()
+        self.log = Log(now=t0)
+        # tokens sent to a core contract by plain ERC-20 transfers (I1's D_w, D_t), and the WETH the
+        # stand-in shutdown address received at settlement (I1's claimColl; no claims yet)
+        self.donated: dict[str, dict[str, int]] = {"weth": {}, "token": {}}
+        self.claim_coll = 0
         self.feeds = Feeds()
         self.oracle = OracleAdapter.deploy(
             price_feed=1,
@@ -153,6 +162,11 @@ class System:
             make_gate(self.vault, p.critical_tcr),
         )
         self.last: Step | None = None
+        self.ghost = None
+        if record:
+            from model.invariants import Ghost  # noqa: PLC0415 — the checks import this module
+
+            self.ghost = Ghost(self)
 
     # ---- shortcuts ----
     @property
@@ -197,10 +211,12 @@ class System:
     def _tx(self, op: str, caller: str, args: tuple, now: int, fn: Callable[[], object]) -> Receipt:
         if now < self.now:
             raise ValueError(f"time goes back: {now} < {self.now}")
-        self.now = self.vault.now = now
-        pre = self.snapshot() if self.record else {}
-        price, usable = self.peek_price() if self.record else (0, False)
-        mark = self.log.mark()
+        self.now = self.vault.now = self.log.now = now
+        if self.record:
+            self.ghost.observe(self)  # setup entries (mints) since the last operation
+            pre = self.snapshot()
+            price, usable = self.peek_price()
+        mark, reads = self.log.mark(), self.feeds.reads
         o, r = self.oracle, self.redemption
         saved = (o.last_good_price, o.failure_start, r.base_rate, r.last_fee_operation_time)
         try:
@@ -209,12 +225,46 @@ class System:
             o.last_good_price, o.failure_start, r.base_rate, r.last_fee_operation_time = saved
             self.log.truncate(mark)
             if self.record:
-                self.last = Step(op, caller, args, now, price, usable, pre, pre, [], e)
+                self.last = Step(
+                    op, caller, args, now, price, usable, pre, pre, [], e, self.feeds.reads - reads
+                )
             raise
         events = self.log.since(mark)
         if self.record:
-            self.last = Step(op, caller, args, now, price, usable, pre, self.snapshot(), events)
+            self.ghost.observe(self)
+            self.last = Step(
+                op,
+                caller,
+                args,
+                now,
+                price,
+                usable,
+                pre,
+                self.snapshot(),
+                events,
+                None,
+                self.feeds.reads - reads,
+            )
         return Receipt(value, events)
+
+    # ---- invariants ----
+    def check_invariants(self, *, with_unwind: bool = False) -> list[str]:
+        """Every invariant of docs/invariants.md that applies to deployment A and this phase
+        (`model.invariants`); the violated clauses, empty when all hold. Needs `record=True`."""
+        from model.invariants import check_invariants  # noqa: PLC0415
+
+        if self.ghost is not None:
+            self.ghost.observe(self)
+        return check_invariants(self, with_unwind=with_unwind)
+
+    def copy(self) -> System:
+        """An independent deep copy (I8's unwind runs on one). The redemption gate is a closure
+        over the vault, so it is rebuilt against the copy's vault."""
+        import copy as _copy  # noqa: PLC0415
+
+        other = _copy.deepcopy(self)
+        other.redemption.below_critical = make_gate(other.vault, other.params.critical_tcr)
+        return other
 
     # ---- setup and ERC-20 (not protocol operations) ----
     def fund(self, actor: str, amount: int) -> None:
@@ -222,9 +272,9 @@ class System:
         self.weth.mint(actor, amount)
 
     def transfer(self, caller: str, to: str, amount: int, *, now: int) -> Receipt:
-        """`StableToken.transfer(to, amount)`."""
+        """`StableToken.transfer(to, amount)`; to a core contract it is a donation (I1)."""
         return self._tx(
-            "transfer", caller, (to, amount), now, lambda: self.token.transfer(caller, to, amount)
+            "transfer", caller, (to, amount), now, lambda: self._erc20("token", caller, to, amount)
         )
 
     def transfer_weth(self, caller: str, to: str, amount: int, *, now: int) -> Receipt:
@@ -233,8 +283,14 @@ class System:
             caller,
             (to, amount),
             now,
-            lambda: self.weth.transfer(caller, to, amount),
+            lambda: self._erc20("weth", caller, to, amount),
         )
+
+    def _erc20(self, token: str, caller: str, to: str, amount: int) -> None:
+        (self.weth if token == "weth" else self.token).transfer(caller, to, amount)
+        if to in CORE_ACCOUNTS:
+            d = self.donated[token]
+            d[to] = d.get(to, 0) + amount
 
     # ---- VaultManager (§5.1) ----
     def open_position(
@@ -371,7 +427,9 @@ class System:
             coll = self.vault.on_settlement(SHUTDOWN)
             return coll + self.ledger.on_settlement(SHUTDOWN)
 
-        return self._tx("settle", SHUTDOWN, (), now, lambda: self.vault._atomic(run))
+        receipt = self._tx("settle", SHUTDOWN, (), now, lambda: self.vault._atomic(run))
+        self.claim_coll = receipt.value  # the claim pool's WETH (§6.11.3), fixed from now on
+        return receipt
 
     # ---- canonical state ----
     def snapshot(self) -> dict:
