@@ -26,7 +26,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | P19 | StabilityPool (product-sum) | done | 2026-10-26 | `StabilityPool` (§6.6, §5.3; `onLiquidation`, dust sweep, `onInterest` returning `booked`) with its integer model; all 3 `product_sum.json` vectors bit-for-bit on both sides; 39 unit tests; CHG-006 / ADR-0033 applied (guarded, gas-capped pool hook, `POOL_HOOK_GAS = 200_000` from a measured 86,981 worst case; failing-pool matrix 8 modes × 6 operations; caller-gas sweeps with zero redirections); pool invariant campaign (I1, I3, U4) and the real pool in the core handler (Medusa `property_I3_poolSolvency`); precision study `model/tools/sp_precision.py` (200 × 300, replayed bit-for-bit by Foundry; docs/fuzzing.md); real pool deployed in A from its blueprint (ADR-0035 implemented, factory tx ≈ 10.2M gas), smoke tests A and B pass on a fresh anvil; CHG-009 applied to invariants. security-reviewer and spec-auditor: no high/critical. **Open: CHG-010 (I3 interest bound, human decision), P19-L1 (`MIN_POOL_HOOK_GAS` range), CHG-011 candidate (I2 counter rule).** |
 | P20 | Liquidation via pool and redistribution | done | 2026-10-26 | `liquidate` (§6.4.1) with redistribution, snapshot reset and the no-stakes deficit; CHG-012's checks; Python mirror; all 9 liquidation/redistribution vectors bit-for-bit on both sides; unit tests (every revert and path, T-10, T-26, T-27, P17-H1 equivalence, CHG-006's liquidation case, the review's gaps); the core campaign liquidates for real in A and B (I4, I6, I7 per liquidation; I2 per CHG-011); smoke test liquidates on a fresh anvil; **nightly green** (4,096 runs × 500, A and B); security-reviewer: no critical/high. Open: the CHG-010/011/013 spec and invariant texts (approved, await the unlock), CHG-014 and CHG-015 (proposed), a per-path liquidation gas measurement for P24's cost model. |
 | P21 | DeficitLedger and invariant extension | done | 2026-10-27 | `DeficitLedger` (§4.7, §5.6, §6.9, §6.11.3) replaces the stand-in in the factory, the fixtures and the core campaign; the model's Vault owns the real ledger model; full I1 per holder, I2 with deficit, I4/I6/I7 by name with event provenance; nightly green at `6284252`; Medusa 2 h green at `9c191d6` (15/15, 6.08M calls); security-reviewer: no critical/high; spec-auditor re-audit: every stage-3 gap closed except CHG-016 (text, awaits approval) and the P33/ShutdownModule-dependent items (P21-DEF). |
-| P22 | Python protocol model | todo | | |
+| P22 | Python protocol model | done | 2026-10-27 | `model/protocol/` laid out as the prompt lists (errors named like the Solidity errors, events with one ordered cross-contract log, explicit WETH/StableToken balances with `Transfer`, redistribution extracted, `system.py`); every operation atomic across all contracts with explicit `now`; canonical `snapshot()`; `check_invariants()` for I1–I9, I11–I15 (I10 → ShutdownModule prompt, I16 → P34); all 18 variant-A system vectors replayed with invariants after each step; Hypothesis state machine green (quick 100 runs, nightly 2,000 runs); benchmark 21,317 ops/s at 1,000 positions; spec-auditor: model and Solidity agree everywhere, its eight checker/coverage gaps fixed; CHG-017 (I8 text) proposed. |
 | P23 | Differential testing harness | todo | | |
 | P24 | Oracle and cost models | todo | | |
 | P25 | Fork liquidity measurement and slippage model | todo | | |
@@ -54,6 +54,59 @@ Claude updates this file at the end of every session. Status: todo · in progres
 ## Session log
 
 <!-- newest first: date · prompt · what changed · decisions · next -->
+
+### 2026-10-27 · P22 · Python protocol model
+
+**Changed.** The model was about 70% there; P22 completed it rather than rewriting it.
+`model/protocol/` now has the prompt's files: `math.py` (moved), `errors.py` (one class per Solidity
+custom error, parity-tested against `contracts/src`), `events.py` (the §11.1 schema and one ordered
+log of `(emitter, event)` with block timestamps), `tokens.py` (WETH and StableToken balances, every
+movement a `Transfer`, the human's decision 4), `oracle_adapter.py` and `deficit.py` (renamed),
+`redistribution.py` (extracted), and `system.py`. `System` wires deployment A whole. Every external
+entry point (including `fetchPrice`) takes `now` and the caller, is one transaction across every
+contract, token and event, and returns its events. `snapshot()` is canonical. §3.4 constructor checks
+are in the model, and the test-only ledger setters are gone (P21-MODEL).
+
+`model/invariants.py` checks I1, I2, I3 (with the withdraw clause and CHG-010 attribution), I4/I6/I7
+per liquidation, I5 per redemption (CHG-007 visits), I8 (and the unwind on a copy), I9, I11, I12, I13
+(hidden-key records, CHG-005 regime, pair check in every regime), I14 (`model/replay.py` rebuilds the
+whole state from events) and I15. Each check is shown to fire on a corrupted state or step
+(`test_invariants_model.py`). All 18 variant-A system vectors replay through `System`, with every
+expected field compared and the invariants checked after each step. Every other vector case is either
+run by a unit test or listed in the carry-forward table (P22-VEC-B, P22-VEC-SM) — the human's decision
+1. The Hypothesis state machine covers every entry point, price moves and crashes, oracle failures,
+donations and the stand-in shutdown.
+
+**Benchmark** (`uv run python -m model.tools.bench`: 1,000 positions, then 10,000 mixed operations,
+seed 22, macOS arm64): **21,317 operations/second** (protocol time 0.47 s, 1,159 of the 10,000
+reverted). Before the one optimisation: 90 operations/second, with `copy.deepcopy` in the vault's
+rollback taking 95% of the time. Position changes are now undone from a journal; list links and pool
+records are values a shallow copy saves. Operation and revert counts are identical before and after.
+
+**Decisions.** The human: no wiring in the model, and P23 excludes those paths on purpose
+(P22-DIFF-WIRED); token balances and `Transfer` modelled now; deferred vectors tracked in the
+carry-forward list, not a second registry. Parity checklist (P14): the system views now read the real
+ledger; `wired` is not tracked (decision 3); B's house views wait for P34.
+
+**Found.** No protocol bug. Checker gaps, each fixed with a test:
+- the state machine found two: I8's unwind wrongly required closed deposits after settlement, and
+  I9 lacked the WETH-held precondition;
+- writing the tests found one: I5's partial must be the last node *visited*, not the last one
+  redeemed;
+- the spec-auditor found eight: the I3 withdraw clause was missing; I9 accepted `StaleHint` and the
+  cap without checking them; I13 skipped the pair check in the exact regime; I6 provenance;
+  `fetchPrice` was not an entry point; a transfer to address(0) did not revert; `CRITICAL_TCR` was
+  unchecked and missing from I11; two unchecked comparisons. Its I8 finding is a text problem
+  (CHG-017).
+
+**State machine reach** (100 runs × 60 steps): every entry point succeeds, including liquidations on
+every path (full absorption, partial offset with redistribution, empty pool, no-stakes deficit), full
+and partial redemptions, pool interest, emptying and non-emptying offsets, settlement and
+gas-reserve reclaims. Not reached: scale changes and dust sweeps (P19's pool tests and the precision
+study cover them). Nightly profile (2,000 runs × 80 steps): green in 64 s.
+
+**Next.** The human: approve CHG-017 and re-protect the spec files (action 12); accept ADR-0036/0037.
+Then P23 (differential harness).
 
 ### 2026-10-27 · P21 · DeficitLedger and invariant extension
 
@@ -1244,10 +1297,11 @@ obligations a later prompt must carry that are not in that prompt's text yet (ro
 | P19-A | **Spec-audit lows (P19), for the next `/spec-change` batch:** §4.4's `depositorCount[e]` definition is false for past epochs (the §5.3 pseudocode, which code follows, never decrements an old epoch); invariants.md names checks that do not exist yet (Halmos `check_I3_proRataSumBounded`, `check_I8_proRataSumBounded`; Python `check_I13`); the I1 "Checked in" line names `invariant_I1_holderBalances` for the pool row (it is `invariant_I1_poolHolder` / `invariant_I3_poolSolvencyAndU4`); the T-24 matrix omits `redeem` (same `_accrue`); the model raises `ValueError("InvalidParameter")` without an index (as every model module does). | Claude (with the human for spec text) | no |
 | P18-3 | **Closed 2026-10-25.** The recipes pass `GIT_COMMIT=$(git describe --always --dirty --abbrev=12)` and `BAGEHOT_SOLC` (read from `foundry.toml`). `Deploy.checkProvenance` refuses a dirty tree or an unknown commit on every chain but 31337, and any compiler mismatch everywhere, and the manifest records both (5 tests). `deploy-local` and `smoke` take a variant (`just deploy-local B`, `just smoke <rpc> B`); both variants were deployed and smoke-tested on a fresh anvil. (An earlier note was wrong: the recipe line references `{{ANVIL_KEY0}}` and never contained the key, which is defined once at the top of the justfile.) | — | — |
 | P08-2 | `.gitleaks.toml` gained a value-only allowlist for public EVM addresses (`^0x[0-9a-fA-F]{40}$`): Aave's `a_token`/`v_token` keys in `config/8453.toml` tripped `generic-api-key`. A first version also allowlisted the `config/` path; a probe showed it hid a 64-hex private key there, so it was removed before anything was pushed. Probes confirm a 0x+64-hex key, a `private_key`, and a bare 40-hex token are still caught. The original slip: the scan and the commit were chained with `;`, so the commit ran despite the findings — scans now gate commits with `&&`. | Claude | no |
-| P02-4 | No vector exercises `redeem`'s `AuctionCallbackActive` branch (D-27, §6.7.2): the recorder cannot drive a buyer callback. Foundry test added at P16 (`RedemptionAuctionCallbackTest`, mock house); against the real house at P33; model test at P22. | Claude | at P22/P33 |
-| P02-3 | The vector reference implementation is throwaway (scratchpad). Vectors are validated independently from P10 (Foundry) and P22 (Python model); a vector that disagrees with both implementations is a spec question for `/spec-change`. | Claude | at P10/P22 |
+| P02-4 | No vector exercises `redeem`'s `AuctionCallbackActive` branch (D-27, §6.7.2): the recorder cannot drive a buyer callback. Foundry test added at P16 (`RedemptionAuctionCallbackTest`, mock house); against the real house at P33; model test done at P22 (`test_redeem_auction_callback_active`: after the fetch and the accrual, before the gate, fully rolled back). | Claude | at P33 |
+| P02-3 | The vector reference implementation is throwaway (scratchpad). Vectors are validated independently from P10 (Foundry) and P22 (Python model); a vector that disagrees with both implementations is a spec question for `/spec-change`. **Done at P22 for variant A:** all 18 system vectors replay through the model's `System` with every expected field compared (`tests/model/test_vectors_system.py`); B and shutdown vectors per P22-VEC-B / P22-VEC-SM. | Claude | P34, ShutdownModule prompt |
 | P01-8 | The repository is public, so all seven commits expose the author email `ka.koszewski@gmail.com` permanently. Four of them are also authored `H3BCKN`. Neither can be changed without a force push, which the permission rules forbid. If this matters, GitHub's `noreply` address plus `git config user.email` fixes it for future commits. | human | no |
 | CHG-016 | **Closed 2026-10-27: approved by the human (option A) and written to the spec.** Proposed 2026-10-26 (P21 spec audit L3–L5): spec text only — §5.10 marks the ledger's single-caller hooks lock-free, §11.2 lists `AlreadySettled` in both `onSettlement`s, §6.11.3's ledger settlement pseudocode follows the code's CEI order. | — | no |
+| CHG-017 | **Proposed 2026-10-27 (P22 spec audit, finding 4):** I8's `Σ_active pendingColl(p) ≤ pendingColl` cannot hold after settlement (`onSettlement` zeroes the bucket while positions keep their snapshots); scope the collateral half to live and window, keep the debt half in every phase. The Python check already does this; Foundry's `checkI8` skips both halves after settlement and should keep the debt half (test change after approval). Needs the human's approval and the unlock of `docs/invariants.md`. | human | no |
 
 ## Human actions required
 
@@ -1267,5 +1321,5 @@ obligations a later prompt must carry that are not in that prompt's text yet (ro
 | 11-old | (superseded) Make `BASE_ARCHIVE_RPC` (and, for P09, `ETH_MAINNET_RPC`) visible to Claude's process | Checked on 2026-10-22 after the human set it: still not visible — a variable exported in the human's own terminal does not reach an already-running Claude Code session (or one launched from VS Code). Either put both in the dotenv file at the repo root (`just` loads it), or restart VS Code / Claude Code from a shell that exports them. `just oracle --verify-only` still reports it unset. The dotenv file must sit at the repo root and contain the line `BASE_ARCHIVE_RPC=<url>` — no `export`, no spaces around `=`, not commented out. A check that prints a count, not the URL: `grep -c '^BASE_ARCHIVE_RPC=.'` on that file should print 1. |
 | 10 | Merge PR [#1](https://github.com/N3BCKN/bagehot/pull/1) | Claude has not merged it — merging to `main` is yours to approve. The branch is `ci/p01-verify`. |
 | 9 | ~~`gh auth login`~~ | Done: logged in as `N3BCKN`, scopes `repo`, `read:org`, `gist`, `admin:public_key`. Claude can now read run status and logs for this private repository. |
-| 12 | **To unlock** `docs/spec.md`, `spec/vectors/**` and `docs/invariants.md`, comment their lines out (`# docs/spec.md` …) in `.claude/protected-paths.txt`; to re-protect, remove the `#` again. **Re-protect now:** the CHG-010/011/013/014/015/016 texts were written 2026-10-27; add `docs/adr/0034-*.md` and `docs/adr/0035-*.md` (accepted 2026-10-26), and ADR-0036/0037 once you accept them | Unlocked by the human 2026-10-27 for the six texts; Claude cannot edit the protected-paths file. |
+| 12 | **To unlock** `docs/spec.md`, `spec/vectors/**` and `docs/invariants.md`, comment their lines out (`# docs/spec.md` …) in `.claude/protected-paths.txt`; to re-protect, remove the `#` again. **Re-protect now:** the CHG-010/011/013/014/015/016 texts were written 2026-10-27 (CHG-017, proposed, will need `docs/invariants.md` unlocked again once approved); add `docs/adr/0034-*.md` and `docs/adr/0035-*.md` (accepted 2026-10-26), and ADR-0036/0037 once you accept them | Unlocked by the human 2026-10-27 for the six texts; Claude cannot edit the protected-paths file. |
 | 13 | ~~Decide P17-1 and P17-2~~ — done 2026-10-26 (P17-1 accepted as residual risk T-25; CHG-009 approved). Now: decide CHG-010, P19-L1, CHG-011 and the P20 plan's questions | Before P20 |
