@@ -201,6 +201,10 @@ class ERC20InvalidReceiver(ProtocolError):
     """OZ v5: a transfer or mint to address(0)."""
 
 
+class ERC20InvalidSender(ProtocolError):
+    """OZ v5: a transfer from address(0)."""
+
+
 __all__ = [
     "AlreadySettled",
     "AlreadyWired",
@@ -214,6 +218,7 @@ __all__ = [
     "DivisionByZero",
     "ERC20InsufficientBalance",
     "ERC20InvalidReceiver",
+    "ERC20InvalidSender",
     "FeeExceedsMaximum",
     "IcrBelowMcr",
     "InsufficientBalance",

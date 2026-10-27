@@ -1629,9 +1629,11 @@ contract CoreHandler is Test {
         return (true, "");
     }
 
-    /// @dev §10.3, the parts that exist before P19: Σ_active pending ≤ the pending buckets.
+    /// @dev §10.3, the parts that exist before P19: Σ_active pending ≤ the pending buckets. The
+    ///      collateral half stops at settlement (`onSettlement` zeroes `pendingColl` while positions
+    ///      keep their snapshots, CHG-017); the debt half holds in every phase.
     function checkI8() public view returns (bool, string memory) {
-        if (v.settled()) return (true, "");
+        bool settled = v.settled();
         (uint256 pc, uint256 pn) = (0, 0);
         for (uint256 id = 1; id < v.nextId(); ++id) {
             VaultManager.Position memory p = v.positions(id);
@@ -1639,7 +1641,7 @@ contract CoreHandler is Test {
             (uint256 c, uint256 n) = v.effective(id);
             (pc, pn) = (pc + c - p.coll, pn + n - p.normDebt);
         }
-        if (pc > v.pendingColl()) return (false, "I8: sum of pending collateral > pendingColl");
+        if (!settled && pc > v.pendingColl()) return (false, "I8: sum of pending collateral > pendingColl");
         if (pn > v.pendingNormDebt()) return (false, "I8: sum of pending debt > pendingNormDebt");
         return (true, "");
     }

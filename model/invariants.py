@@ -409,8 +409,11 @@ def check_I3_withdraw(step) -> list[str]:  # noqa: ANN001, N802 — Step
         return []
     pre = step.pre["pool"]
     d = pre["deposits"].get(step.caller)
-    rec = Deposit(*(d[k] for k in ("initial", "snapP", "snapS", "snapG", "snapEpoch", "snapScale")))
-    before = compounded(rec, pre["P"], pre["currentEpoch"], pre["currentScale"]) if d else 0
+    before = 0
+    if d is not None:
+        fields_ = ("initial", "snapP", "snapS", "snapG", "snapEpoch", "snapScale")
+        rec = Deposit(*(d[k] for k in fields_))
+        before = compounded(rec, pre["P"], pre["currentEpoch"], pre["currentScale"])
     paid = [
         e[3]
         for src, e in step.events
@@ -703,8 +706,11 @@ def check_I9_liveness(system, step) -> list[str]:  # noqa: ANN001, N802, C901, P
         c, _ = _eff(q, v["LColl"], v["LDebt"])
         legit = step.op == "addCollateral" and c + step.args[1] > COLL_CAP
         return [] if legit else ["I9: CollateralTooLarge below the cap"]
-    if err == "StaleHint":  # "hints exact": the same find on the list as it was must fail too
-        return [] if not _hints_find(system, step) else ["I9: StaleHint with usable hints"]
+    if err == "StaleHint":  # "hints exact" (an independent scan), and the walk itself replayed
+        exact_pair, walk_finds = _hints_judged(system, step)
+        if exact_pair:
+            return ["I9: StaleHint with exact hints"]
+        return ["I9: StaleHint with usable hints"] if walk_finds else []
     if err == "WethTransferFailed":  # "caller holds the tokens": addCollateral pulls WETH
         held = pre["weth"]["balances"].get(step.caller, 0)
         if step.op == "addCollateral" and held < step.args[1]:
@@ -721,9 +727,10 @@ def check_I9_liveness(system, step) -> list[str]:  # noqa: ANN001, N802, C901, P
     return [f"I9: {step.op} reverted {err}"]
 
 
-def _hints_find(system, step) -> bool:  # noqa: ANN001 — System, Step
-    """Re-run the call's reinsert `find` on the list rebuilt from the state before the call: the
-    key after `repay` / `addCollateral` (accrual and pending rewards leave NICR keys unchanged)."""
+def _hints_judged(system, step) -> tuple[bool, bool]:  # noqa: ANN001 — System, Step
+    """For a rescue call's reinsert, from the state before the call (accrual and pending rewards
+    leave NICR keys unchanged): whether its hints are exactly the new key's slot — by a linear scan
+    with `precedes`, independent of `find` — and whether replaying the bounded `find` succeeds."""
     pre, p = step.pre, system.params
     v = pre["vault"]
     pid, x, upper, lower = step.args
@@ -737,10 +744,22 @@ def _hints_find(system, step) -> bool:  # noqa: ANN001 — System, Step
         c += x
     else:
         n -= mul_div_down(x, RAY, _accrued_index(v, step.now, p.rate_per_second))
+    nodes = pre["sorted"]["nodes"]
+    order, cur = [], pre["sorted"]["head"]
+    while cur:
+        if cur != pid:
+            order.append(cur)
+        cur = nodes[cur]["next"]
+    exact_pair = any(
+        (prev, nxt) == (upper, lower)
+        and (prev == 0 or precedes(key(prev), prev, (c, n), pid))
+        and (nxt == 0 or precedes((c, n), pid, key(nxt), nxt))
+        for prev, nxt in zip([0, *order], [*order, 0], strict=True)
+    )
     lst = SortedList(p.max_hint_steps, key)
-    lst.nodes = {i: (d["prev"], d["next"]) for i, d in pre["sorted"]["nodes"].items()}
+    lst.nodes = {i: (d["prev"], d["next"]) for i, d in nodes.items()}
     lst.head, lst.tail = pre["sorted"]["head"], pre["sorted"]["tail"]
-    return lst.find((c, n), pid, pid, upper, lower)[0]
+    return exact_pair, lst.find((c, n), pid, pid, upper, lower)[0]
 
 
 # ---- I11 ----

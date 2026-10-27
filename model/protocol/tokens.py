@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from model.protocol.errors import (
     ERC20InsufficientBalance,
     ERC20InvalidReceiver,
+    ERC20InvalidSender,
     ProtocolError,
     SupplyCapExceeded,
     WethTransferFailed,
@@ -40,7 +41,9 @@ class Token:
         return self.balances.get(a, 0)
 
     def transfer(self, frm: str, to: str, amount: int) -> None:
-        if to == ZERO:  # OZ v5 `_transfer`: checked before the balance
+        if frm == ZERO:  # OZ v5 `_transfer`: sender, then receiver, then the balance
+            raise (self.revert_as or ERC20InvalidSender)()
+        if to == ZERO:
             raise (self.revert_as or ERC20InvalidReceiver)()
         b = self.balances.get(frm, 0)
         if b < amount:
@@ -52,6 +55,8 @@ class Token:
     def mint(self, to: str, amount: int) -> None:
         if self.cap is not None and amount > self.cap - self.total_supply:
             raise SupplyCapExceeded()
+        if to == ZERO:  # OZ v5 `_mint`, after StableToken's cap check
+            raise (self.revert_as or ERC20InvalidReceiver)()
         self.balances[to] = self.balances.get(to, 0) + amount
         self.total_supply += amount
         self.log.emit(self.address, ("Transfer", ZERO, to, amount))

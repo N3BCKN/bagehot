@@ -42,6 +42,7 @@ def test_model_errors_are_solidity_errors_or_documented_extras() -> None:
         "WethTransferFailed",
         "ERC20InsufficientBalance",
         "ERC20InvalidReceiver",
+        "ERC20InvalidSender",
     }
     panics = {"Overflow", "Underflow", "DivisionByZero"}
     assert set(er.__all__) - _solidity_errors() == extras | panics

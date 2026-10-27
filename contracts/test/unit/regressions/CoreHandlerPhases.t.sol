@@ -3,12 +3,14 @@ pragma solidity 0.8.28;
 
 import {VaultManager} from "../../../src/core/VaultManager.sol";
 import {CoreHandler} from "../../invariant/handlers/CoreHandler.sol";
-import {Test} from "forge-std/Test.sol";
+import {StdStorage, Test, stdStorage} from "forge-std/Test.sol";
 
 /// @notice The core handler's rare phase actions really reach the window and the settled phase.
 ///         The campaign hits them only now and then (1 in 128 and 1 in 16 calls), so a hook that
 ///         always reverts must fail here deterministically (P17 review F1).
 contract CoreHandlerPhasesTest is Test {
+    using stdStorage for StdStorage;
+
     function _handler(bool variantB) internal returns (CoreHandler) {
         address[5] memory a =
             [makeAddr("alice"), makeAddr("bob"), makeAddr("carol"), makeAddr("dave"), makeAddr("erin")];
@@ -70,5 +72,34 @@ contract CoreHandlerPhasesTest is Test {
             10
         );
         assertEq(h.unexpectedReverts(), 0, h.lastUnexpectedAction());
+    }
+
+    /// @dev CHG-017: after settlement a position still reports pending collateral against a zeroed
+    ///      `pendingColl`, so I8's collateral half is out of scope there; the debt half is not, and
+    ///      a broken `pendingNormDebt` must still be caught (before CHG-017 the check returned early).
+    function test_I8_afterSettlement_checksTheDebtHalfOnly() public {
+        CoreHandler h = _handler(false);
+        h.toggleOracle(1);
+        h.redistribute(0);
+        h.triggerShutdown(0);
+        h.settle(0);
+        VaultManager v = h.v();
+        assertTrue(v.settled(), "settled");
+        assertEq(v.pendingColl(), 0, "settlement zeroed pendingColl");
+        uint256 pendingCollOfPositions;
+        for (uint256 id = 1; id < v.nextId(); ++id) {
+            VaultManager.Position memory p = v.positions(id);
+            if (p.status != VaultManager.Status.Active) continue;
+            (uint256 c,) = v.effective(id);
+            pendingCollOfPositions += c - p.coll;
+        }
+        assertGt(pendingCollOfPositions, 0, "a position still reports pending collateral");
+        (bool ok, string memory why) = h.checkI8();
+        assertTrue(ok, why);
+        assertGt(v.pendingNormDebt(), 0, "pending debt to break");
+        stdstore.target(address(v)).sig("pendingNormDebt()").checked_write(uint256(0));
+        (ok, why) = h.checkI8();
+        assertFalse(ok, "the debt half is still checked after settlement");
+        assertEq(why, "I8: sum of pending debt > pendingNormDebt");
     }
 }

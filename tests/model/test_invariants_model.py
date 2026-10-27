@@ -439,3 +439,30 @@ def test_transfers_to_address_zero_revert_like_oz() -> None:
     with pytest.raises(er.WethTransferFailed):  # §2.5: any revert inside WETH, by one name
         s.transfer_weth("bob", "0x0", 1, now=s.now)
     assert s.check_invariants() == []
+
+
+def test_I9_stale_hint_with_the_exact_slot_is_a_violation_whatever_find_says() -> None:
+    """The exact-slot test is a scan with `precedes`, not a replay of `find`: a `find` that wrongly
+    rejected exact hints would be caught."""
+    s = _run()
+    order = s.sorted.order()  # bob's 2 and carol's 3
+    pid = order[-1]
+    c, n = s.vault.effective(pid)
+    # a 1-wei top-up keeps it in its slot: (its predecessor, 0) is the exact pair
+    exact = (order[0], 0) if len(order) == 2 else None
+    s.add_collateral(s.vault.positions[pid].owner, pid, 1, *exact, now=s.now)
+    fake = dataclasses.replace(s.last, error=er.StaleHint())
+    assert inv.check_I9_liveness(s, fake) == ["I9: StaleHint with exact hints"]
+    assert (c + 1, n) == s.vault.effective(pid)
+
+
+def test_tokens_reject_address_zero_as_sender_and_mint_receiver() -> None:
+    s = _run()
+    with pytest.raises(er.ERC20InvalidSender):
+        s.token.transfer("0x0", "bob", 0)
+    with pytest.raises(er.ERC20InvalidReceiver):
+        s.token.mint("0x0", 1)
+    with pytest.raises(er.SupplyCapExceeded):  # the cap is checked first, as in StableToken.mint
+        s.token.mint("0x0", 2**128)
+    with pytest.raises(er.WethTransferFailed):
+        s.weth.transfer("0x0", "bob", 0)
