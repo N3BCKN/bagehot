@@ -11,7 +11,7 @@ builds the gate exactly as §5.8 writes `belowCritical`, the same rule the Solid
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from model.protocol.errors import (
     AuctionCallbackActive,
@@ -67,7 +67,6 @@ class RedemptionModule:
     )
     base_rate: int = 0
     last_fee_operation_time: int = 0
-    events: list[tuple] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         # §3.4: arguments 0 and 1 are the token and oracle addresses, not carried by the model
@@ -80,7 +79,11 @@ class RedemptionModule:
         self.last_fee_operation_time = self.vault.now  # the construction timestamp
 
     def _emit(self, event: tuple) -> None:
-        self.events.append(event)
+        self.vault.log.emit("redemption", event)
+
+    @property
+    def events(self) -> list[tuple]:
+        return self.vault.log.of("redemption")
 
     # ---- §6.7.1 ----
     def decayed_base_rate(self) -> int:
@@ -109,7 +112,7 @@ class RedemptionModule:
     ) -> tuple[int, int, int]:
         """Returns (redeemed, coll_sent, iterations) — the values `Redeemed` carries."""
         v = self.vault
-        saved = (self.base_rate, self.last_fee_operation_time, len(self.events))
+        saved = (self.base_rate, self.last_fee_operation_time)  # the vault restores the log
 
         def run() -> tuple[int, int, int]:
             if v.shutdown:
@@ -146,6 +149,5 @@ class RedemptionModule:
         try:
             return v._atomic(run)  # type: ignore[return-value]
         except Exception:
-            self.base_rate, self.last_fee_operation_time = saved[0], saved[1]
-            del self.events[saved[2] :]
+            self.base_rate, self.last_fee_operation_time = saved
             raise

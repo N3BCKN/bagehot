@@ -15,6 +15,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from model.protocol import errors as er
 from model.protocol import sorted_list as s
 
 DATA = json.loads(Path("spec/vectors/sorted_list.json").read_text())["vectors"]
@@ -88,13 +89,13 @@ def test_errors() -> None:
     keys = {1: (300, 100), 2: (200, 100)}
     lst = s.SortedList(1, lambda i: keys[i])
     lst.insert(1, 0, 0)
-    with pytest.raises(s.NodeExists):
+    with pytest.raises(er.NodeExists):
         lst.insert(1, 0, 0)
-    with pytest.raises(s.NodeExists):
+    with pytest.raises(er.NodeExists):
         lst.insert(0, 0, 0)
-    with pytest.raises(s.NodeNotFound):
+    with pytest.raises(er.NodeNotFound):
         lst.remove(2)
-    with pytest.raises(s.NodeNotFound):
+    with pytest.raises(er.NodeNotFound):
         lst.reinsert(2, 0, 0)
 
 
@@ -105,7 +106,7 @@ def test_failed_reinsert_leaves_the_list_unchanged() -> None:
         lst.insert(i, i - 1, 0)
     before = (lst.order(), list(lst.events))
     keys[1] = (1, 100)  # 1 now belongs at the bottom: 4 steps from the new head, MAX 1
-    with pytest.raises(s.StaleHint):
+    with pytest.raises(er.StaleHint):
         lst.reinsert(1, 0, 0)
     assert (lst.order(), lst.events) == before
 

@@ -18,17 +18,16 @@ from dataclasses import dataclass, field, fields
 
 from model.protocol.errors import (
     DepositTooSmall,
-    ERC20InsufficientBalance,
     InsufficientBalance,
     InvalidParameter,
     NoDeposit,
     ProtocolError,
-    SupplyCapExceeded,
-    WethTransferFailed,
     ZeroAmount,
 )
+from model.protocol.events import Log
 from model.protocol.math import WAD, Underflow, mul_div_down, mul_div_up
 from model.protocol.math import checked as _c
+from model.protocol.tokens import Token, stable_token, weth_token
 
 DECIMAL_PRECISION = 10**18
 P_PRECISION = 10**36
@@ -48,50 +47,58 @@ __all__ = [
 
 @dataclass
 class Tokens:
-    """The unit-vector bank: WETH and stablecoin balances, the DeficitLedger stand-in's reserve and
-    `settled` flag; accrual is a no-op (counted)."""
+    """The unit-vector bank: WETH and stablecoin (`tokens.py`), the DeficitLedger stand-in's
+    reserve and `settled` flag, and an event log; accrual is a no-op (counted)."""
 
-    weth: dict[str, int] = field(default_factory=dict)
-    stable: dict[str, int] = field(default_factory=dict)
-    total_supply: int = 0
+    log: Log = field(default_factory=Log)
+    weth_token: Token = field(init=False)
+    stable_token: Token = field(init=False)
     ledger_reserve: int = 0
     ledger_settled: bool = False
     accrue_calls: int = 0
 
+    def __post_init__(self) -> None:
+        self.weth_token = weth_token(self.log)
+        self.stable_token = stable_token(self.log)
+
+    @property
+    def weth(self) -> dict[str, int]:
+        return self.weth_token.balances
+
+    @property
+    def stable(self) -> dict[str, int]:
+        return self.stable_token.balances
+
+    @property
+    def total_supply(self) -> int:
+        return self.stable_token.total_supply
+
     def _atomic(self, fn: Callable[[], object]) -> object:
-        saved = {f.name: copy.deepcopy(getattr(self, f.name)) for f in fields(self)}
+        saved = (self.ledger_reserve, self.ledger_settled, self.accrue_calls)
+        tokens, mark = (self.weth_token._save(), self.stable_token._save()), self.log.mark()
         try:
             return fn()
         except Exception:
-            self.__dict__.update(saved)
+            self.ledger_reserve, self.ledger_settled, self.accrue_calls = saved
+            self.weth_token._restore(tokens[0])
+            self.stable_token._restore(tokens[1])
+            self.log.truncate(mark)
             raise
 
     def _accrue(self) -> None:
         self.accrue_calls += 1
 
     def _weth_move(self, frm: str, to: str, amount: int) -> None:
-        if self.weth.get(frm, 0) < amount:
-            raise WethTransferFailed()
-        self.weth[frm] -= amount
-        self.weth[to] = self.weth.get(to, 0) + amount
+        self.weth_token.transfer(frm, to, amount)
 
     def _mint(self, to: str, amount: int) -> None:
-        if amount > SUPPLY_CAP - self.total_supply:
-            raise SupplyCapExceeded()
-        self.stable[to] = self.stable.get(to, 0) + amount
-        self.total_supply += amount
+        self.stable_token.mint(to, amount)
 
     def _burn(self, frm: str, amount: int) -> None:
-        if self.stable.get(frm, 0) < amount:
-            raise ERC20InsufficientBalance()
-        self.stable[frm] -= amount
-        self.total_supply -= amount
+        self.stable_token.burn(frm, amount)
 
     def _stable_move(self, frm: str, to: str, amount: int) -> None:
-        if self.stable.get(frm, 0) < amount:
-            raise ERC20InsufficientBalance()
-        self.stable[frm] -= amount
-        self.stable[to] = self.stable.get(to, 0) + amount
+        self.stable_token.transfer(frm, to, amount)
 
     def on_pool_dust(self, amount: int) -> None:
         self.ledger_reserve += amount
@@ -127,9 +134,10 @@ class StabilityPool:
     interest_gains_balance: int = 0
     deposits: dict[str, Deposit] = field(default_factory=dict)
     depositor_count: dict[int, int] = field(default_factory=dict)
-    events: list[tuple] = field(default_factory=list)
+    log: Log = field(init=False)  # the bank's (`events.py`)
 
     def __post_init__(self) -> None:
+        self.log = self.bank.log
         # §3.4: arguments 0 and 1 are the token addresses, which the model does not carry
         if self.liquidation_penalty > WAD // 2:
             raise InvalidParameter(2)
@@ -139,7 +147,9 @@ class StabilityPool:
     # ---- save / restore, for the vault's transaction wrapper when the pool is its strategy ----
     def _save(self) -> dict:
         return {
-            f.name: copy.deepcopy(getattr(self, f.name)) for f in fields(self) if f.name != "bank"
+            f.name: copy.deepcopy(getattr(self, f.name))
+            for f in fields(self)
+            if f.name not in ("bank", "log")
         }
 
     def _restore(self, saved: dict) -> None:
@@ -147,9 +157,7 @@ class StabilityPool:
 
     # ---- transaction wrapper: the pool's own state, inside the bank's ----
     def _atomic(self, fn: Callable[[], object]) -> object:
-        saved = {
-            f.name: copy.deepcopy(getattr(self, f.name)) for f in fields(self) if f.name != "bank"
-        }
+        saved = self._save()
 
         def run() -> object:
             try:
@@ -161,18 +169,15 @@ class StabilityPool:
         return self.bank._atomic(run)
 
     def _emit(self, event: tuple) -> None:
-        self.events.append(event)
+        self.log.emit("pool", event)
+
+    @property
+    def events(self) -> list[tuple]:
+        return self.log.of("pool")
 
     # ---- helpers ----
     def _stable_transfer(self, frm: str, to: str, amount: int) -> None:
-        bank = self.bank
-        if hasattr(bank, "_stable_move"):
-            bank._stable_move(frm, to, amount)
-            return
-        if bank.stable.get(frm, 0) < amount:
-            raise ERC20InsufficientBalance()
-        bank.stable[frm] -= amount
-        bank.stable[to] = bank.stable.get(to, 0) + amount
+        self.bank._stable_move(frm, to, amount)
 
     def _rec(self, a: str) -> Deposit:
         return self.deposits.get(a, Deposit())

@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 
 from model.protocol import deficit as dl
+from model.protocol import errors as er
 from model.protocol.stability_pool import Tokens
 
 E18 = 10**18
@@ -30,7 +31,7 @@ def test_hooks_callers_and_effects() -> None:
         lambda: led.add_auction_debt("house", 1),  # no house in A
         lambda: led.on_settlement("alice"),
     ):
-        with pytest.raises(dl.Unauthorized):
+        with pytest.raises(er.Unauthorized):
             call()
 
 
@@ -43,7 +44,7 @@ def test_auction_hooks_b() -> None:
     led.pay_tip("house", "alice", 5 * E18)
     assert (led.auction_debt, led.deficit, led.reserve) == (0, 200 * E18, 20 * E18)
     assert led.bank.stable["alice"] == 5 * E18
-    with pytest.raises(dl.Unauthorized):
+    with pytest.raises(er.Unauthorized):
         led.record_deficit("house", 1, 0)
 
 
@@ -90,13 +91,13 @@ def test_settlement() -> None:
     led.record_deficit("vault", 10 * E18, 0)
     assert led.on_settlement("shutdown") == 0
     assert (led.reserve, led.auction_debt, led.deficit, led.settled) == (0, 0, 510 * E18, True)
-    with pytest.raises(dl.AlreadySettled):
+    with pytest.raises(er.AlreadySettled):
         led.on_settlement("shutdown")
-    with pytest.raises(dl.SystemSettled):
+    with pytest.raises(er.SystemSettled):
         led.on_interest("vault", 1)
-    with pytest.raises(dl.SystemSettled):
+    with pytest.raises(er.SystemSettled):
         led.cover()
-    with pytest.raises(dl.Unauthorized):  # the caller check first
+    with pytest.raises(er.Unauthorized):  # the caller check first
         led.on_interest("alice", 1)
 
 
@@ -127,11 +128,11 @@ def test_after_settlement_every_hook_raises_system_settled() -> None:
         else:
             hooks.append((led.on_pool_dust, ("pool", 1)))
         for fn, args in hooks:
-            with pytest.raises(dl.SystemSettled):
+            with pytest.raises(er.SystemSettled):
                 fn(*args)
-        with pytest.raises(dl.Unauthorized):  # the caller check comes first
+        with pytest.raises(er.Unauthorized):  # the caller check comes first
             led.on_settlement("alice")
-        with pytest.raises(dl.AlreadySettled):
+        with pytest.raises(er.AlreadySettled):
             led.on_settlement("shutdown")
 
 
@@ -145,7 +146,7 @@ def test_auction_hooks_wrong_caller_raise_unauthorized() -> None:
                 (led.on_auction_shortfall, (caller, 0)),
                 (led.pay_tip, (caller, "alice", 0)),
             ):
-                with pytest.raises(dl.Unauthorized):
+                with pytest.raises(er.Unauthorized):
                     fn(*args)
 
 

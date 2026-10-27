@@ -10,7 +10,6 @@ pool-only unit tests.
 
 from __future__ import annotations
 
-import copy
 from dataclasses import dataclass, field, fields
 
 from model.protocol.errors import (
@@ -20,6 +19,9 @@ from model.protocol.errors import (
     Unauthorized,
     Underflow,
 )
+from model.protocol.events import Log
+
+_NOT_SAVED = ("bank", "log")
 
 __all__ = ["AlreadySettled", "DeficitLedger", "ProtocolError", "SystemSettled", "Unauthorized"]
 
@@ -33,12 +35,18 @@ class DeficitLedger:
     deficit: int = 0
     recovered_coll: int = 0
     settled: bool = False
-    events: list[tuple] = field(default_factory=list)
+    # the bank's log (`events.py`): one cross-contract order (§5.10, I14)
+    log: Log = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.log = self.bank.log
+
+    @property
+    def events(self) -> list[tuple]:
+        return self.log.of("ledger")
 
     def _save(self) -> dict:
-        return {
-            f.name: copy.deepcopy(getattr(self, f.name)) for f in fields(self) if f.name != "bank"
-        }
+        return {f.name: getattr(self, f.name) for f in fields(self) if f.name not in _NOT_SAVED}
 
     def _restore(self, saved: dict) -> None:
         self.__dict__.update(saved)
@@ -56,12 +64,7 @@ class DeficitLedger:
         return self.bank._atomic(run)
 
     def _emit(self, event: tuple) -> None:
-        # the ledger's own log, and the bank's (the Vault model's `events`), so the system keeps one
-        # cross-contract order (§5.10, I14); a bare `Tokens` bank has no log
-        self.events.append(event)
-        bank_events = getattr(self.bank, "events", None)
-        if bank_events is not None:
-            bank_events.append(event)
+        self.log.emit("ledger", event)
 
     def _hook(self, caller: str, allowed: str | None) -> None:
         if allowed is None or caller != allowed:
@@ -142,9 +145,7 @@ class DeficitLedger:
             if amount > self.reserve:
                 raise Underflow()
             self.reserve -= amount
-            stable = self.bank.stable
-            stable["ledger"] = stable.get("ledger", 0) - amount
-            stable[to] = stable.get(to, 0) + amount
+            self.bank._stable_move("ledger", to, amount)  # token.safeTransfer(to, amount)
             self._emit(("ReserveDecreased", amount, 1))
 
         self._atomic(run)

@@ -11,6 +11,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from model.protocol import errors as er
 from model.protocol import redemption as rd
 from model.protocol import vault as vm
 from model.protocol.errors import ProtocolError
@@ -257,7 +258,7 @@ def _simple_env(n_positions: int = 3) -> Env:
 
 def test_redeem_collateral_unauthorized() -> None:
     env = _simple_env()
-    with pytest.raises(vm.Unauthorized):
+    with pytest.raises(er.Unauthorized):
         env.v.redeem_collateral("erin", "erin", 1, 0, 2_000 * WAD, 1, 0, 0)
 
 
@@ -280,18 +281,18 @@ def test_redeem_errors(args: tuple, err: str) -> None:
 def test_redeem_shutdown_and_unusable_price() -> None:
     env = _simple_env()
     env.v.shutdown = True
-    with pytest.raises(vm.SystemShutdown):
+    with pytest.raises(er.SystemShutdown):
         env.rm.redeem("alice", WAD, 10, WAD, 0, 0)
     env.v.shutdown = False
     env.v.price_source = lambda: (0, False)
-    with pytest.raises(vm.PriceUnusable):
+    with pytest.raises(er.PriceUnusable):
         env.rm.redeem("alice", WAD, 10, WAD, 0, 0)
 
 
 def test_redeem_auction_callback_active() -> None:
     env = _simple_env()
     env.rm.in_purchase = lambda: True
-    with pytest.raises(rd.AuctionCallbackActive):
+    with pytest.raises(er.AuctionCallbackActive):
         env.rm.redeem("alice", WAD, 10, WAD, 0, 0)
 
 

@@ -30,7 +30,6 @@ from model.protocol.errors import (
     CollReturnedNotReceived,
     DebtAbsorbedExceedsDebt,
     DebtBelowMinimum,
-    ERC20InsufficientBalance,
     IcrBelowMcr,
     InsufficientBalance,
     InsufficientCollateral,
@@ -42,16 +41,16 @@ from model.protocol.errors import (
     PositionNotActive,
     PriceUnusable,
     RepayExceedsMaximum,
-    SupplyCapExceeded,
     SystemSettled,
     SystemShutdown,
     Unauthorized,
-    WethTransferFailed,
     ZeroAmount,
 )
+from model.protocol.events import Log
 from model.protocol.math import RAY, WAD, mul_div_down, mul_div_up, rpow
 from model.protocol.math import checked as _c
 from model.protocol.sorted_list import SortedList
+from model.protocol.tokens import Token, stable_token, weth_token
 
 BPS = 10_000
 COLL_CAP = 2**128 - 1
@@ -67,6 +66,19 @@ MAX_POOL_HOOK_GAS = 1_000_000
 OP_REDEEM = 7
 OP_LIQUIDATE = 8
 PATH_NONE, PATH_REDISTRIBUTED, PATH_DEFICIT = 0, 1, 2
+# fields `_atomic` saves through their own `_save`, or never (callables, the shared log)
+_NOT_COPIED = frozenset(
+    (
+        "price_source",
+        "sorted",
+        "pool_hook",
+        "strategy",
+        "ledger",
+        "log",
+        "weth_token",
+        "stable_token",
+    )
+)
 
 
 class Status(IntEnum):
@@ -133,10 +145,12 @@ class Vault:
     last_error_debt: int = 0
     shutdown: bool = False
     settled: bool = False
-    weth: dict[str, int] = field(default_factory=dict)  # balances; "vault" is the VaultManager
-    stable: dict[str, int] = field(default_factory=dict)
-    total_supply: int = 0
-    events: list[tuple] = field(default_factory=list)
+    # the run's ordered event log (`events.py`), shared with the list, the ledger, the tokens and,
+    # through the bank, the pool and the redemption module
+    log: Log = field(default_factory=Log)
+    # WETH and StableToken (`tokens.py`): per-holder balances; "vault" is the VaultManager
+    weth_token: Token = field(init=False)
+    stable_token: Token = field(init=False)
     sorted: SortedList = field(init=False)
     # §4.7 (P21): the real DeficitLedger model, banked here (account "ledger"); saved and restored
     # with the vault by `_atomic`, never deep-copied with it (its `bank` is this vault)
@@ -163,7 +177,9 @@ class Vault:
             DeficitLedger,  # noqa: PLC0415 (it imports this module)
         )
 
-        self.sorted = SortedList(self.max_hint_steps, self.sort_key)
+        self.weth_token = weth_token(self.log)
+        self.stable_token = stable_token(self.log)
+        self.sorted = SortedList(self.max_hint_steps, self.sort_key, log=self.log)
         self.ledger = DeficitLedger(bank=self, variant_b=not self.has_pool)
 
     # ---- the ledger's views, as the VaultManager reads them (§5.1.12) ----
@@ -183,25 +199,39 @@ class Vault:
     def ledger_auction_debt(self) -> int:
         return self.ledger.auction_debt
 
+    # ---- events and balances, as views ----
     def _emit(self, event: tuple) -> None:
-        self.events.append(event)
+        self.log.emit("vault", event)
+
+    @property
+    def events(self) -> list[tuple]:
+        return self.log.of("vault")
+
+    @property
+    def weth(self) -> dict[str, int]:
+        return self.weth_token.balances
+
+    @property
+    def stable(self) -> dict[str, int]:
+        return self.stable_token.balances
+
+    @property
+    def total_supply(self) -> int:
+        return self.stable_token.total_supply
 
     # ---- transaction wrapper ----
     def _atomic(self, fn: Callable[[], object]) -> object:
-        # exactly the declared state fields — not the price source, the list (saved below) or any
-        # attribute a caller attached
+        # exactly the declared state fields — not the price source, the components saved below or
+        # any attribute a caller attached
         saved = {
             f.name: copy.deepcopy(getattr(self, f.name))
             for f in fields(self)
-            if f.name not in ("price_source", "sorted", "pool_hook", "strategy", "ledger")
+            if f.name not in _NOT_COPIED
         }
+        mark = self.log.mark()
+        tokens = self.weth_token._save(), self.stable_token._save()
         ledger_saved = self.ledger._save()
-        saved_sorted = (
-            copy.deepcopy(self.sorted.nodes),
-            self.sorted.head,
-            self.sorted.tail,
-            list(self.sorted.events),
-        )
+        sorted_saved = self.sorted._save()
         strategy_saved = self.strategy._save() if hasattr(self.strategy, "_save") else None
         try:
             return fn()
@@ -210,28 +240,24 @@ class Vault:
                 self.strategy._restore(strategy_saved)
             self.__dict__.update(saved)
             self.ledger._restore(ledger_saved)
-            self.sorted.nodes, self.sorted.head, self.sorted.tail, self.sorted.events = saved_sorted
-            self.sorted.key_of = self.sort_key
+            self.sorted._restore(sorted_saved)
+            self.weth_token._restore(tokens[0])
+            self.stable_token._restore(tokens[1])
+            self.log.truncate(mark)
             raise
 
     # ---- token helpers (WETH via SafeERC20, StableToken) ----
     def _weth_move(self, frm: str, to: str, amount: int) -> None:
-        if self.weth.get(frm, 0) < amount:
-            raise WethTransferFailed()
-        self.weth[frm] -= amount
-        self.weth[to] = self.weth.get(to, 0) + amount
+        self.weth_token.transfer(frm, to, amount)
 
     def _mint(self, to: str, amount: int) -> None:
-        if amount > SUPPLY_CAP - self.total_supply:
-            raise SupplyCapExceeded()
-        self.stable[to] = self.stable.get(to, 0) + amount
-        self.total_supply += amount
+        self.stable_token.mint(to, amount)
 
     def _burn(self, frm: str, amount: int) -> None:
-        if self.stable.get(frm, 0) < amount:
-            raise ERC20InsufficientBalance()
-        self.stable[frm] = self.stable.get(frm, 0) - amount
-        self.total_supply -= amount
+        self.stable_token.burn(frm, amount)
+
+    def _stable_move(self, frm: str, to: str, amount: int) -> None:
+        self.stable_token.transfer(frm, to, amount)
 
     # ---- internals ----
     def _fetch_required_price(self) -> int:

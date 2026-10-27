@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from model.protocol import deficit as dl
+from model.protocol import errors as er
 from model.protocol import stability_pool as sp
 from model.protocol import vault as vm
 from model.protocol.math import WAD
@@ -240,7 +240,7 @@ class _LyingStrategy:
 
 @pytest.mark.parametrize(
     ("extra_debt", "extra_coll", "error"),
-    [(1, 0, vm.DebtAbsorbedExceedsDebt), (0, 1, vm.CollReturnedExceedsColl), (0, 0, None)],
+    [(1, 0, er.DebtAbsorbedExceedsDebt), (0, 1, er.CollReturnedExceedsColl), (0, 0, None)],
 )
 def test_chg012_strategy_answer_bounds(extra_debt: int, extra_coll: int, error) -> None:  # noqa: ANN001
     price = [2_000 * WAD]
@@ -280,7 +280,7 @@ def test_chg014_collateral_not_received_reverts_and_rolls_back() -> None:
     v.strategy = _SilentStrategy()
     price[0] = 1_500 * WAD
     before = (v.total_norm_debt, v.pending_coll, dict(v.weth), v.positions[2].status)
-    with pytest.raises(vm.CollReturnedNotReceived):
+    with pytest.raises(er.CollReturnedNotReceived):
         v.liquidate("liq", 2)
     assert (v.total_norm_debt, v.pending_coll, dict(v.weth), v.positions[2].status) == before
 
@@ -298,9 +298,14 @@ def test_no_stakes_deficit_lands_in_the_real_ledger_then_cover_and_settlement() 
     led = v.ledger
     assert led.deficit > 0 and led.recovered_coll > 0
     assert ("DeficitRecorded", led.deficit, led.recovered_coll, 2) in led.events
-    # one cross-contract order: the ledger's event sits in the vault's log before `Liquidated`
-    names = [e[0] for e in v.events]
-    assert names.index("DeficitRecorded") < len(names) - 1 - names[::-1].index("Liquidated")
+    # one cross-contract order (the shared log): the WETH moves to the ledger, then the ledger
+    # records, then the vault emits `Liquidated` — the contract's call order (§6.4.1)
+    entries = v.log.entries
+    names = [e[0] for _, e in entries]
+    k = names.index("DeficitRecorded")
+    assert entries[k][0] == "ledger"
+    assert entries[k - 1] == ("weth", ("Transfer", "vault", "ledger", led.recovered_coll))
+    assert k < len(names) - 1 - names[::-1].index("Liquidated")
     assert v.weth.get("ledger", 0) == led.recovered_coll  # I1's ledger row
     assert v.stable.get("ledger", 0) == led.reserve
     reserve, deficit, supply = led.reserve, led.deficit, v.total_supply
@@ -318,11 +323,11 @@ def test_no_stakes_deficit_lands_in_the_real_ledger_then_cover_and_settlement() 
         0,
         0,
     )
-    with pytest.raises(vm.Unauthorized):
+    with pytest.raises(er.Unauthorized):
         led.record_deficit("alice", 1, 0)
     # a settled ledger refuses `onInterest`, so the vault's accrual reverts as a whole
     v.now += 365 * 86_400
     before = (v.index, v.last_accrual, v.total_supply, v.pool_interest)
-    with pytest.raises(dl.SystemSettled):
+    with pytest.raises(er.SystemSettled):
         v.accrue()
     assert (v.index, v.last_accrual, v.total_supply, v.pool_interest) == before

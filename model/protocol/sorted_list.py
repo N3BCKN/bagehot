@@ -13,6 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from model.protocol.errors import InvalidParameter, NodeExists, NodeNotFound, StaleHint
+from model.protocol.events import Log
 
 __all__ = ["NodeExists", "NodeNotFound", "SortedList", "StaleHint", "precedes"]
 
@@ -33,14 +34,24 @@ class SortedList:
     nodes: dict[int, list[int]] = field(default_factory=dict)  # id -> [prev, next]
     head: int = 0
     tail: int = 0
-    events: list[tuple] = field(default_factory=list)
+    log: Log = field(default_factory=Log)
 
     def __post_init__(self) -> None:
         if not 1 <= self.max_hint_steps <= MAX_MAX_HINT_STEPS:  # §3.4, argument 0
             raise InvalidParameter(0)
 
     def _emit(self, event: tuple) -> None:
-        self.events.append(event)
+        self.log.emit("sorted", event)
+
+    @property
+    def events(self) -> list[tuple]:
+        return self.log.of("sorted")
+
+    def _save(self) -> tuple[dict[int, list[int]], int, int]:
+        return {k: v[:] for k, v in self.nodes.items()}, self.head, self.tail
+
+    def _restore(self, saved: tuple[dict[int, list[int]], int, int]) -> None:
+        self.nodes, self.head, self.tail = saved
 
     @property
     def size(self) -> int:
@@ -151,16 +162,11 @@ class SortedList:
         """remove, then insert with the fresh key; a StaleHint undoes both, as the revert does."""
         if node_id not in self.nodes:
             raise NodeNotFound()
-        snapshot = (
-            {k: v[:] for k, v in self.nodes.items()},
-            self.head,
-            self.tail,
-            len(self.events),
-        )
+        saved, mark = self._save(), self.log.mark()
         self.remove(node_id)
         try:
             self.insert(node_id, upper, lower)
         except StaleHint:
-            self.nodes, self.head, self.tail = snapshot[0], snapshot[1], snapshot[2]
-            del self.events[snapshot[3] :]
+            self._restore(saved)
+            self.log.truncate(mark)
             raise

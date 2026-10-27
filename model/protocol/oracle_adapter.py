@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 
 from model.protocol.errors import InvalidFeedDecimals, InvalidParameter
+from model.protocol.events import Log
 
 UINT256_MAX = 2**256 - 1
 
@@ -61,7 +62,7 @@ class OracleAdapter:
     feed_decimals: int
     last_good_price: int = 0
     failure_start: int = 0
-    events: list[tuple] = field(default_factory=list)
+    log: Log = field(default_factory=Log)
 
     @classmethod
     def deploy(
@@ -111,7 +112,11 @@ class OracleAdapter:
         )
 
     def _emit(self, event: tuple) -> None:
-        self.events.append(event)
+        self.log.emit("oracle", event)
+
+    @property
+    def events(self) -> list[tuple]:
+        return self.log.of("oracle")
 
     @property
     def _scale(self) -> int:

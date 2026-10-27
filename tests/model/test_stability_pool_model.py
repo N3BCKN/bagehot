@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from model.protocol import errors as er
 from model.protocol import stability_pool as sp
 from model.protocol import vault as vm
 from model.protocol.math import WAD
@@ -200,21 +201,21 @@ def test_system_vector_deposit_after_idle_gets_no_back_interest() -> None:
 def test_errors_and_atomicity() -> None:
     pool = _unit_pool()
     pool.bank._mint("alice", 10 * WAD)
-    with pytest.raises(sp.ZeroAmount):
+    with pytest.raises(er.ZeroAmount):
         pool.deposit("alice", 0)
-    with pytest.raises(sp.DepositTooSmall):
+    with pytest.raises(er.DepositTooSmall):
         pool.deposit("alice", WAD - 1)
-    with pytest.raises(sp.InsufficientBalance):
+    with pytest.raises(er.InsufficientBalance):
         pool.deposit("alice", 11 * WAD)
-    with pytest.raises(sp.NoDeposit):
+    with pytest.raises(er.NoDeposit):
         pool.withdraw("alice", 1)
-    with pytest.raises(sp.NoDeposit):
+    with pytest.raises(er.NoDeposit):
         pool.claim_gains("alice")
     pool.deposit("alice", 5 * WAD)
-    with pytest.raises(sp.ZeroAmount):
+    with pytest.raises(er.ZeroAmount):
         pool.withdraw("alice", 0)
     snapshot = (pool.total_deposits, dict(pool.bank.stable), pool.bank.accrue_calls)
-    with pytest.raises(sp.DepositTooSmall):
+    with pytest.raises(er.DepositTooSmall):
         pool.withdraw("alice", 4 * WAD + 1)
     assert (pool.total_deposits, dict(pool.bank.stable), pool.bank.accrue_calls) == snapshot
 

@@ -13,6 +13,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from model.protocol import errors as er
 from model.protocol import oracle_adapter as o
 
 VECTORS = json.loads(Path("spec/vectors/oracle.json").read_text())["vectors"]
@@ -117,7 +118,7 @@ def test_vector_count() -> None:
     ],
 )
 def test_constructor_invalid_parameter(overrides: dict, index: int) -> None:
-    with pytest.raises(o.InvalidParameter) as e:
+    with pytest.raises(er.InvalidParameter) as e:
         adapter(**overrides)
     assert e.value.index == index
 
@@ -134,7 +135,7 @@ def test_constructor_floor_bounds_are_inclusive() -> None:
 
 def test_constructor_invalid_feed_decimals() -> None:
     for d in (None, 19):
-        with pytest.raises(o.InvalidFeedDecimals):
+        with pytest.raises(er.InvalidFeedDecimals):
             adapter(feed_decimals=d)
     assert adapter(feed_decimals=18).feed_decimals == 18
     assert adapter(feed_decimals=0).feed_decimals == 0

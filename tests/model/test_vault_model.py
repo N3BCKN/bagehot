@@ -14,6 +14,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from model.protocol import errors as er
 from model.protocol import vault as vm
 from model.protocol.errors import ProtocolError
 from model.protocol.math import RAY
@@ -136,33 +137,33 @@ def test_open_close_round_trip_and_events() -> None:
 
 def test_error_order_matches_the_contract() -> None:
     v = fresh()
-    with pytest.raises(vm.DebtBelowMinimum):
+    with pytest.raises(er.DebtBelowMinimum):
         v.open_position("alice", 2**128, 1, 0, 0)  # debt before the collateral cap
-    with pytest.raises(vm.CollateralTooLarge):
+    with pytest.raises(er.CollateralTooLarge):
         v.open_position("alice", 2**128, 4_000 * 10**18, 0, 0)
     v.price_state["usable"] = False  # type: ignore[attr-defined]
-    with pytest.raises(vm.PriceUnusable):
+    with pytest.raises(er.PriceUnusable):
         v.open_position("alice", 1, 4_000 * 10**18, 0, 0)  # price before the ICR check
     v.price_state["usable"] = True  # type: ignore[attr-defined]
     v.open_position("alice", 4 * 10**18, 4_000 * 10**18, 0, 0)
-    with pytest.raises(vm.ZeroAmount):
+    with pytest.raises(er.ZeroAmount):
         v.withdraw_collateral("bob", 1, 0, 0, 0)  # a non-owner gets ZeroAmount first (§2.5)
-    with pytest.raises(vm.NotOwner):
+    with pytest.raises(er.NotOwner):
         v.withdraw_collateral("bob", 1, 1, 0, 0)
-    with pytest.raises(vm.RepayExceedsMaximum):
+    with pytest.raises(er.RepayExceedsMaximum):
         v.repay("bob", 1, 4_000 * 10**18, 0, 0)  # before the balance check
-    with pytest.raises(vm.InsufficientBalance):
+    with pytest.raises(er.InsufficientBalance):
         v.repay("bob", 1, 1, 0, 0)
     v.on_shutdown("shutdown")
-    with pytest.raises(vm.SystemShutdown):
+    with pytest.raises(er.SystemShutdown):
         v.withdraw_collateral("alice", 1, 0, 0, 0)  # mode before ZeroAmount
     v.on_settlement("shutdown")
-    with pytest.raises(vm.SystemSettled):
+    with pytest.raises(er.SystemSettled):
         v.add_collateral("bob", 1, 0, 0, 0)
-    with pytest.raises(vm.NotOwner):
+    with pytest.raises(er.NotOwner):
         v.reclaim_gas_reserve("bob", 1)
     v.reclaim_gas_reserve("alice", 1)
-    with pytest.raises(vm.PositionNotActive):
+    with pytest.raises(er.PositionNotActive):
         v.reclaim_gas_reserve("alice", 1)
 
 
@@ -170,7 +171,7 @@ def test_icr_boundary_exactly_at_mcr() -> None:
     v = fresh()
     c = min_coll(4_000 * 10**18)
     v.open_position("alice", c, 4_000 * 10**18, 0, 0)
-    with pytest.raises(vm.IcrBelowMcr):
+    with pytest.raises(er.IcrBelowMcr):
         v.open_position("bob", c - 1, 4_000 * 10**18, 0, 0)
 
 
@@ -179,7 +180,7 @@ def test_failed_operations_leave_no_trace() -> None:
     v.open_position("alice", 4 * 10**18, 4_000 * 10**18, 0, 0)
     before = (v.total_collateral, v.total_supply, dict(v.weth), len(v.events), v.sorted.order())
     v.weth["bob"] = 1  # cannot pay collateral + gas reserve: the WETH pull fails late
-    with pytest.raises(vm.WethTransferFailed):
+    with pytest.raises(er.WethTransferFailed):
         v.open_position("bob", 4 * 10**18, 4_000 * 10**18, 0, 0)
     assert (v.total_collateral, v.total_supply, len(v.events), v.sorted.order()) == (
         before[0],
@@ -287,10 +288,10 @@ def test_checked_arithmetic_raises_overflow_like_the_contract() -> None:
 
 def test_hooks_check_the_caller_before_state() -> None:
     v = fresh()
-    with pytest.raises(vm.Unauthorized):
+    with pytest.raises(er.Unauthorized):
         v.on_settlement("alice")  # not NotTriggered
     v.on_shutdown("shutdown")
-    with pytest.raises(vm.Unauthorized):
+    with pytest.raises(er.Unauthorized):
         v.on_shutdown("alice")  # not SystemShutdown
 
 
