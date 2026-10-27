@@ -298,3 +298,91 @@ redirections in both. A pool that reverts early when short of gas *is* redirecta
 (`test_gasleftBranchingPool_canBeRedirected_theAssumptionMatters`), which is why spec §6.2 states that
 `onInterest` never reads `gasleft()`.
 
+
+## P21: the real DeficitLedger in the core campaign
+
+Since P21 the core handler wires the real `DeficitLedger` (the stand-in is gone) with the gate address
+as its ShutdownModule. New and changed in the harness:
+
+- **I1, per holder:** the ledger row `token == reserve + D_t`, `WETH == recoveredColl + D_w` (only
+  donations once settled), and the pool row with donations (`donate` now reaches the VaultManager,
+  the RedemptionModule, the ledger and, in A, the pool).
+- **`cover()` action:** the burn is `min(reserve, deficit)`, and supply, reserve and deficit each fall
+  by exactly that, so I2's `E` does not move.
+- **I2 with deficit:** `A` and `F` are read from the ledger. The no-stakes Y is counted from the
+  ledger's own `DeficitRecorded(source = NO_STAKES)` (CHG-011).
+- **I4/I6/I7:** asserted under their invariants.md names:
+  - `invariant_I4_liquidationBundle`
+  - `invariant_I4_fullAbsorptionDoesNotLowerTcr`
+  - `invariant_I6_liquidationConservation`
+  - `invariant_I7_surplusToOwnerOnly`
+  - Medusa runs the `property_*` equivalents.
+
+  I6 checks exact deltas of `pendingColl`, `pendingNormDebt` and `totalNormDebt` on every path in A and
+  B, and that the deficit moves only on the no-stakes path. Under Foundry, `_liqEvents` reads every term
+  from `Liquidated`, `PoolLiquidation`, `Redistributed` and `DeficitRecorded`. Each must equal the
+  reconstruction from the pre-state, with each event emitted exactly once.
+- **I8 unwind:** the pool and ledger residuals include donations (I8 step 3).
+- **I13 reach (CHG-005):** deterministic in A. From call 50, until the run has redistributed, each action
+  is preceded by one priced liquidation (`_reachTolerance`). These injected calls are not counted in
+  `calls`.
+- **Deterministic reach** of the deficit → burning `cover` → settlement sequence, with every check after
+  each step: `CoreHandlerRegressionsTest.test_reach_deficitCoverSettle_checksHold`.
+
+### Baselines for deployment A (2026-10-26, macOS arm64, Medusa 1.5.1, Foundry as pinned)
+
+**Foundry, default profile, seeds 1–6** (256 runs × 200 calls each): every invariant passes in A and
+B on every seed, with 0 unexpected reverts. Wall time is about 35–60 s per deployment.
+
+**Foundry, nightly profile** (`just test-nightly` at `6284252`): 4,096 runs × 500 calls = 2,048,000
+calls per invariant contract, default seed, every suite in parallel, 56 min wall time. Every invariant
+passed, with 0 reverts. The later commit `9c191d6` changes only failure messages and the Python model's
+event log.
+
+| suite | wall time |
+|---|---|
+| `CoreInvariantsTest` (A), 16 invariants | 2,493 s |
+| `CoreInvariantsBTest` (B), 16 invariants | 2,235 s |
+| `VaultI2InvariantTest` (P15) | 3,366 s |
+| `RedemptionInvariantTest` (P16) | 1,871 s |
+| `StabilityPoolInvariantsTest` (P19) | 1,320 s |
+| `SortedPositionsInvariantTest` (P13) | 995 s |
+| `I13CheckTest` | < 1 s |
+
+Compared with the P17 nightly (A 1,680 s), the core suites cost about 1.5× more per call: real
+liquidations, the ledger, and the event provenance checks on every liquidation.
+
+**Medusa, 2 hours** (`just medusa`, timeout 7,200 s, at `9c191d6`):
+
+| | value |
+|---|---|
+| elapsed | 1 h 59 min 58 s (timeout 7,200 s) |
+| calls | 6,082,878 |
+| calls/s | **≈ 845 average** (≈ 725–1,130 instantaneous) |
+| sequences | 60,951 |
+| branches covered | 6,052 (P17: 4,521) |
+| corpus | 86 sequences |
+| result | 15/15 properties passed, 0 failures |
+
+The handlers deploy the protocol at runtime, so the lcov report maps only `CoreHandler`. Reach comes
+from its line hits. A drop to zero on any of these means the campaign stopped exercising that path:
+
+| path | hits |
+|---|---|
+| successful liquidation (`_liqAfter`) | 190,141 |
+| liquidation with redistribution (path 1) | 145,507 |
+| liquidation into the ledger deficit (path 2, exact I6 deficit check) | 36,211 |
+| full absorption, nothing to account | 8,423 |
+| I4 A3 TCR comparison evaluated (full absorption, `coll·D ≤ debt·C`) | 3,373 |
+| `redistribute` call | 30,404 |
+| successful redemption | 189,640 |
+| last-visit reason check (CHG-007) | 753 |
+| successful `cover` | 266,155 |
+| `cover` reverting after settlement (`SystemSettled`) | 12,801 |
+| shutdown triggered | 27,037 |
+| settlement (`VaultManager` and `DeficitLedger.onSettlement`) | 9,939 |
+| gas-reserve reclaim | 6,456 |
+| `_reachTolerance` entry (CHG-005) | 335,059 |
+
+Throughput fell from ≈ 1,400 to ≈ 845 calls/s against P17. The cause is the same as for Foundry: real
+liquidations and the per-liquidation provenance checks.

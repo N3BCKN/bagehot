@@ -25,7 +25,7 @@ Claude updates this file at the end of every session. Status: todo · in progres
 | P18 | Local deployment, factory and manifest | done | 2026-10-25 | `BagehotFactory` deploys and wires a whole variant in one transaction (local-only stand-ins for the modules P19–P33 build); `config/31337.toml` + `script/Config.s.sol`; `Deploy.s.sol` (chain guard, §3.3 + CREATE-provenance assertions before broadcast, variant-keyed manifest written only on broadcast); `SmokeTest.s.sol`. **Fresh anvil → `just deploy-local` → `just smoke http://127.0.0.1:8545` passes**; deploy on 1 / 8453 reverts (tested). security-reviewer: nothing critical; M/L findings fixed. Open: P18-1 (initcode, ADR before P19), P18-2, P18-3 |
 | P19 | StabilityPool (product-sum) | done | 2026-10-26 | `StabilityPool` (§6.6, §5.3; `onLiquidation`, dust sweep, `onInterest` returning `booked`) with its integer model; all 3 `product_sum.json` vectors bit-for-bit on both sides; 39 unit tests; CHG-006 / ADR-0033 applied (guarded, gas-capped pool hook, `POOL_HOOK_GAS = 200_000` from a measured 86,981 worst case; failing-pool matrix 8 modes × 6 operations; caller-gas sweeps with zero redirections); pool invariant campaign (I1, I3, U4) and the real pool in the core handler (Medusa `property_I3_poolSolvency`); precision study `model/tools/sp_precision.py` (200 × 300, replayed bit-for-bit by Foundry; docs/fuzzing.md); real pool deployed in A from its blueprint (ADR-0035 implemented, factory tx ≈ 10.2M gas), smoke tests A and B pass on a fresh anvil; CHG-009 applied to invariants. security-reviewer and spec-auditor: no high/critical. **Open: CHG-010 (I3 interest bound, human decision), P19-L1 (`MIN_POOL_HOOK_GAS` range), CHG-011 candidate (I2 counter rule).** |
 | P20 | Liquidation via pool and redistribution | done | 2026-10-26 | `liquidate` (§6.4.1) with redistribution, snapshot reset and the no-stakes deficit; CHG-012's checks; Python mirror; all 9 liquidation/redistribution vectors bit-for-bit on both sides; unit tests (every revert and path, T-10, T-26, T-27, P17-H1 equivalence, CHG-006's liquidation case, the review's gaps); the core campaign liquidates for real in A and B (I4, I6, I7 per liquidation; I2 per CHG-011); smoke test liquidates on a fresh anvil; **nightly green** (4,096 runs × 500, A and B); security-reviewer: no critical/high. Open: the CHG-010/011/013 spec and invariant texts (approved, await the unlock), CHG-014 and CHG-015 (proposed), a per-path liquidation gas measurement for P24's cost model. |
-| P21 | DeficitLedger and invariant extension | todo | | |
+| P21 | DeficitLedger and invariant extension | done | 2026-10-27 | `DeficitLedger` (§4.7, §5.6, §6.9, §6.11.3) replaces the stand-in in the factory, the fixtures and the core campaign; the model's Vault owns the real ledger model; full I1 per holder, I2 with deficit, I4/I6/I7 by name with event provenance; nightly green at `6284252`; Medusa 2 h green at `9c191d6` (15/15, 6.08M calls); security-reviewer: no critical/high; spec-auditor re-audit: every stage-3 gap closed except CHG-016 (text, awaits approval) and the P33/ShutdownModule-dependent items (P21-DEF). |
 | P22 | Python protocol model | todo | | |
 | P23 | Differential testing harness | todo | | |
 | P24 | Oracle and cost models | todo | | |
@@ -54,6 +54,33 @@ Claude updates this file at the end of every session. Status: todo · in progres
 ## Session log
 
 <!-- newest first: date · prompt · what changed · decisions · next -->
+
+### 2026-10-27 · P21 · DeficitLedger and invariant extension
+
+**Changed.** `src/safety/DeficitLedger.sol` per §4.7, §5.6, §6.9 and §6.11.3: reserve from interest and
+pool dust, `recordDeficit`, permissionless `cover()` (burns `min(reserve, deficit)`), auction storage and
+hooks, `payTip`, settlement in checks–effects–interactions order. It replaces the stand-in in the
+factory, fixtures and core campaign. The model's Vault owns the real ledger model (saved and restored
+in `_atomic`, its events in the vault's log). The core handler checks full I1 per holder, I2 with the
+deficit (CHG-011 counting from `DeficitRecorded`), I4 (bundle and A3 TCR), exact I6 deltas, and I7,
+each as its own invariant and Medusa property, with event provenance on every liquidation. I13's
+tolerance regime is reached deterministically from call 50 (`_reachTolerance`). Baselines are in
+`docs/fuzzing.md` (P21): nightly at `6284252` green; Medusa 2 h at `9c191d6`, 15/15 properties,
+6,082,878 calls, 0 failures, with path-2 deficits 36,211 and burning covers 266,155 times.
+
+**Decisions.** CHG-014 and CHG-015 approved as delegated by the human. Socialization has no flag in
+the spec (D-1, ADR-0004): the ledger only records and covers. CHG-016 proposes the text fixes (option A).
+
+**Found.** Harness bugs, each with a regression test that fails without its fix: the I8 unwind ignored
+pool donations (`test_regression_I8_unwindCountsPoolDonations`), and I13's reach depended on the seed
+(`test_regression_I13_toleranceReachedWithoutLiquidateCalls`). No protocol bug.
+
+**Reviews.** security-reviewer: no critical/high; L-1, L-2 and I-2 → P21-SEC. spec-auditor: all stage-3
+gaps closed except CHG-016 (L3–L5), the deferred L10/L13 (P21-DEF), and N2 (P21-MODEL). Static: 190
+findings, 0 untriaged (SA-176..184 added).
+
+**Next.** The human approves CHG-016 and unlocks the CHG-010/011/013/014/015/016 texts (action 12);
+P22 (Python protocol model).
 
 ### 2026-10-26 · P20 · Liquidation via the pool and redistribution
 
@@ -1155,12 +1182,15 @@ obligations a later prompt must carry that are not in that prompt's text yet (ro
 | CHG-006 | **P19 acceptance criteria: the pool interest hook is non-fatal** (ADR-0033, accepted by the human 2026-10-24, so P19-AC-CHG006-3 is met; decided by the human 2026-10-24 as option 1 for P15-1). These must become named acceptance criteria in P19's own prompt file once the human commits `prompts/`; until then they are recorded here and in CHG-006, which holds the full text. **P19-AC-CHG006-1 — the fallback path cannot revert:** ledger `onInterest` call-free, fuzzed from 0 to the supply cap without reverting; with a pool that reverts, panics (`G` overflow), burns all its gas, returns the wrong size or a non-bool word, `accrue()` and every accruing operation (repay, addCollateral, close, borrow, withdrawCollateral, open, liquidation, `ShutdownModule.check`) succeed, the whole offered amount reaches the reserve, `PoolInterestRedirected` is emitted and I2 holds; `SupplyCapExceeded` is pinned as the only remaining revert path. **P19-AC-CHG006-2 — under-supplying gas cannot fake a pool failure:** `POOL_HOOK_GAS` derived from a recorded worst-case measurement of the real pool (≥ 2×), floor `ceil(2·POOL_HOOK_GAS/63)`; a caller-gas sweep against the real pool and a heavy pool records zero redirections; a genuine over-cap pool is redirected; floor boundary tested ±1. **P19-AC-CHG006-3:** ADR-0033 accepted before the spec text is applied (spec unlock needed). | P19 (add to `prompts/P19-*.md` when committed) |
 | CHG-006-P20 | **Done at P20:** `liquidate` is operation 7 of `VaultManagerPoolHookTest`'s failing-pool matrix (8 modes); the pool share is redirected and the liquidation completes. | P20 (done) |
 | CHG-006-SM | **ShutdownModule prompt: `check()` joins the failing-pool matrix** (the other deferred AC-CHG006-1 sub-case, next to P16-F5). | ShutdownModule prompt |
-| P19-I2 | **P21 requirement (P19 security review I-2):** the real DeficitLedger's `settled()` never reverts and `onPoolDust` accepts from the pool without reverting in every phase while not settled — otherwise the last current-epoch depositor cannot exit (`_leave` runs before their transfer). Test: `onPoolDust` never reverts live and in the window; the last depositor exits during the window. | P21 |
-| P20-I3 | **P21 requirement (P20 security review I3):** the real DeficitLedger hands `recoveredColl` to the claim pool at settlement (§6.11.3) and `recordDeficit` carries §5.6's `wired`/caller/`!settled` checks; the stand-in has neither, so local runs that reach the no-stakes path and then settle strand that WETH. Test: I1/I10 after a prior no-stakes deficit. | P21 |
+| P19-I2 | **Done at P21:** the real ledger's `settled()` is a plain view and `onPoolDust` accepts from the pool live and in the window; `VaultManagerLiquidationTest.test_window_lastDepositorExit_sweepsDustIntoTheLedger` (the last depositor exits during the window and the dust reaches the reserve). | P21 (done) |
+| P20-I3 | **Done at P21:** the real ledger hands `recoveredColl` to the ShutdownModule at settlement and `recordDeficit` checks wired, caller, `!settled`. I1 after a prior no-stakes deficit, a burning `cover` and settlement: `CoreHandlerRegressionsTest.test_reach_deficitCoverSettle_checksHold`; the I10 half waits for the real ShutdownModule (P17-H2). | P21 (done) |
 | P19-T26 | **Measured at P20** (`VaultManagerLiquidationTest.test_jitSandwich_measuresProfitAndDilution`): at ICR 1.067, a sandwicher matching the standing depositor's 5,000 captures 75 of the 150 penalty and halves the standing depositor's collateral gain. P26's depositor agent and S3 still model it. | P26 |
-| P20-SD | **Test stand-in to re-validate (same category as P16-F5, P17-H1, P17-H2): the DeficitLedger stub's storage-backed `recordDeficit` (P20, human decision b 2026-10-26).** When P21 replaces the stand-in with the real ledger, re-run every P20 test and vector that reaches the no-stakes DEFICIT path against it, and confirm `deficit`/`recoveredColl` and I1's ledger row agree. | P21 |
+| P20-SD | **Done at P21:** the stand-in is deleted; every P20 test and vector that reaches the no-stakes path (`LiquidationVectors` `no_stakes_deficit`, `VaultManagerLiquidationTest` zero-stake and last-position cases, the core campaign) passes against the real ledger, with `deficit`, `recoveredColl` and I1's ledger row agreeing. | P21 (done) |
 | P20-B | **Test stand-in to re-validate: the core handler's B-variant house mock `onLiquidation` per §6.8.2 (P20, human decision c 2026-10-26),** so I4/I6/I7 run on B before the DutchAuctionHouse exists. At P33 re-run the B campaign against the real house and compare. | P33 |
 | P20-SIZE | **VaultManager size (human note 2026-10-26):** after P20 about 2–3 kB of EIP-170 headroom remains (the binding limit is the 0xFE blueprint). Anything P21/P33 would add to the VaultManager itself must be measured before it is written, not after. | P21, P33 |
+| P21-SEC | **P33 and ShutdownModule constraints from the P21 security review:** (L-1) the house passes `onAuctionPayment`/`onAuctionShortfall` exactly what it added and clamps tips to `min(RESET_TIP, reserve)` — the ledger panics rather than clamps (tested: `test_auctionHooks_B_beyondBalances_panic`); invariant `Σ debtRemaining == auctionDebt` after every buy/reset/shortfall. (L-2) `ShutdownModule.settle()` calls `VaultManager.onSettlement()` before `DeficitLedger.onSettlement()`; test `ledger.settled ⇒ vm.shutdown` in the campaign. (I-2) the house moves or burns tokens only from its own `msg.sender`, and `payTip` pays only `msg.sender`, so I1's ledger row holds in B. | P33, ShutdownModule prompt |
+| P21-DEF | **Deferred checks (P21 spec audit L10, L13):** I1's `auctionDebt == Σ debtRemaining` and `totalLot == Σ lot`, I1's ShutdownModule row, I7 per purchase, and `spec/vectors/deficit.json` run end to end (B, `cover`) on both sides — all need the real house / ShutdownModule. | P33, ShutdownModule prompt |
+| P21-MODEL | **P22 (spec audit N2):** `Vault.ledger_deficit` / `ledger_auction_debt` setters write ledger state without its checks; tests only — keep them out of simulation paths. The model has no `wire`/`NotWired` (P19-A). | P22 |
 
 ## Open issues
 
@@ -1213,6 +1243,7 @@ obligations a later prompt must carry that are not in that prompt's text yet (ro
 | P02-4 | No vector exercises `redeem`'s `AuctionCallbackActive` branch (D-27, §6.7.2): the recorder cannot drive a buyer callback. Foundry test added at P16 (`RedemptionAuctionCallbackTest`, mock house); against the real house at P33; model test at P22. | Claude | at P22/P33 |
 | P02-3 | The vector reference implementation is throwaway (scratchpad). Vectors are validated independently from P10 (Foundry) and P22 (Python model); a vector that disagrees with both implementations is a spec question for `/spec-change`. | Claude | at P10/P22 |
 | P01-8 | The repository is public, so all seven commits expose the author email `ka.koszewski@gmail.com` permanently. Four of them are also authored `H3BCKN`. Neither can be changed without a force push, which the permission rules forbid. If this matters, GitHub's `noreply` address plus `git config user.email` fixes it for future commits. | human | no |
+| CHG-016 | **Proposed 2026-10-26 (P21 spec audit L3–L5):** spec text only — §5.10 marks the ledger's single-caller hooks lock-free, §11.2 lists `AlreadySettled` in both `onSettlement`s, §6.11.3's ledger settlement pseudocode follows the code's CEI order. Needs the human's approval and the unlock. | human | no |
 
 ## Human actions required
 
@@ -1232,5 +1263,5 @@ obligations a later prompt must carry that are not in that prompt's text yet (ro
 | 11-old | (superseded) Make `BASE_ARCHIVE_RPC` (and, for P09, `ETH_MAINNET_RPC`) visible to Claude's process | Checked on 2026-10-22 after the human set it: still not visible — a variable exported in the human's own terminal does not reach an already-running Claude Code session (or one launched from VS Code). Either put both in the dotenv file at the repo root (`just` loads it), or restart VS Code / Claude Code from a shell that exports them. `just oracle --verify-only` still reports it unset. The dotenv file must sit at the repo root and contain the line `BASE_ARCHIVE_RPC=<url>` — no `export`, no spaces around `=`, not commented out. A check that prints a count, not the URL: `grep -c '^BASE_ARCHIVE_RPC=.'` on that file should print 1. |
 | 10 | Merge PR [#1](https://github.com/N3BCKN/bagehot/pull/1) | Claude has not merged it — merging to `main` is yours to approve. The branch is `ci/p01-verify`. |
 | 9 | ~~`gh auth login`~~ | Done: logged in as `N3BCKN`, scopes `repo`, `read:org`, `gist`, `admin:public_key`. Claude can now read run status and logs for this private repository. |
-| 12 | **To unlock** `docs/spec.md`, `spec/vectors/**` and `docs/invariants.md`, comment their lines out (`# docs/spec.md` …) in `.claude/protected-paths.txt`; to re-protect, remove the `#` again. Needed now for the approved CHG-010/011/013/014/015 texts; add `docs/adr/0034-*.md` and `docs/adr/0035-*.md` (accepted 2026-10-26) | Unlocked for P19 by the human; Claude cannot edit the protected-paths file. |
+| 12 | **To unlock** `docs/spec.md`, `spec/vectors/**` and `docs/invariants.md`, comment their lines out (`# docs/spec.md` …) in `.claude/protected-paths.txt`; to re-protect, remove the `#` again. Needed now for the approved CHG-010/011/013/014/015 texts and CHG-016 once approved; add `docs/adr/0034-*.md` and `docs/adr/0035-*.md` (accepted 2026-10-26) | Unlocked for P19 by the human; Claude cannot edit the protected-paths file. |
 | 13 | ~~Decide P17-1 and P17-2~~ — done 2026-10-26 (P17-1 accepted as residual risk T-25; CHG-009 approved). Now: decide CHG-010, P19-L1, CHG-011 and the P20 plan's questions | Before P20 |
