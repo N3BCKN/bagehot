@@ -17,7 +17,6 @@ only where the spec fetches a price — so a test can assert that the rescue pat
 
 from __future__ import annotations
 
-import copy
 from collections.abc import Callable
 from dataclasses import dataclass, field, fields
 from enum import IntEnum
@@ -77,6 +76,7 @@ _NOT_COPIED = frozenset(
         "log",
         "weth_token",
         "stable_token",
+        "positions",
     )
 )
 
@@ -90,7 +90,16 @@ class Status(IntEnum):
     CLOSED_BY_SHUTDOWN = 5
 
 
-@dataclass
+class _Journal:
+    """The undo log of the open transaction(s): `(position, field, old value)` for every field a
+    position changes while a `Vault._atomic` is running (P22 benchmark: deep-copying every position
+    for each transaction was 95% of the model's time at 1,000 positions)."""
+
+    entries: list[tuple[object, str, object]] = []  # noqa: RUF012 — one per process, by design
+    depth = 0
+
+
+@dataclass(slots=True)
 class Position:
     owner: str
     coll: int
@@ -99,6 +108,14 @@ class Position:
     snap_l_coll: int
     snap_l_debt: int
     status: Status
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if _Journal.depth:
+            try:  # noqa: SIM105 — on the hot path; contextlib.suppress costs more
+                _Journal.entries.append((self, name, object.__getattribute__(self, name)))
+            except AttributeError:  # being constructed: nothing to undo
+                pass
+        object.__setattr__(self, name, value)
 
 
 @dataclass
@@ -223,11 +240,12 @@ class Vault:
     def _atomic(self, fn: Callable[[], object]) -> object:
         # exactly the declared state fields — not the price source, the components saved below or
         # any attribute a caller attached
-        saved = {
-            f.name: copy.deepcopy(getattr(self, f.name))
-            for f in fields(self)
-            if f.name not in _NOT_COPIED
-        }
+        # every declared field is an int, a bool or `positions`: the dict is copied (a failed open
+        # leaves no new id behind) and changes inside a position are undone from the journal
+        saved = {f.name: getattr(self, f.name) for f in fields(self) if f.name not in _NOT_COPIED}
+        positions = dict(self.positions)
+        undo = len(_Journal.entries)
+        _Journal.depth += 1
         mark = self.log.mark()
         tokens = self.weth_token._save(), self.stable_token._save()
         ledger_saved = self.ledger._save()
@@ -236,15 +254,23 @@ class Vault:
         try:
             return fn()
         except Exception:
+            for obj, name, old in reversed(_Journal.entries[undo:]):
+                object.__setattr__(obj, name, old)
+            del _Journal.entries[undo:]
             if strategy_saved is not None:
                 self.strategy._restore(strategy_saved)
             self.__dict__.update(saved)
+            self.positions = positions
             self.ledger._restore(ledger_saved)
             self.sorted._restore(sorted_saved)
             self.weth_token._restore(tokens[0])
             self.stable_token._restore(tokens[1])
             self.log.truncate(mark)
             raise
+        finally:
+            _Journal.depth -= 1
+            if _Journal.depth == 0:  # the outermost transaction ended: nothing left to undo
+                _Journal.entries.clear()
 
     # ---- token helpers (WETH via SafeERC20, StableToken) ----
     def _weth_move(self, frm: str, to: str, amount: int) -> None:

@@ -192,3 +192,25 @@ def test_settlement_failure_rolls_the_vault_hook_back() -> None:
     with pytest.raises(er.NotTriggered):
         s.settle(now=s.now)
     assert not s.vault.settled and not s.ledger.settled
+
+
+def test_a_revert_after_a_position_changed_restores_it_from_the_journal() -> None:
+    """`borrow` applies pending rewards (writing the stored position) and only then fails its MCR
+    check: the journal must put every field back, and be empty once the transaction is over."""
+    from model.protocol.vault import _Journal
+
+    s = _sys()
+    t = s.now
+    s.open_position("alice", 3 * E18, 3_333 * E18, now=t)
+    s.open_position("bob", 10 * E18, 5_000 * E18, now=t)
+    s.set_price(1_200 * E18, t + 1)
+    s.liquidate("liq", 1, now=t + 1)  # empty pool: redistributed, bob has pending rewards
+    q = s.vault.positions[2]
+    stored = (q.coll, q.norm_debt, q.stake, q.snap_l_coll, q.snap_l_debt, q.status)
+    assert s.vault.effective(2) != (q.coll, q.norm_debt)
+    with pytest.raises(er.IcrBelowMcr):
+        s.borrow("bob", 2, 10**24, now=t + 2)
+    assert (q.coll, q.norm_debt, q.stake, q.snap_l_coll, q.snap_l_debt, q.status) == stored
+    assert _Journal.entries == [] and _Journal.depth == 0
+    s.borrow("bob", 2, E18, now=t + 2)  # the same path, succeeding, writes for good
+    assert q.snap_l_coll == s.vault.l_coll and _Journal.entries == []

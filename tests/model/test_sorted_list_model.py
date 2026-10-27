@@ -34,7 +34,7 @@ def build(max_steps: int, exact_hints: bool, ids: list[int] | None = None) -> s.
         r = st_["result"]
         up, lo = (r["prev"], r["next"]) if exact_hints else (st_["upperHint"], st_["lowerHint"])
         lst.insert(int(st_["id"]), int(up), int(lo))
-        assert lst.nodes[int(st_["id"])] == [int(r["prev"]), int(r["next"])]
+        assert lst.nodes[int(st_["id"])] == (int(r["prev"]), int(r["next"]))
     return lst
 
 

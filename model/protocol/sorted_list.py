@@ -31,7 +31,8 @@ def precedes(ka: Key, ida: int, kb: Key, idb: int) -> bool:
 class SortedList:
     max_hint_steps: int
     key_of: Callable[[int], Key]
-    nodes: dict[int, list[int]] = field(default_factory=dict)  # id -> [prev, next]
+    # id -> (prev, next); links are replaced, never mutated, so a save is a shallow copy
+    nodes: dict[int, tuple[int, int]] = field(default_factory=dict)
     head: int = 0
     tail: int = 0
     log: Log = field(default_factory=Log)
@@ -47,10 +48,10 @@ class SortedList:
     def events(self) -> list[tuple]:
         return self.log.of("sorted")
 
-    def _save(self) -> tuple[dict[int, list[int]], int, int]:
-        return {k: v[:] for k, v in self.nodes.items()}, self.head, self.tail
+    def _save(self) -> tuple[dict[int, tuple[int, int]], int, int]:
+        return dict(self.nodes), self.head, self.tail
 
-    def _restore(self, saved: tuple[dict[int, list[int]], int, int]) -> None:
+    def _restore(self, saved: tuple[dict[int, tuple[int, int]], int, int]) -> None:
         self.nodes, self.head, self.tail = saved
 
     @property
@@ -133,15 +134,15 @@ class SortedList:
         found, prev, nxt, _ = self.find(self.key_of(node_id), node_id, 0, upper, lower)
         if not found:
             raise StaleHint()
-        self.nodes[node_id] = [prev, nxt]
+        self.nodes[node_id] = (prev, nxt)
         if prev == 0:
             self.head = node_id
         else:
-            self.nodes[prev][1] = node_id
+            self.nodes[prev] = (self.nodes[prev][0], node_id)
         if nxt == 0:
             self.tail = node_id
         else:
-            self.nodes[nxt][0] = node_id
+            self.nodes[nxt] = (node_id, self.nodes[nxt][1])
         self._emit(("NodeInserted", node_id, prev, nxt))
 
     def remove(self, node_id: int) -> None:
@@ -151,11 +152,11 @@ class SortedList:
         if prev == 0:
             self.head = nxt
         else:
-            self.nodes[prev][1] = nxt
+            self.nodes[prev] = (self.nodes[prev][0], nxt)
         if nxt == 0:
             self.tail = prev
         else:
-            self.nodes[nxt][0] = prev
+            self.nodes[nxt] = (prev, self.nodes[nxt][1])
         self._emit(("NodeRemoved", node_id))
 
     def reinsert(self, node_id: int, upper: int, lower: int) -> None:

@@ -12,7 +12,6 @@ restored. Exceptions carry the spec's error names (§11.2).
 
 from __future__ import annotations
 
-import copy
 from collections.abc import Callable
 from dataclasses import dataclass, field, fields
 
@@ -157,8 +156,10 @@ class StabilityPool:
 
     # ---- save / restore, for the vault's transaction wrapper when the pool is its strategy ----
     def _save(self) -> dict:
+        # shallow: every value is an int, a dict of ints, or a dict of `Deposit` records, and a
+        # record is always replaced (`_snapshot`), never changed in place
         return {
-            f.name: copy.deepcopy(getattr(self, f.name))
+            f.name: (dict(x) if isinstance(x := getattr(self, f.name), dict) else x)
             for f in fields(self)
             if f.name not in ("bank", "log")
         }
