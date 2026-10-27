@@ -199,7 +199,19 @@ def test_I5_accepts_a_cancelled_partial_at_min_debt() -> None:
 def test_I8_reports_pending_rewards_above_the_buckets() -> None:
     s = _run()
     s.vault.pending_coll = 0
-    assert _has(inv.check_I8(s), "I8: pending rewards")
+    assert _has(inv.check_I8(s), "I8: pending collateral rewards")
+    s.vault.pending_norm_debt = 0
+    assert _has(inv.check_I8(s), "I8: pending debt rewards")
+
+
+def test_I8_after_settlement_checks_the_debt_half_only() -> None:
+    """CHG-017 (proposed): settlement zeroes pendingColl while positions keep their snapshots."""
+    s = _run()
+    s.trigger_shutdown(now=s.now)
+    s.settle(now=s.now)
+    assert s.vault.pending_coll == 0 and inv.check_I8(s) == []
+    s.vault.pending_norm_debt = 0
+    assert inv.check_I8(s) == ["I8: pending debt rewards exceed pendingNormDebt"]
 
 
 def test_unwind_reports_a_stuck_exit_and_a_missing_residue() -> None:
@@ -324,3 +336,106 @@ def test_I9_add_collateral_needs_the_weth_it_pulls() -> None:
     assert inv.check_I9_liveness(s, s.last) == []
     held = dataclasses.replace(s.last, args=(2, WAD, 0, 0))
     assert _has(inv.check_I9_liveness(s, held), "I9: WethTransferFailed with the WETH held")
+
+
+def test_I3_withdraw_pays_min_of_amount_and_compounded() -> None:
+    s = _run()
+    s.withdraw("bob", 10**30, now=s.now)  # more than the deposit: pays the compounded value
+    step = s.last
+    assert inv.check_I3_withdraw(step) == []
+    short = [
+        (src, (*e[:3], e[3] - 1) if src == "token" and e[0] == "Transfer" else e)
+        for src, e in step.events
+    ]
+    bad = inv.check_I3_withdraw(dataclasses.replace(step, events=short))
+    assert _has(bad, "I3: withdraw paid")
+
+
+def test_I9_stale_hint_and_the_cap_are_judged_against_their_preconditions() -> None:
+    s = _run()
+    with pytest.raises(er.CollateralTooLarge):
+        s.add_collateral("bob", 2, 2**128, now=s.now)
+    assert inv.check_I9_liveness(s, s.last) == []  # the cap is checked before the WETH pull
+    small = dataclasses.replace(s.last, args=(2, WAD, 0, 0))
+    assert _has(inv.check_I9_liveness(s, small), "I9: CollateralTooLarge below the cap")
+    s.repay("bob", 2, WAD, now=s.now)  # hints 0/0 on a two-member list are usable
+    fake = dataclasses.replace(s.last, error=er.StaleHint())
+    assert _has(inv.check_I9_liveness(s, fake), "I9: StaleHint with usable hints")
+
+
+def test_I9_stale_hint_is_legitimate_when_the_walk_is_too_long() -> None:
+    from model.protocol.system import Params
+
+    s = System(Params(max_hint_steps=1), record=True)
+    t = s.now
+    s.set_price(2_000 * WAD, t)
+    s.fund("alice", 10**26)
+    for i in range(4):
+        s.open_position("alice", (3 + i) * WAD, 2_000 * WAD, *inv_hints(s, (3 + i) * WAD), now=t)
+    tail = s.sorted.tail
+    with pytest.raises(er.StaleHint):  # 1 wei keeps it near the tail: a walk from the head
+        s.add_collateral("alice", tail, 1, now=t)
+    assert inv.check_I9_liveness(s, s.last) == []
+    assert s.check_invariants() == []
+
+
+def inv_hints(s: System, coll: int) -> tuple[int, int]:
+    """Exact hints for a new position of `coll` and 2,000 of debt at the current index."""
+    from model.protocol.math import mul_div_up
+    from model.protocol.sorted_list import precedes
+
+    key = (coll, mul_div_up(2_000 * WAD, RAY, s.vault.current_index()))
+    prev, cur = 0, s.sorted.head
+    while cur:
+        if precedes(key, s.vault.next_id, s.sorted.key_of(cur), cur):
+            return prev, cur
+        prev, cur = cur, s.sorted.nodes[cur][1]
+    return prev, 0
+
+
+def test_I13_pair_condition_also_runs_in_the_exact_regime() -> None:
+    s = System(record=True)
+    t = s.now
+    s.set_price(2_000 * WAD, t)
+    s.fund("alice", 10**24)
+    s.open_position("alice", 10 * WAD, 3_000 * WAD, now=t)
+    s.open_position("alice", 12 * WAD, 3_000 * WAD, now=t)
+    assert inv.check_I13(s, s.ghost) == []
+    a = s.sorted.head
+    m = s.ghost.members[a]
+    s.ghost.members[a] = dataclasses.replace(m, h=m.h + 10**30)  # a record no order can satisfy
+    assert _has(inv.check_I13(s, s.ghost), "I13: pair")
+
+
+def test_fetch_price_is_an_entry_point_and_its_clock_is_rebuilt() -> None:
+    s = _run()
+    t = s.now
+    s.set_feed(None)
+    r = s.fetch_price("keeper", now=t + 1)
+    assert r.value == (s.oracle.last_good_price, False)
+    assert s.oracle.failure_start == t + 1
+    assert [e[0] for _, e in r.events] == ["OracleFailure"]
+    assert s.check_invariants() == []
+    s.set_price(1_500 * WAD, t + 2)
+    s.fetch_price("keeper", now=t + 2)
+    assert s.oracle.failure_start == 0 and s.check_invariants() == []
+
+
+def test_critical_tcr_is_range_checked_and_immutable() -> None:
+    from model.protocol.system import Params
+
+    with pytest.raises(er.InvalidParameter) as e:
+        System(Params(critical_tcr=10**18 - 1))
+    assert e.value.index == 4
+    s = _run()
+    s.redemption.below_critical.critical_tcr += 1
+    assert "I11: CRITICAL_TCR changed" in inv.check_I11(s)
+
+
+def test_transfers_to_address_zero_revert_like_oz() -> None:
+    s = _run()
+    with pytest.raises(er.ERC20InvalidReceiver):
+        s.transfer("bob", "0x0", 1, now=s.now)
+    with pytest.raises(er.WethTransferFailed):  # §2.5: any revert inside WETH, by one name
+        s.transfer_weth("bob", "0x0", 1, now=s.now)
+    assert s.check_invariants() == []

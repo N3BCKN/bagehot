@@ -23,13 +23,15 @@ from dataclasses import dataclass, field
 from fractions import Fraction
 
 from model.protocol.math import RAY, WAD, mul_div_down, mul_div_up, rpow
-from model.protocol.sorted_list import precedes
+from model.protocol.sorted_list import SortedList, precedes
 from model.protocol.stability_pool import (
     DECIMAL_PRECISION,
     P_MIN,
     P_PRECISION,
     SCALE_SPAN,
+    Deposit,
     StabilityPool,
+    compounded,
 )
 
 
@@ -173,6 +175,7 @@ CORE = frozenset(
 )
 DP = DECIMAL_PRECISION
 STATUS_ACTIVE, STATUS_CLOSED_BY_REDEMPTION = 1, 3
+COLL_CAP = 2**128 - 1
 OP_OPEN, OP_BORROW, OP_REPAY, OP_CLOSE = 1, 4, 5, 6
 PATH_NONE, PATH_REDISTRIBUTED, PATH_DEFICIT = 0, 1, 2
 NO_STAKES = 2
@@ -400,6 +403,25 @@ def check_I3_system(system, exact: Exact) -> list[str]:  # noqa: ANN001, N802
     return bad
 
 
+def check_I3_withdraw(step) -> list[str]:  # noqa: ANN001, N802 — Step
+    """I3: withdraw(a, x) transfers exactly min(x, compoundedDeposit(a) before the call)."""
+    if step.op != "withdraw" or step.error is not None:
+        return []
+    pre = step.pre["pool"]
+    d = pre["deposits"].get(step.caller)
+    rec = Deposit(*(d[k] for k in ("initial", "snapP", "snapS", "snapG", "snapEpoch", "snapScale")))
+    before = compounded(rec, pre["P"], pre["currentEpoch"], pre["currentScale"]) if d else 0
+    paid = [
+        e[3]
+        for src, e in step.events
+        if src == "token" and e[0] == "Transfer" and e[1] == "pool" and e[2] == step.caller
+    ]
+    # the deposit leaves last, after any interest gain paid on the way out (§5.3.2)
+    if not paid or paid[-1] != min(step.args[0], before):
+        return [f"I3: withdraw paid {paid[-1:]} instead of min(x, {before})"]
+    return []
+
+
 # ---- I4, I6, I7: one liquidation (deployment A) ----
 def check_liquidation(system, step) -> list[str]:  # noqa: ANN001 — System, Step
     if step.op != "liquidate" or step.error is not None:
@@ -432,8 +454,13 @@ def check_liquidation(system, step) -> list[str]:  # noqa: ANN001 — System, St
         bad.append("I6: Liquidated.coll/debt are not the position's effective values")
     if coll != coll_p + surplus + coll_returned or coll_returned != coll_rest:
         bad.append("I6: coll != collP + surplus + collReturned")
-    norm_absorbed = eff_n if absorbed == debt else mul_div_down(absorbed, RAY, index)  # R34
-    if eff_n != norm_absorbed + norm_rest:
+    # provenance: n is the stored normDebt of the position's last PositionUpdated (the pre-state;
+    # I14 ties the two) plus this call's RewardsApplied, and normAbsorbed = n − normRemainder
+    rewards = [e for e in _events(step, "vault", "RewardsApplied") if e[1] == pid]
+    n = pos["normDebt"] + sum(e[3] for e in rewards)
+    norm_absorbed = n - norm_rest
+    r34 = n if absorbed == debt else mul_div_down(absorbed, RAY, index)  # §6.4.1, R34
+    if n != eff_n or norm_absorbed != r34:
         bad.append("I6: n != normAbsorbed + normRest")
     red = _events(step, "vault", "Redistributed")
     rec = [e for e in _events(step, "ledger", "DeficitRecorded") if e[3] == NO_STAKES]
@@ -536,14 +563,18 @@ def check_I8(system) -> list[str]:  # noqa: ANN001, N802
     """§10.3's inequalities (the claims row waits for the ShutdownModule)."""
     v, pool = system.vault, system.pool
     bad = []
-    if not v.settled:
-        pc = pn = 0
-        for pid, q in v.positions.items():
-            if q.status == STATUS_ACTIVE:
-                c, n = v.effective(pid)
-                pc, pn = pc + c - q.coll, pn + n - q.norm_debt
-        if pc > v.pending_coll or pn > v.pending_norm_debt:
-            bad.append("I8: pending rewards exceed the pending buckets")
+    pc = pn = 0
+    for pid, q in v.positions.items():
+        if q.status == STATUS_ACTIVE:
+            c, n = v.effective(pid)
+            pc, pn = pc + c - q.coll, pn + n - q.norm_debt
+    # the collateral half only before settlement: `onSettlement` zeroes `pendingColl` while
+    # positions keep their stakes and snapshots (§5.1.11), so the text's "every phase" cannot hold
+    # for it — CHG-017 (proposed); Foundry makes the same cut. The debt half holds in every phase.
+    if not v.settled and pc > v.pending_coll:
+        bad.append("I8: pending collateral rewards exceed pendingColl")
+    if pn > v.pending_norm_debt:
+        bad.append("I8: pending debt rewards exceed pendingNormDebt")
     depositors = list(pool.deposits)
     if sum(pool.compounded_deposit(a) for a in depositors) > pool.total_deposits:
         bad.append("I8: compounded deposits exceed totalDeposits")
@@ -668,8 +699,12 @@ def check_I9_liveness(system, step) -> list[str]:  # noqa: ANN001, N802, C901, P
         return [] if q is None or q["status"] != STATUS_ACTIVE else ["I9: PositionNotActive"]
     if err == "NotOwner":
         return [] if step.op == "close" and q["owner"] != step.caller else ["I9: NotOwner"]
-    if err in ("StaleHint", "CollateralTooLarge"):
-        return []  # hints not exact, or the 2^128 − 1 cap
+    if err == "CollateralTooLarge":  # the 2^128 − 1 cap: only addCollateral can reach it
+        c, _ = _eff(q, v["LColl"], v["LDebt"])
+        legit = step.op == "addCollateral" and c + step.args[1] > COLL_CAP
+        return [] if legit else ["I9: CollateralTooLarge below the cap"]
+    if err == "StaleHint":  # "hints exact": the same find on the list as it was must fail too
+        return [] if not _hints_find(system, step) else ["I9: StaleHint with usable hints"]
     if err == "WethTransferFailed":  # "caller holds the tokens": addCollateral pulls WETH
         held = pre["weth"]["balances"].get(step.caller, 0)
         if step.op == "addCollateral" and held < step.args[1]:
@@ -684,6 +719,28 @@ def check_I9_liveness(system, step) -> list[str]:  # noqa: ANN001, N802, C901, P
         need = step.args[1] if step.op == "repay" else debt
         return [] if have < need else ["I9: InsufficientBalance with the tokens held"]
     return [f"I9: {step.op} reverted {err}"]
+
+
+def _hints_find(system, step) -> bool:  # noqa: ANN001 — System, Step
+    """Re-run the call's reinsert `find` on the list rebuilt from the state before the call: the
+    key after `repay` / `addCollateral` (accrual and pending rewards leave NICR keys unchanged)."""
+    pre, p = step.pre, system.params
+    v = pre["vault"]
+    pid, x, upper, lower = step.args
+    pos = v["positions"]
+
+    def key(i: int) -> tuple[int, int]:
+        return _eff(pos[i], v["LColl"], v["LDebt"])
+
+    c, n = key(pid)
+    if step.op == "addCollateral":
+        c += x
+    else:
+        n -= mul_div_down(x, RAY, _accrued_index(v, step.now, p.rate_per_second))
+    lst = SortedList(p.max_hint_steps, key)
+    lst.nodes = {i: (d["prev"], d["next"]) for i, d in pre["sorted"]["nodes"].items()}
+    lst.head, lst.tail = pre["sorted"]["head"], pre["sorted"]["tail"]
+    return lst.find((c, n), pid, pid, upper, lower)[0]
 
 
 # ---- I11 ----
@@ -709,6 +766,7 @@ def check_I11(system) -> list[str]:  # noqa: ANN001, N802
         "ORACLE_GAS": o.oracle_gas,
         "ORACLE_POST_FAILURE_GAS": o.oracle_post_failure_gas,
         "FEED_DECIMALS": o.feed_decimals,
+        "CRITICAL_TCR": getattr(r.below_critical, "critical_tcr", None),
     }
     bad = [f"I11: {k} changed" for k, x in got.items() if x != getattr(p, k.lower())]
     wired = (
@@ -741,13 +799,11 @@ def check_I13(system, ghost: Ghost) -> list[str]:  # noqa: ANN001, N802
             bad.append(f"I13 condition 1: sortKey({pid})")
     exact = all(_is_exact(v, i, ghost.members[i]) for i in order)
     for a, b in zip(order, order[1:], strict=False):
-        if exact:
-            if not precedes(v.sort_key(a), a, v.sort_key(b), b):
-                bad.append(f"I13: exact regime, {a} does not precede {b}")
-        else:
-            ma, mb = ghost.members[a], ghost.members[b]
-            if ma.h - ma.iota > mb.h + mb.iota:
-                bad.append(f"I13: pair ({a}, {b}) outside the hidden-key tolerance")
+        ma, mb = ghost.members[a], ghost.members[b]
+        if ma.h - ma.iota > mb.h + mb.iota:  # every pair, every regime
+            bad.append(f"I13: pair ({a}, {b}) outside the hidden-key tolerance")
+        if exact and not precedes(v.sort_key(a), a, v.sort_key(b), b):
+            bad.append(f"I13: exact regime, {a} does not precede {b}")
     return bad
 
 
@@ -798,6 +854,7 @@ def check_invariants(system, *, with_unwind: bool = False) -> list[str]:  # noqa
     step = system.last
     if step is not None:
         bad += check_liquidation(system, step) + check_I5(system, step) + check_I12(step)
+        bad += check_I3_withdraw(step)
         bad += check_I9_liveness(system, step) + check_I15(system, step)
     if with_unwind:
         bad += unwind(system)

@@ -181,6 +181,10 @@ class SystemMachine(RuleBasedStateMachine):
         self._do(self.s.liquidate, who, pid)
 
     @rule(who=actor)
+    def fetch_price(self, who: str) -> None:
+        self._do(self.s.fetch_price, who)
+
+    @rule(who=actor)
     def accrue(self, who: str) -> None:
         self._do(self.s.accrue, who)
 

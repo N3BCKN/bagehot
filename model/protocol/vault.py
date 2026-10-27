@@ -46,7 +46,7 @@ from model.protocol.errors import (
     ZeroAmount,
 )
 from model.protocol.events import Log
-from model.protocol.math import RAY, WAD, mul_div_down, mul_div_up, rpow
+from model.protocol.math import RAY, WAD, Underflow, mul_div_down, mul_div_up, rpow
 from model.protocol.math import checked as _c
 from model.protocol.sorted_list import SortedList
 from model.protocol.tokens import Token, stable_token, weth_token
@@ -65,6 +65,15 @@ MAX_POOL_HOOK_GAS = 1_000_000
 OP_REDEEM = 7
 OP_LIQUIDATE = 8
 PATH_NONE, PATH_REDISTRIBUTED, PATH_DEFICIT = 0, 1, 2
+
+
+def _sub(a: int, b: int) -> int:
+    """Solidity's checked subtraction: below zero panics (0x11), `Underflow` here."""
+    if b > a:
+        raise Underflow()
+    return a - b
+
+
 # fields `_atomic` saves through their own `_save`, or never (callables, the shared log)
 _NOT_COPIED = frozenset(
     (
@@ -492,7 +501,7 @@ class Vault:
             p = self._active(pid)
             self._accrue()
             self._apply_pending(pid)
-            if amount > self._debt_of(p.norm_debt) - self.min_debt:
+            if amount > _sub(self._debt_of(p.norm_debt), self.min_debt):  # checked, as on chain
                 raise RepayExceedsMaximum()
             if self.stable.get(caller, 0) < amount:
                 raise InsufficientBalance()
@@ -546,7 +555,7 @@ class Vault:
             self._accrue()
             self._apply_pending(pid)
             debt = self._debt_of(p.norm_debt)
-            if p.coll * price >= self.mcr * debt:
+            if _c(p.coll * price) >= _c(self.mcr * debt):
                 raise NotLiquidatable()
             self.sorted.remove(pid)
             self.total_stakes -= p.stake

@@ -6,8 +6,9 @@ the run's log at the moment the contract would, mints from and burns to `ZERO`, 
 included (OZ `_update` emits for any value). Roles (minter, burners, mover, §4.10) are the callers'
 business: the contract models only call what their Solidity counterparts are allowed to call.
 
-Failures follow §2.5: WETH raises `WethTransferFailed`, the stablecoin `ERC20InsufficientBalance`,
-a mint past `2^128 − 1` `SupplyCapExceeded`. Allowances are not modelled (see `events.py`).
+Failures follow §2.5 and OZ v5: on the stablecoin a short balance is `ERC20InsufficientBalance`, a
+transfer to address(0) `ERC20InvalidReceiver`, a mint past `2^128 − 1` `SupplyCapExceeded`; on WETH
+every revert inside the token is `WethTransferFailed`. Allowances are not modelled (`events.py`).
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from dataclasses import dataclass, field
 
 from model.protocol.errors import (
     ERC20InsufficientBalance,
+    ERC20InvalidReceiver,
     ProtocolError,
     SupplyCapExceeded,
     WethTransferFailed,
@@ -29,7 +31,7 @@ SUPPLY_CAP = 2**128 - 1  # StableToken.SUPPLY_CAP
 class Token:
     address: str  # the emitter name: "weth" or "token"
     log: Log
-    insufficient: type[ProtocolError] = ERC20InsufficientBalance
+    revert_as: type[ProtocolError] | None = None  # WETH: every revert inside it, by one name
     cap: int | None = None  # StableToken: SUPPLY_CAP; WETH: none
     balances: dict[str, int] = field(default_factory=dict)
     total_supply: int = 0
@@ -38,9 +40,11 @@ class Token:
         return self.balances.get(a, 0)
 
     def transfer(self, frm: str, to: str, amount: int) -> None:
+        if to == ZERO:  # OZ v5 `_transfer`: checked before the balance
+            raise (self.revert_as or ERC20InvalidReceiver)()
         b = self.balances.get(frm, 0)
         if b < amount:
-            raise self.insufficient()
+            raise (self.revert_as or ERC20InsufficientBalance)()
         self.balances[frm] = b - amount
         self.balances[to] = self.balances.get(to, 0) + amount
         self.log.emit(self.address, ("Transfer", frm, to, amount))
@@ -72,7 +76,7 @@ class Token:
 
 
 def weth_token(log: Log) -> Token:
-    return Token("weth", log, insufficient=WethTransferFailed)
+    return Token("weth", log, revert_as=WethTransferFailed)
 
 
 def stable_token(log: Log) -> Token:

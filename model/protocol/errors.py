@@ -197,6 +197,10 @@ class ERC20InsufficientBalance(ProtocolError):
     pass
 
 
+class ERC20InvalidReceiver(ProtocolError):
+    """OZ v5: a transfer or mint to address(0)."""
+
+
 __all__ = [
     "AlreadySettled",
     "AlreadyWired",
@@ -209,6 +213,7 @@ __all__ = [
     "DepositTooSmall",
     "DivisionByZero",
     "ERC20InsufficientBalance",
+    "ERC20InvalidReceiver",
     "FeeExceedsMaximum",
     "IcrBelowMcr",
     "InsufficientBalance",

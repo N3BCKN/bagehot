@@ -37,7 +37,12 @@ def test_every_solidity_error_has_a_model_class_of_the_same_name() -> None:
 
 def test_model_errors_are_solidity_errors_or_documented_extras() -> None:
     """Nothing invented: every class is a Solidity error, a §2.5 token failure, or a panic."""
-    extras = {"ProtocolError", "WethTransferFailed", "ERC20InsufficientBalance"}
+    extras = {
+        "ProtocolError",
+        "WethTransferFailed",
+        "ERC20InsufficientBalance",
+        "ERC20InvalidReceiver",
+    }
     panics = {"Overflow", "Underflow", "DivisionByZero"}
     assert set(er.__all__) - _solidity_errors() == extras | panics
 

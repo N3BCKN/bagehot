@@ -27,6 +27,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields
 
+from model.protocol.errors import InvalidParameter
 from model.protocol.events import Entry, Log
 from model.protocol.oracle_adapter import FeedRound, OracleAdapter
 from model.protocol.redemption import RedemptionModule, make_gate
@@ -116,6 +117,8 @@ class Step:
 class System:
     def __init__(self, params: Params | None = None, *, t0: int = 1_000_000, record: bool = False):
         p = self.params = params or Params()
+        if p.critical_tcr < 10**18:  # ShutdownModule constructor, §3.4 argument 4: ≥ WAD
+            raise InvalidParameter(4)
         self.record = record
         self.now = t0
         self.log = Log(now=t0)
@@ -291,6 +294,11 @@ class System:
         if to in CORE_ACCOUNTS:
             d = self.donated[token]
             d[to] = d.get(to, 0) + amount
+
+    # ---- OracleAdapter (§5.7): anyone may record a read ----
+    def fetch_price(self, caller: str, *, now: int) -> Receipt:
+        """`fetchPrice()`: `(price, usable)`; may move `failureStart` and `lastGoodPrice`."""
+        return self._tx("fetchPrice", caller, (), now, self._fetch_price)
 
     # ---- VaultManager (§5.1) ----
     def open_position(

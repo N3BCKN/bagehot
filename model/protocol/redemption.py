@@ -52,6 +52,7 @@ def make_gate(
         c, d = vault.system_coll(), vault.system_debt()
         return live and d > 0 and c * price < critical_tcr * d
 
+    below_critical.critical_tcr = critical_tcr  # the module's immutable, for I11
     return below_critical
 
 
