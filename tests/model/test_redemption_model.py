@@ -290,10 +290,24 @@ def test_redeem_shutdown_and_unusable_price() -> None:
 
 
 def test_redeem_auction_callback_active() -> None:
+    """P02-4, §6.7.2: checked after the price fetch and the accrual, before the gate; the revert
+    takes the accrual with it."""
     env = _simple_env()
+    env.v.now += 3_600  # so the call accrues before it reverts
     env.rm.in_purchase = lambda: True
+    reads: list[int] = []
+    price_source = env.v.price_source
+    env.v.price_source = lambda: reads.append(1) or price_source()
+
+    def gate(_price: int) -> bool:
+        raise AssertionError("the gate runs after the callback check")
+
+    env.rm.below_critical = gate
+    before = _snapshot(env)
     with pytest.raises(er.AuctionCallbackActive):
         env.rm.redeem("alice", WAD, 10, WAD, 0, 0)
+    assert reads == [1]  # the price was fetched first
+    assert _snapshot(env) == before  # index and lastAccrual included
 
 
 def test_gate_is_strict_at_critical_tcr() -> None:
